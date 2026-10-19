@@ -16,7 +16,7 @@ import { openPort } from "./port-pool.mjs";
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CALLER = "synthetic-local-caller-with-enough-characters";
 
-async function harness(t, mode = "fill-first") {
+async function harness(t, mode = "fill-first", deliveryPolicy = "at-most-once") {
   const root = mkdtempSync(path.join(os.tmpdir(), "chatgpt-routing-router-"));
   const state = path.join(root, "state"); mkdirSync(state, { mode: 0o700 });
   const homesDir = path.join(state, "chatgpt-accounts");
@@ -43,9 +43,13 @@ async function harness(t, mode = "fill-first") {
         + (failure === "empty" ? 'data: {"type":"response.completed","response":{"id":"resp_native_empty","output":[]}}\n\n' : 'data: {"type":"response.in_progress","response":{"id":"resp_native_empty"}}\n\n'));
       return;
     }
+    if (failure === "stream-quota-no-type") {
+      response.writeHead(200);
+      response.end('data: {"type":"response.failed","response":{"error":{"code":"usage_limit_reached"}}}\n\n'); return;
+    }
     if (failure === "reset") { request.socket.destroy(); return; }
     if (failure) {
-      response.writeHead(failure, { "content-type": "application/json" });
+      response.writeHead(failure, { "content-type": "application/json", ...(failure === 307 ? { location: "/responses" } : {}) });
       response.end(failure === 429 ? '{"error":{"type":"usage_limit_reached"}}' : '{"error":{"message":"synthetic edge failure"}}'); return;
     }
     if (rejectOne && request.headers["chatgpt-account-id"] === "one") {
@@ -63,7 +67,7 @@ async function harness(t, mode = "fill-first") {
   const upstreamPort = upstream.address().port; const routerPort = await openPort(); let stderr = "";
   const spawnOptions = {
     cwd: repo,
-    env: { ...process.env, CODEX_HOME: path.join(root, "codex"), MODEL_ROUTER_STATE_DIR: state, CODEX_ROUTER_CALLER_KEY: CALLER, CODEX_ROUTER_INTERNAL_KEY: "synthetic-internal-key-with-enough-characters", CODEX_ROUTER_PORT: String(routerPort), CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${upstreamPort}`, CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${upstreamPort}/v1`, CODEX_ROUTER_GATEWAY_HEALTH_URL: `http://127.0.0.1:${upstreamPort}/health`, CODEX_ROUTER_OAUTH_HEALTH_URL: `http://127.0.0.1:${upstreamPort}/health`, CODEX_ROUTER_API_HEALTH_URL: `http://127.0.0.1:${upstreamPort}/health`, CODEX_ROUTER_GROK_OAUTH_HEALTH_URL: `http://127.0.0.1:${upstreamPort}/health`, CODEX_ROUTER_NATIVE_RETRY_BACKOFF_MS: "0", CODEX_ROUTER_NO_DISCOVERY: "0", CODEX_ROUTER_NATIVE_SESSION_FALLBACK: "0", CODEX_ROUTER_QUIET: "1" },
+    env: { ...process.env, CODEX_HOME: path.join(root, "codex"), MODEL_ROUTER_STATE_DIR: state, CODEX_ROUTER_CALLER_KEY: CALLER, CODEX_ROUTER_INTERNAL_KEY: "synthetic-internal-key-with-enough-characters", CODEX_ROUTER_PORT: String(routerPort), CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${upstreamPort}`, CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${upstreamPort}/v1`, CODEX_ROUTER_GATEWAY_HEALTH_URL: `http://127.0.0.1:${upstreamPort}/health`, CODEX_ROUTER_OAUTH_HEALTH_URL: `http://127.0.0.1:${upstreamPort}/health`, CODEX_ROUTER_API_HEALTH_URL: `http://127.0.0.1:${upstreamPort}/health`, CODEX_ROUTER_GROK_OAUTH_HEALTH_URL: `http://127.0.0.1:${upstreamPort}/health`, CODEX_ROUTER_NATIVE_RETRY_BACKOFF_MS: "0", CODEX_ROUTER_NATIVE_RETRY_POLICY: deliveryPolicy, CODEX_ROUTER_NO_DISCOVERY: "0", CODEX_ROUTER_NATIVE_SESSION_FALLBACK: "0", CODEX_ROUTER_QUIET: "1" },
     stdio: ["ignore", "ignore", "pipe"],
   };
   const start = () => {
@@ -123,7 +127,7 @@ test("pool off preserves caller credentials and does not perform quota switching
 });
 
 test("client WebSocket uses the shared HTTP pool and maintains account ownership on chained turns", async (t) => {
-  const h = await harness(t);
+  const h = await harness(t, "fill-first", "availability");
   const socket = new WebSocket(h.url.replace("http:", "ws:"), { headers: { ...h.headers, "openai-beta": RESPONSES_WEBSOCKET_BETA } });
   t.after(() => socket.close());
   await new Promise((resolve, reject) => { socket.addEventListener("open", resolve, { once: true }); socket.addEventListener("error", reject, { once: true }); });
@@ -215,7 +219,7 @@ test("native HTTP and client WebSocket collaboration declarations make zero upst
 
 
 test("pooled native HTTP combines bounded same-account transport retries with quota switching", async (t) => {
-  const h = await harness(t);
+  const h = await harness(t, "fill-first", "availability");
   h.queueFailures(503, 429, "reset");
   const result = await h.post("transport", [{ role: "user", content: "hello".repeat(5000) }]);
   assert.equal(result.status, 200); assert.match(result.text, /response.completed/);
@@ -233,6 +237,8 @@ test("pooled native HTTP combines bounded same-account transport retries with qu
   for (let tries = 0; h.usage().length === 0 && tries < 100; tries++) await new Promise((resolve) => setTimeout(resolve, 20));
   const event = h.usage().at(-1);
   assert.equal(event.status, 200); assert.equal(event.retries, 3);
+  assert.equal(event.deliveryPolicy, "availability");
+  assert.deepEqual(event.upstreamAttempts.map((attempt) => attempt.attempt), [1, 2, 3, 4]);
 });
 
 
@@ -294,4 +300,35 @@ test("WebSocket visible continuation keeps cached turn-state on its owner after 
   const unavailable = await turn(first.response.id);
   assert.equal(unavailable.type, "error"); assert.equal(unavailable.status, 503);
   assert.equal(h.seen.length, 3, "owner cooldown must not send sticky state to an available account");
+});
+
+
+for (const failure of [503, "reset"]) {
+  for (const afterQuota of [false, true]) {
+    test(`pooled default POST policy refuses ambiguous ${failure} replay afterQuota=${afterQuota}`, async (t) => {
+      const h = await harness(t); h.setRejectOne(false);
+      h.queueFailures(...(afterQuota ? [429, failure] : [failure]));
+      const result = await h.post(`default-${failure}-${afterQuota}`);
+      assert.equal(result.status, failure === 503 ? 503 : 502);
+      assert.deepEqual(h.seen.map((entry) => entry.account), afterQuota ? ["one", "two"] : ["one"]);
+      for (let tries = 0; h.usage().length === 0 && tries < 100; tries++) await new Promise((resolve) => setTimeout(resolve, 20));
+      const event = h.usage().at(-1);
+      assert.equal(event.deliveryPolicy, "at-most-once"); assert.equal(event.retries ?? 0, Number(afterQuota));
+      assert.deepEqual(event.upstreamAttempts.map((attempt) => attempt.attempt), afterQuota ? [1, 2] : [1]);
+      assert.ok(event.upstreamAttempts.every((attempt) => attempt.retryScheduled === false));
+    });
+  }
+}
+
+test("pooled native generation refuses redirects without following or switching accounts", async (t) => {
+  const h = await harness(t, "fill-first", "availability"); h.setRejectOne(false); h.queueFailures(307);
+  const result = await h.post("redirect"); assert.equal(result.status, 502); assert.equal(h.seen.length, 1);
+});
+
+test("pooled native SSE without Content-Type records semantic quota before the next request", async (t) => {
+  const h = await harness(t); h.setRejectOne(false); h.queueFailures("stream-quota-no-type");
+  const first = await h.post("no-type-quota"); assert.equal(first.status, 200); assert.match(first.text, /usage_limit_reached/);
+  assert.deepEqual(h.seen.map((entry) => entry.account), ["one"]);
+  const next = await h.post("no-type-quota"); assert.equal(next.status, 200);
+  assert.deepEqual(h.seen.map((entry) => entry.account), ["one", "two"]);
 });

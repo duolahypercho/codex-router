@@ -1,0 +1,1 @@
+- Require positive pre-send evidence before replaying a native generation POST. Keep bounded retries for safe methods, allow explicit availability policy, reject native generation redirects before delivery evidence is lost, recheck abort/delivery/budget gates across asynchronous waits, and record bounded native attempt metadata without request or credential contents.

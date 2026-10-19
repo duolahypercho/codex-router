@@ -1,3 +1,4 @@
+import { rejectGenerationRedirect } from "./generation-redirect.mjs";
 import { resolveGenerationOutcome } from "./response-outcome.mjs";
 import { readFileSync } from "node:fs";
 import http from "node:http";
@@ -68,6 +69,7 @@ import {
 } from "./leaked-tool-call-recovery.mjs";
 import { moonshotSchemaRoute } from "./moonshot-schema-routes.mjs";
 import { reasoningTagStripperTransform } from "./reasoning-tag-stripper.mjs";
+import { reasoningTagOptionsForRoute } from "./reasoning-tag-policy.mjs";
 import {
   messageEnvelopeCompatTransform,
 } from "./zai-responses-compat.mjs";
@@ -165,7 +167,7 @@ import {
   isRemoteCompactV2Trigger,
   skippableCompactionTokens,
 } from "./compaction-limit.mjs";
-import { fetchWithRetry } from "./upstream-retry.mjs";
+import { fetchWithRetry, NATIVE_RETRY_POLICY } from "./upstream-retry.mjs";
 import { createChatGPTAccountRoutingPlan, fetchWithChatGPTAccountRouting, knownChatGPTAccountRoutingHeaders } from "./chatgpt-account-routing.mjs";
 import { repairGeminiToolSchemas } from "./gemini-tool-schema.mjs";
 import { applyGrokApplyPatchGuidance } from "./grok-apply-patch-guidance.mjs";
@@ -423,6 +425,11 @@ function isGrokOauthRoute(route) {
 // Grok keeps its stall-guard-sized pool. Local Ollama uses a separate pool
 // whose headers and body idle bounds outlast its LiteLLM timeout.
 function fetchForRoute(route, url, init) {
+  // A followed generation redirect destroys evidence about the original POST.
+  // Native transport must reject it before a later connect failure can look unsent.
+  if (!route && String(init?.method).toUpperCase() === "POST") {
+    return fetch(url, { ...init, redirect: "manual" }).then(rejectGenerationRedirect);
+  }
   if (isGrokOauthRoute(route)) {
     return longIdleStreamFetch(url, init, { bodyTimeoutMs: GROK_TRANSPORT_IDLE_TIMEOUT_MS });
   }
@@ -4476,6 +4483,7 @@ async function handleResponses(request, response, requestUrl) {
   let requestedModel = "";
   let route;
   let upstreamRetries;
+  const upstreamAttempts = [];
   let upstreamStatus;
   let upstreamLatencyMs;
   let firstTokenMs;
@@ -4614,6 +4622,7 @@ async function handleResponses(request, response, requestUrl) {
           } ${invalidHistoryCall.param || ""} status=400`,
         );
         recordTurnUsage({
+          ...(!route && upstreamAttempts.length ? { upstreamAttempts, deliveryPolicy: NATIVE_RETRY_POLICY } : {}),
           model: route.slug,
           provider: canonicalProviderId(route.provider),
           status: 400,
@@ -4691,6 +4700,7 @@ async function handleResponses(request, response, requestUrl) {
       }
       recordTurnUsage(
         {
+          ...(!route && upstreamAttempts.length ? { upstreamAttempts, deliveryPolicy: NATIVE_RETRY_POLICY } : {}),
           model: route.slug,
           provider: canonicalProviderId(route.provider),
           status: 200,
@@ -4901,6 +4911,7 @@ async function handleResponses(request, response, requestUrl) {
         headers: nativeHeaders(request), payload, signal: controller.signal,
       });
       const native = { ...payload };
+      if (!compactV1) markResponsesStream(response, { minimalFailure: true });
       const substitutedCaller = callerBroughtNoUpstreamCredential(request);
       // An extended-window variant is the model it was derived from, published
       // under a second slug so the picker can offer a different context
@@ -4991,7 +5002,10 @@ async function handleResponses(request, response, requestUrl) {
       assertRoutedSearchContract(route, builtSearchMode, searchContract);
     }
     const fetchNativeTurn = accountRoutingPlan
-      ? (url, init, options) => fetchWithChatGPTAccountRouting(accountRoutingPlan, url, init, options)
+      ? (url, init, options) => fetchWithChatGPTAccountRouting(accountRoutingPlan, url, init, {
+          ...options,
+          expectEventStream: !compactV1 && !bufferNativeStream && payload.stream === true,
+        })
       : fetchWithRetry;
     let { response: upstream, retries } = await fetchNativeTurn(
       target,
@@ -5014,6 +5028,12 @@ async function handleResponses(request, response, requestUrl) {
           : fetchObservedUpstream,
         retries: route ? 0 : undefined,
         canRetry: () => !nativeWsSent && nothingRelayed(response),
+        onAttempt: (event) => {
+          if (!route) {
+            upstreamRetries = Math.max(upstreamRetries || 0, event.attempt - 1);
+            if (upstreamAttempts.length < 6) upstreamAttempts.push(event);
+          }
+        },
         onRetry: (event) => logUpstreamRetry(event, requestedModel, requestUrl.pathname),
       },
     );
@@ -5154,6 +5174,7 @@ async function handleResponses(request, response, requestUrl) {
           // serving row below carries `failoverFrom`, which is what makes a
           // rescued turn distinguishable from one that never failed.
           recordTurnUsage({
+            ...(!route && upstreamAttempts.length ? { upstreamAttempts, deliveryPolicy: NATIVE_RETRY_POLICY } : {}),
             model: route.slug,
             provider: canonicalProviderId(route.provider),
             status: upstream.status,
@@ -5242,6 +5263,7 @@ async function handleResponses(request, response, requestUrl) {
         stream: payload.stream === true,
       });
       recordTurnUsage({
+        ...(!route && upstreamAttempts.length ? { upstreamAttempts, deliveryPolicy: NATIVE_RETRY_POLICY } : {}),
         model: route.slug,
         provider: canonicalProviderId(route.provider),
         status: upstream.status,
@@ -5289,7 +5311,16 @@ async function handleResponses(request, response, requestUrl) {
       });
       upstreamStatus = upstream.status;
     }
-    const upstreamContentType = upstream.headers.get("content-type") || "";
+    let upstreamContentType = upstream.headers.get("content-type") || "";
+    if (!route && upstream.ok && !compactV1 && !bufferNativeStream &&
+        payload.stream === true && !upstreamContentType) {
+      // The native backend also sends successful SSE without a Content-Type.
+      // Seat the expected stream type before creating the final observer and
+      // writing bytes, so a socket reset still carries a recognizable failure.
+      // V1 compact, folded JSON, explicit non-SSE types and errors stay unchanged.
+      upstreamContentType = "text/event-stream; charset=utf-8";
+      response.setHeader("Content-Type", upstreamContentType);
+    }
     const createResponsePipeline = (contentType, preludeMs = EMPTY_COMPLETION_PRELUDE_MS) => {
       const usageObserver = new ResponseUsageTransform(contentType, {
         grokServiceTier: offersGrokOauthServiceTier(route),
@@ -5401,22 +5432,11 @@ async function handleResponses(request, response, requestUrl) {
           }),
         );
       }
-      // Strip inline `<think>...</think>` reasoning that routed providers leak
-      // into the visible answer, when their chat-completions -> Responses bridge
-      // relays the model's chain-of-thought as `output_text` instead of on the
-      // reasoning channel. Runs before the lifecycle normalizer so the reorder
-      // sees already-cleaned message text. Native OpenAI streams (no route) never
-      // carry these tags and are left untouched.
-      // Hy4 spells its own delimiters with a per-message nonce
-      // (`</think:6124c78e>`), and a stack that eats the opening tag leaves the
-      // planning prose in the answer with only that orphan close behind it
-      // (#654). Reading the suffix -- and the prose in front of an orphan close
-      // -- is gated to the family that writes the nonce, the same gate the
-      // tool-call recovery above uses.
-      const tagStripper = route
-        ? reasoningTagStripperTransform(contentType, {
-            nonceDelimiters: usesHy4NonceMarkup(route),
-          })
+      // Preserve visible XML and source examples unless an evidenced route
+      // contract or explicit operator policy enables destructive cleanup.
+      const tagOptions = reasoningTagOptionsForRoute(route);
+      const tagStripper = tagOptions
+        ? reasoningTagStripperTransform(contentType, tagOptions)
         : undefined;
       if (tagStripper) transforms.push(tagStripper);
       // Restore sequential output-item lifecycles for routed providers, whose
@@ -5777,6 +5797,7 @@ async function handleResponses(request, response, requestUrl) {
     // A cancel is not a router failure, so it meters as 0 rather than the
     // committed 200 that the client never finished reading.
     recordTurnUsage({
+      ...(!route && upstreamAttempts.length ? { upstreamAttempts, deliveryPolicy: NATIVE_RETRY_POLICY } : {}),
       model: route?.slug || requestedModel,
       provider: route ? canonicalProviderId(route.provider) : "openai",
       status: finalStatus,
@@ -5852,6 +5873,7 @@ async function handleResponses(request, response, requestUrl) {
       activityStatus = 504;
       if (!usageRecorded) {
         recordTurnUsage({
+          ...(!route && upstreamAttempts.length ? { upstreamAttempts, deliveryPolicy: NATIVE_RETRY_POLICY } : {}),
           model: route?.slug || requestedModel,
           provider: route ? canonicalProviderId(route.provider) : "openai",
           status: 504,
@@ -5898,6 +5920,7 @@ async function handleResponses(request, response, requestUrl) {
         },
       });
       recordTurnUsage({
+        ...(!route && upstreamAttempts.length ? { upstreamAttempts, deliveryPolicy: NATIVE_RETRY_POLICY } : {}),
         model: route?.slug || requestedModel,
         provider: route ? canonicalProviderId(route.provider) : "openai",
         status: finalStatus,
@@ -5918,6 +5941,7 @@ async function handleResponses(request, response, requestUrl) {
       });
       if (!response.writableEnded && !response.destroyed) response.end();
       recordTurnUsage({
+        ...(!route && upstreamAttempts.length ? { upstreamAttempts, deliveryPolicy: NATIVE_RETRY_POLICY } : {}),
         model: route?.slug || requestedModel,
         provider: route ? canonicalProviderId(route.provider) : "openai",
         status: 502,
@@ -5945,6 +5969,7 @@ async function handleResponses(request, response, requestUrl) {
         },
       });
       recordTurnUsage({
+        ...(!route && upstreamAttempts.length ? { upstreamAttempts, deliveryPolicy: NATIVE_RETRY_POLICY } : {}),
         model: route?.slug || requestedModel,
         provider: route ? canonicalProviderId(route.provider) : "openai",
         status: error.status,
@@ -5964,6 +5989,7 @@ async function handleResponses(request, response, requestUrl) {
         },
       });
       recordTurnUsage({
+        ...(!route && upstreamAttempts.length ? { upstreamAttempts, deliveryPolicy: NATIVE_RETRY_POLICY } : {}),
         model: route?.slug || requestedModel,
         provider: route ? canonicalProviderId(route.provider) : "openai",
         status: error.status,
@@ -6012,6 +6038,7 @@ async function handleResponses(request, response, requestUrl) {
         writeJson(response, 400, { error: { type: "generation_guard_error", code: error.code, message: error.message } });
       }
       recordTurnUsage({
+        ...(!route && upstreamAttempts.length ? { upstreamAttempts, deliveryPolicy: NATIVE_RETRY_POLICY } : {}),
         model: route?.slug || requestedModel,
         provider: route ? canonicalProviderId(route.provider) : "openai",
         status: finalStatus,
@@ -6038,6 +6065,7 @@ async function handleResponses(request, response, requestUrl) {
       activityStatus = finalStatus;
       if (!usageRecorded) {
         recordTurnUsage({
+          ...(!route && upstreamAttempts.length ? { upstreamAttempts, deliveryPolicy: NATIVE_RETRY_POLICY } : {}),
           model: requestedModel,
           provider: "openai",
           status: finalStatus,
@@ -6073,6 +6101,7 @@ async function handleResponses(request, response, requestUrl) {
       activityStatus = 0;
       if (!usageRecorded) {
         recordTurnUsage({
+          ...(!route && upstreamAttempts.length ? { upstreamAttempts, deliveryPolicy: NATIVE_RETRY_POLICY } : {}),
           model: route?.slug || requestedModel,
           provider: route ? canonicalProviderId(route.provider) : "openai",
           status: 0,
@@ -6100,6 +6129,7 @@ async function handleResponses(request, response, requestUrl) {
     activityStatus = finalStatus;
     if (!usageRecorded) {
       recordTurnUsage({
+        ...(!route && upstreamAttempts.length ? { upstreamAttempts, deliveryPolicy: NATIVE_RETRY_POLICY } : {}),
         model: route?.slug || requestedModel,
         provider: route ? canonicalProviderId(route.provider) : "openai",
         status: finalStatus,

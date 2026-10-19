@@ -319,6 +319,10 @@ test("support bundle omits every historical log source", async (t) => {
   const previousDiscovery = process.env.CODEX_ROUTER_NO_DISCOVERY;
   process.env.CODEX_ROUTER_NO_DISCOVERY = "0";
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  // A preceding failed operation may have logged into the shared scratch state.
+  assert.equal(path.resolve(stateDir), path.join(testRoot, "state"));
+  t.beforeEach(() => rmSync(logPath, { recursive: true, force: true }));
+  writeFileSync(logPath, "TEST_ONLY_PREVIOUS_OPERATION_LOG\n", { mode: 0o600 });
 
   function bundle(label) {
     const result = createSupportBundle({

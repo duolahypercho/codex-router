@@ -351,6 +351,41 @@ test("a retried turn's billed spend survives the merge into one row", () => {
   assert.equal(grok.totalTokens, 301_270);
 });
 
+test("merging mixed billed and raw attempts preserves their separately aggregated spend", () => {
+  const now = Date.parse("2026-10-14T12:00:00Z");
+  const base = {
+    meteringVersion: 1,
+    at: "2026-10-14T11:00:00Z",
+    provider: "grok-oauth",
+    model: "grok-oauth/grok-4.6",
+    status: 200,
+  };
+  const raw = { inputTokens: 100, outputTokens: 20, totalTokens: 120 };
+  const cases = [
+    [{ ...raw, billedInputTokens: 250 }, raw],
+    [raw, { ...raw, billedOutputTokens: 45 }],
+    [{ ...raw, billedInputTokens: 0, billedOutputTokens: 0 }, raw],
+    [{ ...raw, billedInputTokens: 250 }, { ...raw, billedOutputTokens: 45 }],
+    [{ ...raw, billedInputTokens: 250, billedOutputTokens: 45 }, { ...raw, billedInputTokens: 250, billedOutputTokens: 45 }],
+    [raw, raw],
+    [raw, { ...raw, billedInputTokens: 250, billedOutputTokens: 45 }, raw],
+  ];
+  const totals = (usage) => ({ inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, totalTokens: usage.totalTokens });
+  const aggregate = (attempts) => aggregateProviderUsage(attempts.map((usage) => ({ ...base, ...usage })), { now })
+    .providers.find((provider) => provider.id === base.provider);
+  for (const [index, attempts] of cases.entries()) {
+    const separately = aggregate(attempts);
+    for (const ordered of [attempts, [...attempts].reverse()]) {
+      const merged = aggregate([ordered.reduce((usage, attempt) => mergeTokenUsage(usage, attempt))]);
+      assert.deepEqual(totals(merged), totals(separately), `provider totals for case ${index}`);
+      assert.deepEqual(totals(merged.models[0]), totals(separately.models[0]), `model totals for case ${index}`);
+      assert.deepEqual(merged.dailyUsageBuckets.map(({ requests: _requests, ...bucket }) => bucket),
+        separately.dailyUsageBuckets.map(({ requests: _requests, ...bucket }) => bucket), `daily totals for case ${index}`);
+      assert.equal(merged.last24hTokens, separately.last24hTokens, `rolling total for case ${index}`);
+    }
+  }
+});
+
 test("breaks provider usage down by model, heaviest first", () => {
   const now = Date.parse("2026-07-21T18:00:00Z");
   const snapshot = aggregateProviderUsage(

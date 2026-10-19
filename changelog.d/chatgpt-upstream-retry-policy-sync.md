@@ -1,0 +1,1 @@
+- **ChatGPT account routing follows the native delivery policy across account changes.** Default at-most-once replay gates and redirect refusal remain in force, while attempt telemetry counts the entire turn. Successful native streams without Content-Type also record semantic quota cooldowns and preserve cancellation failures.

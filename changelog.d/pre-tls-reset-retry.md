@@ -1,0 +1,1 @@
+- **A connection closed before TLS completes now receives bounded safe retries.** Recognize Node's pre-handshake `ECONNRESET` as an unsent request and retain its target host in diagnostics. Resets after submission and interrupted response streams remain ineligible for automatic generation replay under the default policy.

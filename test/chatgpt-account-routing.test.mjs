@@ -479,13 +479,13 @@ test("discovery disabled during a cooldown read never overwrites routing ownersh
   } finally { t.mock.restoreAll(); syncBuiltinESMExports(); restoreDiscovery(previous); await selected.close(); }
 });
 
-const fastRetries = { retries: 2, backoffMs: 0, sleepImpl: async () => {} };
+const fastRetries = { deliveryPolicy: "availability", retries: 2, backoffMs: 0, sleepImpl: async () => {} };
 
 for (const failure of ["edge", "connect-reset"]) {
   test(`pooled ${failure} retries use the same credential and body with accurate telemetry`, async (t) => {
     const { options, plan } = fixture(t); await setChatGPTAccountRouting("fill-first", options);
     const selected = await plan(); const seen = []; const events = []; const body = Buffer.from("synthetic immutable request");
-    const result = await fetchWithChatGPTAccountRouting(selected, "https://synthetic.test", { body, headers: { "content-encoding": "synthetic" } }, {
+    const result = await fetchWithChatGPTAccountRouting(selected, "https://synthetic.test", { method: "POST", body, headers: { "content-encoding": "synthetic" } }, {
       ...fastRetries, onRetry: (event) => events.push(event),
       fetchImpl: async (_url, init) => {
         seen.push(init);
@@ -506,20 +506,21 @@ for (const failure of ["edge", "connect-reset"]) {
 
 test("transport retries and quota hops share one retry allowance and count", async (t) => {
   const { options, plan } = fixture(t); await setChatGPTAccountRouting("fill-first", options);
-  const selected = await plan(); const accounts = []; const statuses = [503, 429, 503, 200]; const events = [];
-  const result = await fetchWithChatGPTAccountRouting(selected, "https://synthetic.test", {}, {
-    ...fastRetries, onRetry: (event) => events.push(event),
+  const selected = await plan(); const accounts = []; const statuses = [503, 429, 503, 200]; const events = []; const attempts = [];
+  const result = await fetchWithChatGPTAccountRouting(selected, "https://synthetic.test", { method: "POST" }, {
+    ...fastRetries, onRetry: (event) => events.push(event), onAttempt: (event) => attempts.push(event),
     fetchImpl: async (_url, init) => { accounts.push(init.headers["chatgpt-account-id"]); const status = statuses.shift(); return status === 429 ? quota() : new Response("result", { status }); },
   });
   assert.equal(result.response.status, 200); await result.response.text(); assert.equal(result.retries, 3); assert.equal(events.length, 2);
-  assert.deepEqual(accounts, ["one", "one", "two", "two"]); await selected.close();
+  assert.deepEqual(accounts, ["one", "one", "two", "two"]);
+  assert.deepEqual(attempts.map((event) => event.attempt), [1, 2, 3, 4]); await selected.close();
 });
 
 for (const bound of ["allowance", "budget"]) {
   test(`transport ${bound} is not reset by a quota account switch`, async (t) => {
     const { options, plan } = fixture(t); await setChatGPTAccountRouting("fill-first", options);
     const selected = await plan(); const accounts = []; let clock = 0;
-    const result = await fetchWithChatGPTAccountRouting(selected, "https://synthetic.test", {}, {
+    const result = await fetchWithChatGPTAccountRouting(selected, "https://synthetic.test", { method: "POST" }, {
       ...fastRetries, retries: bound === "allowance" ? 1 : 2, budgetMs: 10, now: () => clock,
       fetchImpl: async (_url, init) => {
         accounts.push(init.headers["chatgpt-account-id"]);
@@ -536,7 +537,7 @@ for (const bound of ["allowance", "budget"]) {
 test("zero retries disables transport replay without disabling explicit quota switching", async (t) => {
   const { options, plan } = fixture(t); await setChatGPTAccountRouting("fill-first", options);
   const selected = await plan(); const accounts = [];
-  const result = await fetchWithChatGPTAccountRouting(selected, "https://synthetic.test", {}, {
+  const result = await fetchWithChatGPTAccountRouting(selected, "https://synthetic.test", { method: "POST" }, {
     ...fastRetries, retries: 0,
     fetchImpl: async (_url, init) => { accounts.push(init.headers["chatgpt-account-id"]); return accounts.length === 1 ? quota() : new Response("edge", { status: 503 }); },
   });
@@ -547,7 +548,7 @@ test("zero retries disables transport replay without disabling explicit quota sw
 test("account-bound history permits same-account edge retries but cannot replay quota on another account", async (t) => {
   const { options, plan } = fixture(t); await setChatGPTAccountRouting("fill-first", options);
   const selected = await plan("bound-retry", [{ type: "reasoning", encrypted_content: "synthetic-cipher" }]); let calls = 0;
-  const result = await fetchWithChatGPTAccountRouting(selected, "https://synthetic.test", {}, {
+  const result = await fetchWithChatGPTAccountRouting(selected, "https://synthetic.test", { method: "POST" }, {
     ...fastRetries, fetchImpl: async (_url, init) => { calls++; assert.equal(init.headers["chatgpt-account-id"], "one"); return calls === 1 ? new Response("edge", { status: 502 }) : quota(); },
   });
   assert.equal(result.response.status, 429); await result.response.text(); assert.equal(calls, 2); assert.equal(result.retries, 1); await selected.close();
@@ -556,7 +557,7 @@ test("account-bound history permits same-account edge retries but cannot replay 
 test("transport exhaustion never switches profiles or creates cooldowns", async (t) => {
   const { options, plan } = fixture(t); await setChatGPTAccountRouting("fill-first", options);
   const selected = await plan(); let calls = 0;
-  const result = await fetchWithChatGPTAccountRouting(selected, "https://synthetic.test", {}, { ...fastRetries, fetchImpl: async (_url, init) => { calls++; assert.equal(init.headers["chatgpt-account-id"], "one"); return new Response("edge", { status: 504 }); } });
+  const result = await fetchWithChatGPTAccountRouting(selected, "https://synthetic.test", { method: "POST" }, { ...fastRetries, fetchImpl: async (_url, init) => { calls++; assert.equal(init.headers["chatgpt-account-id"], "one"); return new Response("edge", { status: 504 }); } });
   assert.equal(result.response.status, 504); await result.response.text(); assert.equal(calls, 3); assert.equal(result.retries, 2);
   assert.deepEqual(chatGPTAccountRoutingSnapshot(options.filePath).cooldowns, {}); await selected.close();
 });
@@ -564,11 +565,11 @@ test("transport exhaustion never switches profiles or creates cooldowns", async 
 test("retry guard and cancellation stop pooled transport backoff without switching", async (t) => {
   const { options, plan } = fixture(t); await setChatGPTAccountRouting("fill-first", options);
   const guarded = await plan("guard"); let calls = 0;
-  const result = await fetchWithChatGPTAccountRouting(guarded, "https://synthetic.test", {}, { ...fastRetries, canRetry: () => false, fetchImpl: async () => { calls++; return new Response("edge", { status: 503 }); } });
+  const result = await fetchWithChatGPTAccountRouting(guarded, "https://synthetic.test", { method: "POST" }, { ...fastRetries, canRetry: () => false, fetchImpl: async () => { calls++; return new Response("edge", { status: 503 }); } });
   assert.equal(result.response.status, 503); await result.response.text(); assert.equal(calls, 1); await guarded.close();
   const controller = new AbortController(); const canceled = await plan("backoff", "hello", { signal: controller.signal });
   const reason = new Error("synthetic canceled backoff"); calls = 0;
-  await assert.rejects(fetchWithChatGPTAccountRouting(canceled, "https://synthetic.test", { signal: controller.signal }, {
+  await assert.rejects(fetchWithChatGPTAccountRouting(canceled, "https://synthetic.test", { method: "POST", signal: controller.signal }, {
     ...fastRetries, sleepImpl: async () => { controller.abort(reason); }, fetchImpl: async () => { calls++; return new Response("edge", { status: 503 }); },
   }), (error) => error === reason);
   assert.equal(calls, 1); await canceled.close();
@@ -805,9 +806,9 @@ test("turn-state headers bind visible history to its owning account", async (t) 
   await assert.rejects(plan("sticky", payload.input, { headers }), /account-bound history/);
 });
 
-for (const kind of ["persistence", "deadline"]) {
+for (const kind of ["persistence", "deadline", "missing-type-deadline"]) {
   test(`streamed quota ${kind} failure propagates and cancels upstream without replay`, async () => {
-    const reason = Object.assign(new Error(`synthetic ${kind} failure`), { code: kind === "deadline" ? "ERR_ROUTER_REQUEST_TIMEOUT" : "EACCES" });
+    const reason = Object.assign(new Error(`synthetic ${kind} failure`), { code: kind.includes("deadline") ? "ERR_ROUTER_REQUEST_TIMEOUT" : "EACCES" });
     const controller = new AbortController();
     let calls = 0; let writes = 0; let hops = 0; let cancelReason; let closeTimer;
     let canceled;
@@ -821,11 +822,12 @@ for (const kind of ["persistence", "deadline"]) {
     });
     const selected = {
       headers: { "chatgpt-account-id": "one" }, portable: true,
-      async quota() { writes++; if (kind === "deadline") controller.abort(reason); throw reason; },
+      async quota() { writes++; if (kind.includes("deadline")) controller.abort(reason); throw reason; },
       async next() { hops++; },
     };
     const result = await fetchWithChatGPTAccountRouting(selected, "https://synthetic.test", { signal: controller.signal }, {
-      fetchImpl: async () => { calls++; return new Response(body, { headers: { "content-type": "text/event-stream" } }); },
+      expectEventStream: kind === "missing-type-deadline",
+      fetchImpl: async () => { calls++; return new Response(body, { headers: kind === "missing-type-deadline" ? {} : { "content-type": "text/event-stream" } }); },
     });
     await assert.rejects(result.response.text(), (error) => error === reason);
     await cancellation;
@@ -869,3 +871,17 @@ test("streamed quota parser ignores malformed and unrelated data and persists on
   } });
   assert.equal(await result.response.text(), chunks.join("")); assert.equal(calls, 1); assert.equal(writes, 1); assert.equal(hops, 0);
 });
+
+
+for (const kind of ["missing-type", "explicit-json", "not-streaming", "http-error"]) {
+  test(`pooled ${kind} response uses only the native SSE expectation for quota observation`, async () => {
+    const body = 'data: {"type":"response.failed","response":{"error":{"code":"usage_limit_reached"}}}\n\n';
+    let writes = 0; let hops = 0;
+    const selected = { headers: {}, portable: true, async quota() { writes++; }, async next() { hops++; } };
+    const result = await fetchWithChatGPTAccountRouting(selected, "https://synthetic.test", { method: "POST" }, {
+      expectEventStream: kind !== "not-streaming", retries: 0,
+      fetchImpl: async () => new Response(Buffer.from(body), { status: kind === "http-error" ? 503 : 200, headers: kind === "explicit-json" ? { "content-type": "application/json" } : {} }),
+    });
+    assert.equal(await result.response.text(), body); assert.equal(writes, kind === "missing-type" ? 1 : 0); assert.equal(hops, 0);
+  });
+}

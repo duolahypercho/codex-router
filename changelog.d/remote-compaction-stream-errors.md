@@ -1,0 +1,1 @@
+- Preserve diagnosed stream failures for native remote compaction with a recognizable Responses failure envelope even when response metadata or the native SSE Content-Type is missing; do not replay a dispatched generation or claim that remote connection resets are prevented.

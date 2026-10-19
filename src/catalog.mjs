@@ -603,13 +603,49 @@ function rewriteIdentity(text, model) {
     .replace(/\bbased on GPT-5(?:\.\d+)?(?:[-\s](?:Sol|Terra|Luna))?\b/gi, `based on ${name}`);
 }
 
+function isGrokFamily(model) {
+  return [model?.slug, model?.displayName, model?.upstreamModel, model?.provider, model?.gatewayModel]
+    .some((value) => typeof value === "string" && /(?:^|[^a-z])grok(?:[^a-z]|$)/i.test(value));
+}
+
+// Codex's gpt-5.5 instruction batches reads through multi_tool_use.parallel and
+// pages files with sed. Grok's menu is read_file, grep, list_dir, and
+// search_replace. These are the three paragraphs that made two reads land in
+// one response.
+const GROK_WORKSPACE_INSTRUCTION_REPLACEMENTS = Object.freeze([
+  ["- When you search for text or files, you reach first for `rg` or `rg --files`; they are much faster than alternatives like `grep`. If `rg` is unavailable, you use the next best tool without fuss.\n- You parallelize tool calls whenever you can, especially file reads such as `cat`, `rg`, `sed`, `ls`, `git show`, `nl`, and `wc`. You use `multi_tool_use.parallel` for that parallelism, and only that. Do not chain shell commands with separators like `echo \"====\";`; the output becomes noisy in a way that makes the user\u2019s side of the conversation worse.",
+   "- When those tools are in the menu, read files with `read_file`, search with `grep`, and list directories with `list_dir`. Do not page through files with `sed`, `cat`, `nl`, or `head`.\n- Independent reads and searches go out together as separate tool calls in the same response. Do not wait for one read before sending the next independent read. `multi_tool_use.parallel` is not available. Do not chain shell commands with separators like `echo \"====\";`.\n- Edit an existing file with `search_replace` when that tool is in the menu. Otherwise use `apply_patch`. A patch that does not need an unseen read can be in the same response as the reads. A patch that depends on a read waits for that result, then goes in the next response."],
+  ["- Use `apply_patch` for manual code edits. Do not create or edit files with `cat` or other shell write tricks. Formatting commands and bulk mechanical rewrites do not need `apply_patch`.\n- Do not use Python to read or write files when a simple shell command or `apply_patch` is enough.",
+   "- Use `search_replace` for manual edits of existing files when it is in the menu. Otherwise use `apply_patch`. Do not create or edit files with `cat`, `sed`, or other shell write tricks. Formatting commands and bulk mechanical rewrites do not need a patch tool.\n- Do not use Python or the shell to read or write files when `read_file`, `grep`, `search_replace`, or `apply_patch` is available."],
+  ["- Treat ordinary local filesystem paths as files, never as MCP resource URIs. Use an available filesystem or shell tool, such as exec_command, to inspect local files.",
+   "- Treat ordinary local filesystem paths as files, never as MCP resource URIs. Inspect them with `read_file`, `grep`, or `list_dir` when those tools are in the menu. Use `run_terminal_command` or `exec_command` for processes such as git, tests, and installs, not for paging through files."],
+  ["- Treat ordinary local filesystem paths as files, never as MCP resource URIs. Inspect local files with a filesystem tool that is present in this request's menu.",
+   "- Treat ordinary local filesystem paths as files, never as MCP resource URIs. Inspect them with `read_file`, `grep`, or `list_dir` when those tools are in the menu. Use `run_terminal_command` or `exec_command` for processes such as git, tests, and installs, not for paging through files."]
+]);
+
+function rewriteGrokWorkspaceInstructions(text, model) {
+  if (!isGrokFamily(model) || typeof text !== "string" || !text) return text;
+  let next = text;
+  for (const [from, to] of GROK_WORKSPACE_INSTRUCTION_REPLACEMENTS) {
+    if (next.includes(from)) next = next.replaceAll(from, to);
+  }
+  return next;
+}
+
+function publishRoutedInstructions(text, model) {
+  return rewriteGrokWorkspaceInstructions(
+    applyInstructionOverlay(rewriteIdentity(text, model), model.instructionOverlay),
+    model,
+  );
+}
+
 function rewriteModelMessages(messages, model) {
   if (!messages || typeof messages !== "object" || Array.isArray(messages)) {
     return messages;
   }
   const next = { ...messages };
   if (typeof next.instructions_template === "string") {
-    next.instructions_template = rewriteIdentity(next.instructions_template, model);
+    next.instructions_template = publishRoutedInstructions(next.instructions_template, model);
   }
   return next;
 }
@@ -749,19 +785,10 @@ export function routedModel(template, model, behaviorTemplate = template) {
     next.experimental_supported_tools = [...model.experimentalSupportedTools];
   }
   if (typeof next.base_instructions === "string") {
-    next.base_instructions = applyInstructionOverlay(
-      rewriteIdentity(next.base_instructions, model),
-      model.instructionOverlay,
-    );
+    next.base_instructions = publishRoutedInstructions(next.base_instructions, model);
   }
   if (next.model_messages) {
     next.model_messages = rewriteModelMessages(next.model_messages, model);
-    if (typeof next.model_messages?.instructions_template === "string") {
-      next.model_messages.instructions_template = applyInstructionOverlay(
-        next.model_messages.instructions_template,
-        model.instructionOverlay,
-      );
-    }
   }
   return next;
 }

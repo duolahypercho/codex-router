@@ -1,0 +1,1 @@
+- **Cancelling a Claude Code request stops its upstream generation.** Closing the client connection aborts the canonical Responses request while waiting for headers or reading JSON and SSE bodies, and releases the cancellation listeners.

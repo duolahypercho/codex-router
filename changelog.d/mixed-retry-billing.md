@@ -1,0 +1,1 @@
+- **Retry spend includes attempts that omit billed token counts.** Fall back to each attempt's reported input and output before adding billed totals, while preserving explicit billed zeroes and the raw usage fields.

@@ -458,29 +458,42 @@ export async function handleClaudeRequest(request, response, route, { responsesU
     const payload = claudeMessagesToResponses(body);
     payload.model = assertPublishedModel(payload.model, routedModels);
     const controller = new AbortController();
-    request.once("aborted", () => controller.abort());
-    const upstream = await directLoopbackFetch(responsesUrl, {
-      method: "POST",
-      headers: { "content-type": "application/json", accept: payload.stream ? "text/event-stream" : "application/json" },
-      body: JSON.stringify(payload),
-      signal: controller.signal,
-    });
-    if (!upstream.ok) {
-      const error = await upstreamError(upstream);
-      writeClaudeError(response, upstream.status, error.type, error.message);
-      return true;
+    const abort = () => controller.abort();
+    const abortOnClose = () => {
+      // IncomingMessage's aborted event covers the request body, which has
+      // already been read. Cancellation during generation closes the response.
+      if (!response.writableEnded) abort();
+    };
+    request.once("aborted", abort);
+    response.once("close", abortOnClose);
+    try {
+      if (request.aborted || response.destroyed) abort();
+      const upstream = await directLoopbackFetch(responsesUrl, {
+        method: "POST",
+        headers: { "content-type": "application/json", accept: payload.stream ? "text/event-stream" : "application/json" },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+      if (!upstream.ok) {
+        const error = await upstreamError(upstream);
+        writeClaudeError(response, upstream.status, error.type, error.message);
+        return true;
+      }
+      if (payload.stream) await handleStream(request, response, upstream, requestedModel);
+      else writeJson(response, 200, responsesToClaudeMessage(await upstream.json(), requestedModel));
+    } finally {
+      request.removeListener("aborted", abort);
+      response.removeListener("close", abortOnClose);
     }
-    if (payload.stream) await handleStream(request, response, upstream, requestedModel);
-    else writeJson(response, 200, responsesToClaudeMessage(await upstream.json(), requestedModel));
   } catch (error) {
-    if (!response.headersSent) {
+    if (!response.headersSent && !response.destroyed) {
       writeClaudeError(
         response,
         error?.status || 502,
         error?.type || "api_error",
         formatErrorChain(error),
       );
-    } else if (!response.writableEnded) {
+    } else if (!response.writableEnded && !response.destroyed) {
       response.end();
     }
   }

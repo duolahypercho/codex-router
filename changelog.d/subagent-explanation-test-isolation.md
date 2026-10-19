@@ -1,0 +1,1 @@
+- Give subagent explanation tests their own agent definitions and cleanup so reasoning-depth checks work when run individually and cannot depend on an earlier test publishing a file.

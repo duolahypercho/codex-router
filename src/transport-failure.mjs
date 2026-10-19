@@ -1,4 +1,5 @@
 import { environmentProxyOptedIn } from "./proxy-environment.mjs";
+import { isPreTlsConnectionReset } from "./upstream-retry.mjs";
 
 // The router reaches every upstream through Undici's `fetch`, which reports a
 // socket failure as a bare `TypeError: fetch failed` and buries the code that
@@ -17,13 +18,14 @@ const MAX_CAUSE_DEPTH = 8;
 
 export const PROVIDER_TRANSPORT_ERROR_TYPE = "provider_transport_error";
 
-// `hostname` is set by Node's DNS and TLS errors but not by a refused or
+// `hostname` is set by Node's DNS errors, `host` by a pre-handshake TLS reset,
+// but neither is set by a refused or
 // unreachable socket, which carries `address` (and `port`) instead -- a
 // stopped loopback gateway fails that way, and missing it sent the operator a
 // proxy hint for a process this install owns. Undici's own connect errors
 // name the address only in their message. Read the fields first and fall back
 // to the wordings actually observed in this router's log.
-const HOST_FIELDS = ["hostname", "address"];
+const HOST_FIELDS = ["hostname", "host", "address"];
 
 const HOST_PATTERNS = [
   /connect\s+E[A-Z]+\s+([^\s,)]+):\d+/,
@@ -144,7 +146,9 @@ export function describeTransportFailure(
   const host = transportFailureHost(error) || "the upstream";
   return {
     code,
-    cause: diagnosis.describe(host),
+    cause: isPreTlsConnectionReset(error)
+      ? `the connection to ${host} closed before the TLS handshake completed`
+      : diagnosis.describe(host),
     hint: hintFor(host, diagnosis, proxyConfigured),
   };
 }

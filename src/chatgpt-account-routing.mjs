@@ -341,6 +341,7 @@ export async function fetchWithChatGPTAccountRouting(plan, url, init = {}, {
   signal = init.signal,
   canRetry = () => true,
   now = () => Date.now(),
+  expectEventStream = false,
   ...retryOptions
 } = {}) {
   const startedAt = now();
@@ -350,12 +351,15 @@ export async function fetchWithChatGPTAccountRouting(plan, url, init = {}, {
     signal?.throwIfAborted();
     const { response, retries: accountRetries } = await fetchWithRetry(url, { ...init, signal, headers: { ...init.headers, ...plan.headers } }, {
       ...retryOptions, signal, canRetry, now,
+      // The transport helper restarts its counter for each account; usage and
+      // failure paths need a monotonic attempt number for the entire turn.
+      onAttempt: (event) => retryOptions.onAttempt?.({ ...event, attempt: hops + transportRetries + event.attempt }),
       retries: Math.max(0, retries - transportRetries),
       budgetMs: Math.max(0, budgetMs - (now() - startedAt)),
     });
     transportRetries += accountRetries;
     if (signal?.aborted) { await response.body?.cancel(); signal.throwIfAborted(); }
-    if (![402, 429].includes(response.status) || !response.body) return { response: observeQuotaStream(response, plan, now, signal), retries: hops + transportRetries };
+    if (![402, 429].includes(response.status) || !response.body) return { response: observeQuotaStream(response, plan, now, signal, expectEventStream), retries: hops + transportRetries };
     const reader = response.body.getReader();
     const chunks = [];
     let size = 0;
@@ -396,8 +400,11 @@ export async function fetchWithChatGPTAccountRouting(plan, url, init = {}, {
 
 // A semantic SSE refusal can arrive after HTTP 200 or partial output. Record
 // the cooldown for subsequent turns, but never replay an accepted stream.
-function observeQuotaStream(response, plan, now, signal) {
-  if (!response.body || !response.headers.get("content-type")?.includes("text/event-stream")) return response;
+function observeQuotaStream(response, plan, now, signal, expectEventStream) {
+  const contentType = response.headers.get("content-type");
+  // Match the native router's missing-type SSE contract only for successful,
+  // explicitly streaming turns. Never reinterpret JSON or an HTTP refusal.
+  if (!response.body || !(contentType?.includes("text/event-stream") || (!contentType && expectEventStream && response.ok))) return response;
   const decoder = new TextDecoder();
   let pending = "";
   let marked = false;

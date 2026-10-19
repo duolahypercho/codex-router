@@ -1,4 +1,5 @@
 import { Transform } from "node:stream";
+import { StringDecoder } from "node:string_decoder";
 
 const RESPONSE_PROTOCOL = "openai-responses";
 const NAMESPACE_DELIMITER = "__";
@@ -590,12 +591,16 @@ export function createResponsesStreamTransform(flatToNative = new Map(), options
 
 export function createResponsesJsonTransform(flatToNative = new Map()) {
   let body = "";
+  const decoder = new StringDecoder("utf8");
   return new Transform({
     transform(chunk, _encoding, callback) {
-      body += typeof chunk === "string" ? chunk : chunk.toString("utf8");
+      // HTTP chunks can end inside a multibyte character, including text and
+      // JSON-encoded tool arguments. Decode the response as one byte stream.
+      body += typeof chunk === "string" ? chunk : decoder.write(chunk);
       callback();
     },
     flush(callback) {
+      body += decoder.end();
       let parsed;
       try {
         parsed = JSON.parse(body);

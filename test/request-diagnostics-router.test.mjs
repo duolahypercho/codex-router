@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import http from "node:http";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
@@ -13,6 +12,7 @@ import {
   utf8JsonBytes,
 } from "../src/request-diagnostics.mjs";
 import { openPort } from "./port-pool.mjs";
+import { spawnNodeFixture, waitForNodeFixture } from "./node-fixture.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const INTERNAL_KEY = "test-internal-service-key-with-sufficient-length";
@@ -50,7 +50,7 @@ function run(env) {
   const stateDir =
     env?.MODEL_ROUTER_STATE_DIR ||
     mkdtempSync(path.join(os.tmpdir(), "request-diagnostics-state-"));
-  const child = spawn(process.execPath, [path.join(root, "src", "router.mjs")], {
+  const child = spawnNodeFixture(path.join(root, "src", "router.mjs"), {
     cwd: root,
     env: {
       ...process.env,
@@ -63,33 +63,13 @@ function run(env) {
       CODEX_ROUTER_QUIET: "1",
       ...env,
     },
-    stdio: ["ignore", "ignore", "pipe"],
   });
-  child.stderr.setEncoding("utf8");
-  let errors = "";
-  child.stderr.on("data", (chunk) => {
-    errors += chunk;
-  });
-  child.testErrors = () => errors;
   child.stateDir = stateDir;
   return child;
 }
 
 async function waitFor(url, child) {
-  const deadline = Date.now() + 5_000;
-  while (Date.now() < deadline) {
-    if (child.exitCode !== null) {
-      throw new Error(`Child exited early (${child.exitCode}): ${child.testErrors()}`);
-    }
-    try {
-      const response = await fetch(url);
-      if (response.ok) return;
-    } catch {
-      // Not bound yet.
-    }
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  throw new Error(`Timed out waiting for ${url}: ${child.testErrors()}`);
+  await waitForNodeFixture(url, child);
 }
 
 async function stopChild(child) {

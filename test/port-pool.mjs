@@ -59,13 +59,27 @@ function blockFor(entry) {
     .sort();
   const index = files.indexOf(path.basename(entry));
   if (index === -1) return undefined;
-  const size = Math.max(
-    MIN_BLOCK,
-    Math.min(MAX_BLOCK, Math.floor(PORT_COUNT / Math.max(files.length, 1))),
-  );
-  const start = index * size;
-  if (start + size > PORT_COUNT) throw new Error("Integration test port pool has no remaining disjoint blocks.");
-  return { start, size };
+  // A large suite can declare its bounded demand rather than lose capacity
+  // whenever another independent test file starts using this pool. Reserve
+  // those blocks first, then divide the remainder between ordinary consumers.
+  const reservations = files.map((file) => {
+    const source = readFileSync(path.join(TEST_DIR, file), "utf8");
+    const hint = source.match(/^\/\/ port-pool block-size: ([^\r\n]*)$/m);
+    if (!hint) return undefined;
+    const size = Number(hint[1]);
+    if (!Number.isSafeInteger(size) || size < MIN_BLOCK || size > MAX_BLOCK) {
+      throw new Error(`${file} declares an invalid test port block size.`);
+    }
+    return size;
+  });
+  const reserved = reservations.reduce((sum, size) => sum + (size ?? 0), 0);
+  const ordinaryCount = reservations.filter((size) => size === undefined).length;
+  const ordinarySize = Math.min(MAX_BLOCK, Math.floor((PORT_COUNT - reserved) / Math.max(ordinaryCount, 1)));
+  if (reserved > PORT_COUNT || (ordinaryCount && ordinarySize < MIN_BLOCK)) {
+    throw new Error("Integration test port pool has no remaining disjoint blocks.");
+  }
+  const sizes = reservations.map((size) => size ?? ordinarySize);
+  return { start: sizes.slice(0, index).reduce((sum, size) => sum + size, 0), size: sizes[index] };
 }
 
 async function isFree(port) {
@@ -126,7 +140,7 @@ export async function freePort() {
   }
   throw new Error(
     `${path.basename(process.argv[1] || "this file")} exhausted its ${block.size}-port ` +
-      `block at ${portAt(block.start)}; raise MAX_BLOCK in test/port-pool.mjs or free the leftovers`,
+      `block at ${portAt(block.start)}; declare a bounded port-pool block-size or free the leftovers`,
   );
 }
 

@@ -1,0 +1,1 @@
+- Add a frozen execution-plan compiler and read-only selected-route dependency query. Include hidden callable and enabled generic routes, respect effective per-model protocols, exclude credential values from route fingerprints, and distinguish a pending proof listener from published routes. Installer, startup, routing and publication adoption use separate changes.

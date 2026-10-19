@@ -1,0 +1,1 @@
+- **Non-streaming Responses preserve Unicode across HTTP chunks.** Decode UTF-8 incrementally so split characters in assistant text, tool arguments, and metadata do not become replacement characters.

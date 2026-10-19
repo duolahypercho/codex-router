@@ -760,8 +760,9 @@ export async function finishResponse(response) {
 //
 // A graceful SSE end alone cannot state a turn's failure. Marked Responses
 // streams with trusted final-egress metadata get a typed `response.failed`.
-// Unmarked streams, and marked streams without trustworthy metadata, keep the
-// generic `error` frame. Prompt clean EOF lets clients handle the failure;
+// Native Responses also permit a minimal local failure when metadata is unknown.
+// Other streams without trustworthy metadata keep the generic `error` frame.
+// Prompt clean EOF lets clients handle the failure;
 // retries still follow their policy. The message is approved router-side text,
 // never an upstream error body, so no response body can leak through it.
 //

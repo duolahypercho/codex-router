@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { test } from "node:test";
+import { after, test } from "node:test";
 
 // A test that isolates the state directory must isolate CODEX_HOME with it:
 // the agents directory is $CODEX_HOME/agents, and a scratch state pointed at a
 // real home would let a publish prune the operator's own agent definitions.
 const testRoot = mkdtempSync(path.join(os.tmpdir(), "subagent-explain-test-"));
+after(() => rmSync(testRoot, { recursive: true, force: true }));
 process.env.CODEX_ROUTER_STATE_DIR = path.join(testRoot, "state");
 process.env.CODEX_HOME = path.join(testRoot, "codex");
 mkdirSync(process.env.CODEX_ROUTER_STATE_DIR, { recursive: true });
@@ -32,7 +33,14 @@ const CERTIFIED = {
 const MODELS = [ROUTE, CERTIFIED];
 
 const selected = { version: 2, mode: "selected", enabled: [ROUTE.slug], disabled: [] };
-const agentsDir = path.join(process.env.CODEX_HOME, "agents");
+function agentDefinitions(t, { published = true } = {}) {
+  const directory = mkdtempSync(path.join(testRoot, "definitions-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  if (published) {
+    writeFileSync(path.join(directory, "router-model-opencode-go-deepseek-v4-1-flash.toml"), "# Managed by Codex Router.\n");
+  }
+  return directory;
+}
 
 function explain(overrides = {}) {
   return explainSubagentRoute({
@@ -111,7 +119,8 @@ test("proven mode explains itself rather than saying only 'not selected'", () =>
   assert.match(result.blockers[0].fix, /subagents set .* on/);
 });
 
-test("a promoted route with no definition on disk is the 'switch did nothing' case", () => {
+test("a promoted route with no definition on disk is the 'switch did nothing' case", (t) => {
+  const agentsDir = agentDefinitions(t, { published: false });
   // Codex spawns by name out of the agents directory. Promotion in state with
   // no file there is exactly how turning the switch on looks like a no-op.
   const result = explain({ agentsDir });
@@ -164,7 +173,9 @@ test("a locally verified route is distinguished from a selected one", () => {
   assert.deepEqual(noteCodes(result), ["verified_locally"]);
 });
 
-test("an effort off the model's ladder is flagged without blocking the spawn", () => {
+test("an effort off the model's ladder is flagged without blocking the spawn", (t) => {
+  const agentsDir = agentDefinitions(t);
+  t.after(() => setSubagentEffort(ROUTE.slug, undefined));
   setSubagentEffort(ROUTE.slug, "ultra");
   const result = explain({ agentsDir, reasoningLevels: ["low", "high", "max"] });
   // The turn still runs; the provider is the thing that refuses the rung. So
@@ -196,7 +207,8 @@ test("the prose form names the fix, not the machinery", () => {
   assert.doesNotMatch(text, /multiAgentVersion|v2_agent|encryptedRelay/);
 });
 
-test("a spawnable route says how to change its child reasoning depth", () => {
+test("a spawnable route says how to change its child reasoning depth", (t) => {
+  const agentsDir = agentDefinitions(t);
   const text = formatSubagentExplanation(explain({ agentsDir }));
   assert.match(text, /can be spawned as a subagent/);
   assert.match(text, /subagents effort opencode-go\/deepseek-v4\.1-flash <level>/);

@@ -334,6 +334,30 @@ test("Responses JSON transform preserves usage and error-shaped payloads", async
   assert.deepEqual(JSON.parse(await transformText(createResponsesJsonTransform(), [JSON.stringify(errorPayload)])), errorPayload);
 });
 
+test("Responses JSON transform preserves Unicode across every byte split", async () => {
+  const response = {
+    id: "resp-unicode",
+    output: [
+      { type: "message", role: "assistant", content: [{ type: "output_text", text: "Çağrı: 你好 🙂" }] },
+      { type: "function_call", call_id: "call-unicode", name: "collaboration__send_message", arguments: '{"message":"İşlem tamamlandı 日本語 🚀"}' },
+    ],
+    usage: { input_tokens: 9, output_tokens: 4, total_tokens: 13 },
+    metadata: { label: "résumé" },
+  };
+  const lookup = new Map([["collaboration__send_message", { namespace: "collaboration", name: "send_message" }]]);
+  const expected = {
+    ...response,
+    output: [response.output[0], { ...response.output[1], name: "send_message", namespace: "collaboration" }],
+  };
+  const bytes = Buffer.from(JSON.stringify(response), "utf8");
+  for (let split = 1; split < bytes.length; split += 1) {
+    const result = await transformText(createResponsesJsonTransform(lookup), [bytes.subarray(0, split), bytes.subarray(split)]);
+    assert.deepEqual(JSON.parse(result), expected, `byte split ${split}`);
+  }
+  const oneByteChunks = Array.from(bytes, (byte) => Buffer.from([byte]));
+  assert.deepEqual(JSON.parse(await transformText(createResponsesJsonTransform(lookup), oneByteChunks)), expected);
+});
+
 test("Responses JSON transform rejects malformed and invalid upstream bodies", async () => {
   await assert.rejects(
     transformText(createResponsesJsonTransform(), ["{not-json}"]),

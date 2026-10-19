@@ -1,0 +1,1 @@
+- Preserve literal XML and quoted reasoning tags on unknown routes by default. Validate model-scoped `reasoningTagPolicy` (`preserve`, `legacy-inline`, `hy4-nonce`); retain automatic compatibility only for the evidenced Qwen Plan Flash route and Hy4 nonce markup. Explicit `preserve` overrides those defaults.

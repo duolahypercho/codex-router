@@ -342,13 +342,14 @@ test("billed counts are added up like every other measurement", () => {
       billedOutputTokens: 270,
     },
   );
-  // Reported by one attempt and not the other, exactly like the cache count.
+  // A billed component overrides its own attempt; the other attempt still
+  // contributes its reported usage instead of becoming free.
   assert.deepEqual(
     mergeTokenUsage(
       { inputTokens: 10, outputTokens: 1, totalTokens: 11 },
       { inputTokens: 10, outputTokens: 1, totalTokens: 11, billedInputTokens: 25 },
     ),
-    { inputTokens: 20, outputTokens: 2, totalTokens: 22, billedInputTokens: 25 },
+    { inputTokens: 20, outputTokens: 2, totalTokens: 22, billedInputTokens: 35 },
   );
   // Reported by neither, the key stays absent rather than becoming a zero:
   // `billedInputTokens ?? inputTokens` has to fall through to the reported one.
@@ -358,11 +359,18 @@ test("billed counts are added up like every other measurement", () => {
   );
   assert.equal("billedInputTokens" in plain, false);
   assert.equal("billedOutputTokens" in plain, false);
-  // A measured zero survives.
+  // A measured zero overrides only its own attempt.
   assert.equal(
     mergeTokenUsage(
       { inputTokens: 1, outputTokens: 1, totalTokens: 2, billedOutputTokens: 0 },
       { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+    ).billedOutputTokens,
+    1,
+  );
+  assert.equal(
+    mergeTokenUsage(
+      { inputTokens: 1, outputTokens: 1, totalTokens: 2, billedOutputTokens: 0 },
+      { inputTokens: 1, outputTokens: 1, totalTokens: 2, billedOutputTokens: 0 },
     ).billedOutputTokens,
     0,
   );

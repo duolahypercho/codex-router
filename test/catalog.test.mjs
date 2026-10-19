@@ -227,6 +227,50 @@ test("routed models rewrite GPT identity text to the external model name", () =>
   assert.equal(model.multi_agent_version, "v2");
 });
 
+test("grok family rewrites workspace reads onto its own tools", () => {
+  const workspace = "- When you search for text or files, you reach first for `rg` or `rg --files`; they are much faster than alternatives like `grep`. If `rg` is unavailable, you use the next best tool without fuss.\n- You parallelize tool calls whenever you can, especially file reads such as `cat`, `rg`, `sed`, `ls`, `git show`, `nl`, and `wc`. You use `multi_tool_use.parallel` for that parallelism, and only that. Do not chain shell commands with separators like `echo \"====\";`; the output becomes noisy in a way that makes the user\u2019s side of the conversation worse.\n- Use `apply_patch` for manual code edits. Do not create or edit files with `cat` or other shell write tricks. Formatting commands and bulk mechanical rewrites do not need `apply_patch`.\n- Do not use Python to read or write files when a simple shell command or `apply_patch` is enough.\n- Treat ordinary local filesystem paths as files, never as MCP resource URIs. Inspect local files with a filesystem tool that is present in this request's menu.";
+  const native = {
+    ...template,
+    base_instructions: `You are Codex, a coding agent based on GPT-5.\n${workspace}`,
+    model_messages: {
+      instructions_template: `You are Codex, a coding agent based on GPT-5.\n${workspace}`,
+      instructions_variables: { personality_default: "" },
+    },
+  };
+  const grok47 = {
+    ...grok,
+    slug: "grok-oauth/grok-4.7",
+    displayName: "Grok 4.7 (OAuth)",
+    instructionOverlay: "filesystem-mcp-discipline",
+  };
+  const other = {
+    ...grok47,
+    slug: "deepseek/deepseek-v4-pro",
+    displayName: "DeepSeek V4 Pro",
+    gatewayModel: "deepseek-v4-pro",
+  };
+
+  const model = routedModel(native, grok47);
+  assert.match(model.base_instructions, /based on Grok 4\.7/);
+  assert.match(model.base_instructions, /read files with `read_file`/);
+  assert.match(model.base_instructions, /separate tool calls in the same response/);
+  assert.match(model.base_instructions, /search_replace` for manual edits/);
+  assert.match(model.base_instructions, /not for paging through files/);
+  assert.match(model.base_instructions, /`multi_tool_use\.parallel` is not available/);
+  assert.doesNotMatch(model.base_instructions, /You use `multi_tool_use\.parallel` for that parallelism/);
+  assert.doesNotMatch(model.base_instructions, /such as exec_command, to inspect/);
+  assert.doesNotMatch(model.base_instructions, /filesystem tool that is present/);
+  assert.match(model.model_messages.instructions_template, /read files with `read_file`/);
+  assert.match(model.model_messages.instructions_template, /`multi_tool_use\.parallel` is not available/);
+  assert.doesNotMatch(model.model_messages.instructions_template, /You use `multi_tool_use\.parallel` for that parallelism/);
+  assert.doesNotMatch(model.base_instructions, /GPT-5/);
+
+  const untouched = routedModel(native, other);
+  assert.match(untouched.base_instructions, /based on DeepSeek V4 Pro/);
+  assert.match(untouched.base_instructions, /multi_tool_use\.parallel/);
+  assert.doesNotMatch(untouched.base_instructions, /read files with `read_file`/);
+});
+
 test("routed models can borrow native behavior instructions without inheriting capabilities", () => {
   const behaviorTemplate = {
     ...template,

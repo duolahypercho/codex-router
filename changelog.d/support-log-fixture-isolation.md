@@ -1,0 +1,1 @@
+- Reset each owned support-bundle log fixture before exercising alternate file types, including when a prior failed operation left a log behind, so cleanup failures cannot mask the log-privacy assertions.

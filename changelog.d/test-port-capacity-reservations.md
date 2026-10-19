@@ -1,0 +1,1 @@
+- Preserve a declared, bounded port block for large integration suites before dividing the remaining test pool, so adding independent consumers cannot exhaust routing tests. Keep all allocations disjoint and outside credential-lease, managed-service and ephemeral port ranges.

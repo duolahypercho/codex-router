@@ -223,15 +223,19 @@ export function mergeTokenUsage(first, second) {
   // reports -- Grok OAuth sends `billed_prompt_tokens` beside `prompt_tokens`
   // -- is exactly the one whose retried turns were being charged twice and
   // metered once, because provider-usage.mjs reads `billedInputTokens ??
-  // inputTokens` and the billed half went missing on the way here.
+  // inputTokens` and the billed half went missing on the way here. Apply that
+  // fallback per attempt: a missing billed component does not mean the
+  // attempt was free. An explicit billed zero still overrides its raw count.
   const billedInputTokens =
     first.billedInputTokens === undefined && second.billedInputTokens === undefined
       ? undefined
-      : (first.billedInputTokens || 0) + (second.billedInputTokens || 0);
+      : (first.billedInputTokens ?? first.inputTokens ?? 0) +
+        (second.billedInputTokens ?? second.inputTokens ?? 0);
   const billedOutputTokens =
     first.billedOutputTokens === undefined && second.billedOutputTokens === undefined
       ? undefined
-      : (first.billedOutputTokens || 0) + (second.billedOutputTokens || 0);
+      : (first.billedOutputTokens ?? first.outputTokens ?? 0) +
+        (second.billedOutputTokens ?? second.outputTokens ?? 0);
   return {
     inputTokens: (first.inputTokens || 0) + (second.inputTokens || 0),
     outputTokens: (first.outputTokens || 0) + (second.outputTokens || 0),
