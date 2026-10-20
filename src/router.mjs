@@ -1917,8 +1917,7 @@ function parseRelayedAgentPayloadSse(bytes) {
   return undefined;
 }
 
-function nativeRelayContext(request, ownerHeaders) {
-  const headers = { ...nativeHeaders(request), ...ownerHeaders };
+function nativeRelayContext(headers) {
   const authorization =
     typeof headers.authorization === "string" ? headers.authorization : "";
   const account = nativeAccountKey(headers);
@@ -2174,8 +2173,8 @@ function waitForAgentPayloadRelay(pending, signal) {
   });
 }
 
-async function relayEncryptedAgentPayload(request, item, encrypted, signal, ownerHeaders) {
-  const { accountScope, headers } = nativeRelayContext(request, ownerHeaders);
+async function relayEncryptedAgentPayload(item, encrypted, signal, nativeSnapshot) {
+  const { accountScope, headers } = nativeRelayContext(nativeSnapshot);
   const key = agentPayloadCacheKey(encrypted, accountScope);
   const cached = cachedAgentPayload(key);
   if (cached !== undefined) return cached;
@@ -2214,17 +2213,21 @@ async function normalizeRoutedAgentInput(request, input, signal, originalPayload
   const normalized = normalizeRoutedInput(input);
   if (!Array.isArray(normalized)) return normalized;
   const output = [];
+  let nativeSnapshot;
   for (const item of normalized) {
     const payload = encryptedAgentPayload(item);
     if (!payload) {
       output.push(item);
       continue;
     }
-    const ownerHeaders = payload.native
-      ? await knownChatGPTAccountRoutingHeaders({ signal, headers: nativeHeaders(request), payload: { ...originalPayload, input: [item] } })
-      : undefined;
+    if (payload.native) {
+      // Keep ownership checks, all relays and their cache scopes on one login,
+      // even if the shared native session changes while a policy read awaits.
+      nativeSnapshot ??= nativeHeaders(request);
+      await knownChatGPTAccountRoutingHeaders({ signal, headers: nativeSnapshot, payload: { ...originalPayload, input: [item] } });
+    }
     const plaintext = payload.native
-      ? await relayEncryptedAgentPayload(request, item, payload.content, signal, ownerHeaders)
+      ? await relayEncryptedAgentPayload(item, payload.content, signal, nativeSnapshot)
       : payload.content;
     output.push({
       ...item,
@@ -4907,8 +4910,11 @@ async function handleResponses(request, response, requestUrl) {
         }
       }
     } else {
+      // Policy reads can await locks or ACL checks. Dispatch the credential
+      // snapshot whose identity was validated, even if the desktop login rotates.
+      const nativeSnapshot = nativeHeaders(request);
       accountRoutingPlan = await createChatGPTAccountRoutingPlan({
-        headers: nativeHeaders(request), payload, signal: controller.signal,
+        headers: nativeSnapshot, payload, signal: controller.signal,
       });
       const native = { ...payload };
       if (!compactV1) markResponsesStream(response, { minimalFailure: true });
@@ -4975,7 +4981,7 @@ async function handleResponses(request, response, requestUrl) {
       }
       nativeWsTransport = !accountRoutingPlan && !compactV1 && !compactV2 && nativeWebSocketTransportSelected();
       target = nativeTarget(requestUrl.pathname);
-      headers = { ...nativeHeaders(request), ...accountRoutingPlan?.headers };
+      headers = { ...nativeSnapshot, ...accountRoutingPlan?.headers };
       // The native WebSocket transport speaks JSON frames, never a zstd
       // Content-Encoding, so its turns keep the plain replayable body.
       if (nativeWsTransport) {

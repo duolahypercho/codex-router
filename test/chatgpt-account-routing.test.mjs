@@ -940,3 +940,63 @@ for (const [mediaType, quotaExpected] of [
     const next = await plan("media-type"); assert.equal(next.profileId, quotaExpected ? ids[1] : ids[0]); await next.close();
   });
 }
+
+for (const field of ["cooldown", "affinity"]) {
+  for (const padding of ["leading", "trailing"]) {
+    test(`persisted ${field} rejects ${padding} whitespace in account IDs`, async (t) => {
+      const { options, ids, plan } = fixture(t);
+      await setChatGPTAccountRouting("fill-first", options);
+      const owner = await plan("canonical"); await owner.close();
+      const state = readChatGPTAccountRouting(options.filePath);
+      const id = padding === "leading" ? ` ${ids[0]}` : `${ids[0]} `;
+      if (field === "cooldown") state.cooldowns[id] = Date.now() + 60000;
+      else Object.values(state.sessions)[0].profileId = id;
+      writePrivateJson(options.filePath, state);
+      const invalid = (error) => error.code === "chatgpt_account_routing_unavailable" && /state is invalid/.test(error.message);
+      assert.throws(() => readChatGPTAccountRouting(options.filePath), invalid);
+      await assert.rejects(readChatGPTAccountRoutingAsync(options.filePath), invalid);
+      await assert.rejects(plan("canonical"), invalid);
+    });
+  }
+}
+
+for (const until of [undefined, "invalid", new Date(Date.now() + 3600000).toISOString(), new Date(1).toISOString()]) {
+  test(`pool cooldown ${until ?? "missing"} is eligible only when its deadline is valid and expired`, async (t) => {
+    const { options, ids, plan } = fixture(t);
+    await setChatGPTAccountRouting("fill-first", options);
+    const pool = readChatGPTAccountPoolState(options.poolPath);
+    pool.accounts[ids[0]].health = { state: "cooldown", ...(until === undefined ? {} : { cooldownUntil: until }) };
+    writeChatGPTAccountPoolState(pool, options.poolPath);
+    const selected = await plan("pool-cooldown");
+    assert.equal(selected.profileId, until === new Date(1).toISOString() ? ids[0] : ids[1]);
+    await selected.close();
+  });
+}
+
+for (const canceled of [false, true]) {
+  test(`planning ${canceled ? "deadline" : "failure"} survives a simultaneous session unlock failure`, async (t) => {
+    const { options } = fixture(t);
+    await setChatGPTAccountRouting("fill-first", options);
+    options.poolPath = path.join(path.dirname(options.filePath), "missing-pool.json");
+    const controller = new AbortController();
+    const reason = Object.assign(new Error("synthetic turn deadline"), { code: "ERR_ROUTER_REQUEST_TIMEOUT" });
+    const unlockError = Object.assign(new Error("synthetic unlock failure"), { code: "EACCES" });
+    const originalStat = fs.lstatSync; const originalRmdir = fs.rmdir;
+    t.mock.method(fs, "lstatSync", (target, ...args) => {
+      if (canceled && target === options.poolPath) controller.abort(reason);
+      return originalStat(target, ...args);
+    });
+    t.mock.method(fs, "rmdir", (target, callback) => {
+      if (String(target).includes("chatgpt-routing-sessions")) return queueMicrotask(() => callback(unlockError));
+      return originalRmdir(target, callback);
+    });
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(createChatGPTAccountRoutingPlan({ ...options, signal: controller.signal, headers: { session_id: "unlock-error" }, payload: { input: "synthetic" } }), (error) => {
+        assert.equal(canceled ? error === reason : error.code === "chatgpt_account_routing_unavailable", true);
+        assert.equal(error.lockReleaseError, unlockError);
+        return true;
+      });
+    } finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
+  });
+}

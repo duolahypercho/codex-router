@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { parseChatGPTAccountPoolState, chatGPTSubscriptionAccountHome, isChatGPTAccountId, withChatGPTAccountPoolLock } from "./chatgpt-account-pool.mjs";
 import { discoveryDisabled } from "./discovery-mode.mjs";
-import { acquireFileLock, acquireFileLockWithSignal } from "./file-lock.mjs";
+import { acquireFileLock, acquireFileLockWithSignal, runWithLockRelease } from "./file-lock.mjs";
 import { privateFileIsProtected, privateFilesAreProtectedAsync, writePrivateJson, writePrivateJsonAsync } from "./file-security.mjs";
 import { ensureNoSymlinkParents } from "./path-security.mjs";
 import { CHATGPT_ACCOUNT_POOL_PATH, CHATGPT_ACCOUNT_HOMES_DIR, STATE_DIR } from "./paths.mjs";
@@ -16,6 +16,7 @@ const MAX_SESSIONS = 4096;
 const DEFAULT_COOLDOWN_MS = 15 * 60_000;
 const QUOTA_CODES = new Set(["usage_limit_reached", "insufficient_quota", "workspace_owner_credits_depleted", "workspace_member_credits_depleted", "workspace_owner_usage_limit_reached", "workspace_member_usage_limit_reached"]);
 const hash = (value) => createHash("sha256").update(value).digest("hex");
+const canonicalAccountId = (value) => isChatGPTAccountId(value) && value === value.trim();
 const safeHeader = (value, max = 256) => typeof value === "string" && value.length > 0 && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value);
 
 function unavailable(message = "No eligible ChatGPT account is available for this request.") {
@@ -113,8 +114,8 @@ function parseRoutingState(state, { allowLegacyAffinity = false } = {}) {
   if (state.affinityVersion !== undefined && state.affinityVersion !== 2) throw unavailable("The ChatGPT routing affinity version is invalid.");
   if (state.affinityVersion === undefined && sessions.length && !allowLegacyAffinity) throw unavailable("Legacy ChatGPT routing ownership cannot be recovered safely. Close pooled conversations and run chatgpt-account-pool routing reset, then start new conversations.");
   if (!sessions.length) state.affinityVersion = 2;
-  if (sessions.length > MAX_SESSIONS || sessions.some(([key, entry]) => !/^[a-f0-9]{64}$/.test(key) || (entry?.native === true ? entry.profileId !== undefined : entry?.native !== undefined || !isChatGPTAccountId(entry?.profileId)) || !/^[a-f0-9]{64}$/.test(entry?.identityHash) || (entry.rootKey !== undefined && !/^[a-f0-9]{64}$/.test(entry.rootKey)) || (entry.hasChildren !== undefined && typeof entry.hasChildren !== "boolean"))) throw unavailable("The ChatGPT routing affinity state is invalid.");
-  if (Object.entries(state.cooldowns).some(([id, until]) => !isChatGPTAccountId(id) || !Number.isSafeInteger(until) || until < 0)) throw unavailable("The ChatGPT routing cooldown state is invalid.");
+  if (sessions.length > MAX_SESSIONS || sessions.some(([key, entry]) => !/^[a-f0-9]{64}$/.test(key) || (entry?.native === true ? entry.profileId !== undefined : entry?.native !== undefined || !canonicalAccountId(entry?.profileId)) || !/^[a-f0-9]{64}$/.test(entry?.identityHash) || (entry.rootKey !== undefined && !/^[a-f0-9]{64}$/.test(entry.rootKey)) || (entry.hasChildren !== undefined && typeof entry.hasChildren !== "boolean"))) throw unavailable("The ChatGPT routing affinity state is invalid.");
+  if (Object.entries(state.cooldowns).some(([id, until]) => !canonicalAccountId(id) || !Number.isSafeInteger(until) || until < 0)) throw unavailable("The ChatGPT routing cooldown state is invalid.");
   return state;
 }
 
@@ -166,7 +167,8 @@ export function chatGPTAccountBoundHistory(payload, headers = {}) {
 }
 
 function credentialHome(account, homesDir, now) {
-  if ((account.health?.state === "cooldown" && Date.parse(account.health.cooldownUntil) > now) || account.state !== "active" || account.paused || !safeHeader(account.identity?.accountId) || ["reauth-required", "failed"].includes(account.health?.state)) return undefined;
+  const cooldownUntil = Date.parse(account.health?.cooldownUntil);
+  if ((account.health?.state === "cooldown" && (!Number.isFinite(cooldownUntil) || cooldownUntil > now)) || account.state !== "active" || account.paused || !safeHeader(account.identity?.accountId) || ["reauth-required", "failed"].includes(account.health?.state)) return undefined;
   try {
     const home = chatGPTSubscriptionAccountHome(account.id, { homesDir });
     ensureNoSymlinkParents(home);
@@ -319,7 +321,7 @@ export async function createChatGPTAccountRoutingPlan({ headers, payload, signal
       },
       next: select,
     };
-  } catch (error) { await close(); throw error; }
+  } catch (error) { return runWithLockRelease(() => { throw error; }, close); }
 }
 
 export function chatGPTQuotaCooldown(response, text, now = Date.now()) {

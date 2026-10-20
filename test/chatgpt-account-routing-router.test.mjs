@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -16,7 +16,7 @@ import { openPort } from "./port-pool.mjs";
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CALLER = "synthetic-local-caller-with-enough-characters";
 
-async function harness(t, mode = "fill-first", deliveryPolicy = "at-most-once") {
+async function harness(t, mode = "fill-first", deliveryPolicy = "at-most-once", { rotateNativeSession = false } = {}) {
   const root = mkdtempSync(path.join(os.tmpdir(), "chatgpt-routing-router-"));
   const state = path.join(root, "state"); mkdirSync(state, { mode: 0o700 });
   const homesDir = path.join(state, "chatgpt-accounts");
@@ -30,12 +30,41 @@ async function harness(t, mode = "fill-first", deliveryPolicy = "at-most-once") 
     writePrivateJson(path.join(homesDir, account.id, "auth.json"), { tokens: { access_token: access, account_id: accountId } });
   }
   await setChatGPTAccountRouting(mode, { filePath: routingPath });
+  const nativeHome = path.join(root, "codex");
+  const rotationMarker = path.join(root, "rotate-session");
+  const preload = path.join(root, "rotate-session.mjs");
+  const authPath = path.join(nativeHome, "auth.json");
+  const auth = (account) => ({ tokens: { access_token: `synthetic-session-${account}`, account_id: account } });
+  if (rotateNativeSession) {
+    writePrivateJson(authPath, auth("one"));
+    writePrivateJson(`${authPath}.next`, auth("two"));
+    // Replace only synthetic auth at the policy read, after headers were captured.
+    writeFileSync(preload, `import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+const original = fs.lstatSync;
+fs.lstatSync = function(file, ...args) {
+  if (file === ${JSON.stringify(routingPath)} && fs.existsSync(${JSON.stringify(rotationMarker)})) {
+    fs.rmSync(${JSON.stringify(rotationMarker)});
+    fs.renameSync(${JSON.stringify(`${authPath}.next`)}, ${JSON.stringify(authPath)});
+  }
+  return original.call(this, file, ...args);
+};
+syncBuiltinESMExports();
+`);
+  }
   const seen = []; const failures = []; let rejectOne = true; let holdNext = false; let turnState;
   const upstream = http.createServer(async (request, response) => {
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
     if (request.url === "/health") { response.end('{"ok":true,"status":"healthy"}'); return; }
     seen.push({ account: request.headers["chatgpt-account-id"], authorization: request.headers.authorization, raw: Buffer.concat(chunks), encoding: request.headers["content-encoding"], turnState: request.headers["x-codex-turn-state"] });
+    const body = request.headers["content-encoding"] ? undefined : JSON.parse(Buffer.concat(chunks).toString());
+    if (body?.tool_choice?.name === "relay_external_agent_payload") {
+      seen.at(-1).relay = true;
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ output: [{ type: "function_call", name: "relay_external_agent_payload", arguments: JSON.stringify({ payload: "synthetic delegated task" }) }] }));
+      return;
+    }
     const failure = failures.shift();
     if (["empty", "prelude-only"].includes(failure)) {
       response.writeHead(200, { "content-type": "text/event-stream" });
@@ -67,11 +96,17 @@ async function harness(t, mode = "fill-first", deliveryPolicy = "at-most-once") 
   const upstreamPort = upstream.address().port; const routerPort = await openPort(); let stderr = "";
   const spawnOptions = {
     cwd: repo,
-    env: { ...process.env, CODEX_HOME: path.join(root, "codex"), MODEL_ROUTER_STATE_DIR: state, CODEX_ROUTER_CALLER_KEY: CALLER, CODEX_ROUTER_INTERNAL_KEY: "synthetic-internal-key-with-enough-characters", CODEX_ROUTER_PORT: String(routerPort), CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${upstreamPort}`, CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${upstreamPort}/v1`, CODEX_ROUTER_GATEWAY_HEALTH_URL: `http://127.0.0.1:${upstreamPort}/health`, CODEX_ROUTER_OAUTH_HEALTH_URL: `http://127.0.0.1:${upstreamPort}/health`, CODEX_ROUTER_API_HEALTH_URL: `http://127.0.0.1:${upstreamPort}/health`, CODEX_ROUTER_GROK_OAUTH_HEALTH_URL: `http://127.0.0.1:${upstreamPort}/health`, CODEX_ROUTER_NATIVE_RETRY_BACKOFF_MS: "0", CODEX_ROUTER_NATIVE_RETRY_POLICY: deliveryPolicy, CODEX_ROUTER_NO_DISCOVERY: "0", CODEX_ROUTER_NATIVE_SESSION_FALLBACK: "0", CODEX_ROUTER_QUIET: "1" },
+    env: { ...process.env, CODEX_HOME: path.join(root, "codex"), MODEL_ROUTER_STATE_DIR: state, CODEX_ROUTER_CALLER_KEY: CALLER, CODEX_ROUTER_INTERNAL_KEY: "synthetic-internal-key-with-enough-characters", CODEX_ROUTER_PORT: String(routerPort), CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${upstreamPort}`, CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${upstreamPort}/v1`, CODEX_ROUTER_GATEWAY_HEALTH_URL: `http://127.0.0.1:${upstreamPort}/health`, CODEX_ROUTER_OAUTH_HEALTH_URL: `http://127.0.0.1:${upstreamPort}/health`, CODEX_ROUTER_API_HEALTH_URL: `http://127.0.0.1:${upstreamPort}/health`, CODEX_ROUTER_GROK_OAUTH_HEALTH_URL: `http://127.0.0.1:${upstreamPort}/health`, CODEX_ROUTER_NATIVE_RETRY_BACKOFF_MS: "0", CODEX_ROUTER_NATIVE_RETRY_POLICY: deliveryPolicy, CODEX_ROUTER_NO_DISCOVERY: "0", CODEX_ROUTER_NATIVE_SESSION_FALLBACK: rotateNativeSession ? "1" : "0", CODEX_ROUTER_SHOW_ALL_MODELS: "1", CODEX_ROUTER_QUIET: "1" },
     stdio: ["ignore", "ignore", "pipe"],
   };
+  Object.assign(spawnOptions.env, {
+    MODEL_ROUTER_CODEX_AUTH: authPath,
+    MODEL_ROUTER_CHATGPT_ACCOUNT_ROUTING: routingPath,
+    MODEL_ROUTER_CHATGPT_ACCOUNT_POOL: poolPath,
+    MODEL_ROUTER_CHATGPT_ACCOUNT_HOMES: homesDir,
+  });
   const start = () => {
-    const childProcess = spawn(process.execPath, ["src/router.mjs"], spawnOptions);
+    const childProcess = spawn(process.execPath, [...(rotateNativeSession ? ["--import", preload] : []), "src/router.mjs"], spawnOptions);
     childProcess.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
     return childProcess;
   };
@@ -98,7 +133,9 @@ async function harness(t, mode = "fill-first", deliveryPolicy = "at-most-once") 
     const response = await fetch(url, { method: "POST", headers: { ...headers, session_id: session }, body: JSON.stringify({ model: "gpt-5.4", stream: true, store: false, input, ...extra }) });
     return { status: response.status, text: await response.text() };
   };
-  return { get url() { return url; }, headers, post, seen, setRejectOne(value) { rejectOne = value; }, setTurnState(value) { turnState = value; }, holdNext() { holdNext = true; }, logs: () => stderr, queueFailures(...statuses) { failures.push(...statuses); },
+  return { get url() { return url; }, headers, post, seen,
+    rotateSessionOnPolicyRead() { writeFileSync(rotationMarker, "rotate"); },
+    nativeAccount() { return JSON.parse(readFileSync(authPath)).tokens.account_id; }, setRejectOne(value) { rejectOne = value; }, setTurnState(value) { turnState = value; }, holdNext() { holdNext = true; }, logs: () => stderr, queueFailures(...statuses) { failures.push(...statuses); },
     usage() {
       const file = path.join(state, "usage-events.jsonl");
       return existsSync(file) ? readFileSync(file, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
@@ -342,3 +379,35 @@ test("pooled mixed-case event-stream quota keeps the wire body and cools the acc
   const next = await h.post("mixed-case-quota"); assert.equal(next.status, 200);
   assert.deepEqual(h.seen.map((entry) => entry.account), ["one", "two"]);
 });
+
+for (const kind of ["native continuation", "encrypted multi-item relay"]) {
+  test(`${kind} keeps the credential snapshot checked before async ownership validation`, async (t) => {
+    const h = await harness(t, "reset", "at-most-once", { rotateNativeSession: true });
+    h.setRejectOne(false);
+    h.headers.authorization = `Bearer ${CALLER}`;
+    delete h.headers["chatgpt-account-id"];
+    const session = "snapshot-rotation";
+    assert.equal((await h.post(session)).status, 200);
+    h.rotateSessionOnPolicyRead();
+    const input = kind === "native continuation"
+      ? [{ type: "reasoning", encrypted_content: "synthetic-history" }]
+      : ["first", "second"].map((name) => ({ type: "agent_message", author: "/root", recipient: "/root/child", content: [{ type: "input_text", text: "Message Type: NEW_TASK\nSender: /root\nPayload:\n" }, { type: "encrypted_content", encrypted_content: `gAAAAA-synthetic-${name}=` }] }));
+    const result = await h.post(session, input, kind === "native continuation" ? {} : { model: "kimi-oauth/k3" });
+    assert.equal(result.status, 200, result.text);
+    assert.equal(h.nativeAccount(), "two", "the injected synthetic profile switch must really occur");
+    const dispatched = kind === "native continuation" ? h.seen.slice(1) : h.seen.filter((entry) => entry.relay);
+    assert.equal(dispatched.length, kind === "native continuation" ? 1 : 2);
+    assert.ok(dispatched.every((entry) => entry.account === "one" && entry.authorization === "Bearer synthetic-session-one"));
+    if (kind === "encrypted multi-item relay") {
+      h.headers.authorization = "Bearer synthetic-session-one";
+      h.headers["chatgpt-account-id"] = "one";
+      const cached = await h.post(session, input, { model: "kimi-oauth/k3" });
+      assert.equal(cached.status, 200, cached.text);
+      assert.equal(h.seen.filter((entry) => entry.relay).length, 2, "relay cache entries must belong to the validated credential snapshot");
+      h.headers.authorization = `Bearer ${CALLER}`;
+      delete h.headers["chatgpt-account-id"];
+    }
+    const followup = await h.post(session, [{ type: "reasoning", encrypted_content: "synthetic-history" }]);
+    assert.equal(followup.status, 503, "a later request using the new account must still fail ownership validation");
+  });
+}
