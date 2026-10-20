@@ -43,8 +43,8 @@ async function harness(t, mode = "fill-first", deliveryPolicy = "at-most-once") 
         + (failure === "empty" ? 'data: {"type":"response.completed","response":{"id":"resp_native_empty","output":[]}}\n\n' : 'data: {"type":"response.in_progress","response":{"id":"resp_native_empty"}}\n\n'));
       return;
     }
-    if (failure === "stream-quota-no-type") {
-      response.writeHead(200);
+    if (["stream-quota-no-type", "stream-quota-mixed-case"].includes(failure)) {
+      response.writeHead(200, failure === "stream-quota-mixed-case" ? { "content-type": "Text/Event-Stream; Charset=UTF-8" } : {});
       response.end('data: {"type":"response.failed","response":{"error":{"code":"usage_limit_reached"}}}\n\n'); return;
     }
     if (failure === "reset") { request.socket.destroy(); return; }
@@ -330,5 +330,15 @@ test("pooled native SSE without Content-Type records semantic quota before the n
   const first = await h.post("no-type-quota"); assert.equal(first.status, 200); assert.match(first.text, /usage_limit_reached/);
   assert.deepEqual(h.seen.map((entry) => entry.account), ["one"]);
   const next = await h.post("no-type-quota"); assert.equal(next.status, 200);
+  assert.deepEqual(h.seen.map((entry) => entry.account), ["one", "two"]);
+});
+
+
+test("pooled mixed-case event-stream quota keeps the wire body and cools the account", async (t) => {
+  const h = await harness(t); h.setRejectOne(false); h.queueFailures("stream-quota-mixed-case");
+  const result = await h.post("mixed-case-quota");
+  assert.equal(result.status, 200); assert.match(result.text, /usage_limit_reached/);
+  assert.deepEqual(h.seen.map((entry) => entry.account), ["one"]);
+  const next = await h.post("mixed-case-quota"); assert.equal(next.status, 200);
   assert.deepEqual(h.seen.map((entry) => entry.account), ["one", "two"]);
 });

@@ -108,6 +108,7 @@ export async function readChatGPTAccountRoutingAsync(filePath = CHATGPT_ACCOUNT_
 
 function parseRoutingState(state, { allowLegacyAffinity = false } = {}) {
   if (state?.version !== 1 || typeof state.enabled !== "boolean" || !["round-robin", "fill-first"].includes(state.strategy) || !Number.isSafeInteger(state.cursor) || state.cursor < 0 || !state.sessions || typeof state.sessions !== "object" || Array.isArray(state.sessions) || !state.cooldowns || typeof state.cooldowns !== "object" || Array.isArray(state.cooldowns)) throw unavailable("The ChatGPT routing policy is invalid.");
+  if (state.allowUntrackedHistory !== undefined && typeof state.allowUntrackedHistory !== "boolean") throw unavailable("The ChatGPT routing ownership reset flag is invalid.");
   const sessions = Object.entries(state.sessions);
   if (state.affinityVersion !== undefined && state.affinityVersion !== 2) throw unavailable("The ChatGPT routing affinity version is invalid.");
   if (state.affinityVersion === undefined && sessions.length && !allowLegacyAffinity) throw unavailable("Legacy ChatGPT routing ownership cannot be recovered safely. Close pooled conversations and run chatgpt-account-pool routing reset, then start new conversations.");
@@ -402,9 +403,10 @@ export async function fetchWithChatGPTAccountRouting(plan, url, init = {}, {
 // the cooldown for subsequent turns, but never replay an accepted stream.
 function observeQuotaStream(response, plan, now, signal, expectEventStream) {
   const contentType = response.headers.get("content-type");
+  const mediaType = contentType?.split(";", 1)[0].trim().toLowerCase();
   // Match the native router's missing-type SSE contract only for successful,
   // explicitly streaming turns. Never reinterpret JSON or an HTTP refusal.
-  if (!response.body || !(contentType?.includes("text/event-stream") || (!contentType && expectEventStream && response.ok))) return response;
+  if (!response.body || !(mediaType === "text/event-stream" || (!contentType && expectEventStream && response.ok))) return response;
   const decoder = new TextDecoder();
   let pending = "";
   let marked = false;

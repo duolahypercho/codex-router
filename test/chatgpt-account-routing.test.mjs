@@ -885,3 +885,58 @@ for (const kind of ["missing-type", "explicit-json", "not-streaming", "http-erro
     assert.equal(await result.response.text(), body); assert.equal(writes, kind === "missing-type" ? 1 : 0); assert.equal(hops, 0);
   });
 }
+
+
+for (const value of [null, 0, 1, "false", "true", "", {}, []]) {
+  test(`malformed ownership reset flag ${JSON.stringify(value)} fails closed across policy consumers`, async (t) => {
+    const { options, plan } = fixture(t);
+    await setChatGPTAccountRouting("off", options);
+    const state = readChatGPTAccountRouting(options.filePath);
+    const invalid = (error) => error.code === "chatgpt_account_routing_unavailable" && /ownership reset flag is invalid/.test(error.message);
+    for (const enabled of [false, true]) {
+      writePrivateJson(options.filePath, { ...state, enabled, allowUntrackedHistory: value });
+      const before = readFileSync(options.filePath);
+      assert.throws(() => readChatGPTAccountRouting(options.filePath), invalid);
+      await assert.rejects(readChatGPTAccountRoutingAsync(options.filePath), invalid);
+      await assert.rejects(plan("unknown-history", [{ encrypted_content: "synthetic-opaque" }]), invalid);
+      await assert.rejects(knownChatGPTAccountRoutingHeaders({ ...options, headers: { "chatgpt-account-id": "one", session_id: "unknown-relay" }, payload: { input: [{ encrypted_content: "synthetic-opaque" }] } }), invalid);
+      await assert.rejects(setChatGPTAccountRouting("reset", options), invalid);
+      assert.deepEqual(readFileSync(options.filePath), before);
+    }
+    writePrivateJson(options.filePath, { ...state, allowUntrackedHistory: false });
+    assert.equal(await plan("fresh-after-policy-repair"), undefined);
+  });
+}
+
+test("missing and boolean ownership reset flags retain their existing compatibility", async (t) => {
+  const { options, plan } = fixture(t);
+  await setChatGPTAccountRouting("off", options);
+  const state = readChatGPTAccountRouting(options.filePath);
+  for (const value of [undefined, true, false]) {
+    writePrivateJson(options.filePath, { ...state, allowUntrackedHistory: value });
+    assert.equal(readChatGPTAccountRouting(options.filePath).allowUntrackedHistory, value);
+    assert.equal((await readChatGPTAccountRoutingAsync(options.filePath)).allowUntrackedHistory, value);
+    if (value === false) await assert.rejects(plan("unknown", [{ encrypted_content: "synthetic-opaque" }]), /Re-enable|account-bound/);
+    else assert.equal(await plan("unknown", [{ encrypted_content: "synthetic-opaque" }]), undefined);
+  }
+});
+
+for (const [mediaType, quotaExpected] of [
+  ["Text/Event-Stream", true], ["TEXT/EVENT-STREAM; Charset=UTF-8", true],
+  [" text/Event-Stream ; Charset=UTF-8 ", true], ["text/event-stream", true],
+  ["Application/JSON", false], ["Application/JSON; note=text/event-stream", false],
+  ["text/event-streaming", false],
+]) {
+  test(`pooled quota observation recognizes media type ${mediaType} without relying on a stream hint`, async (t) => {
+    const { options, ids, plan } = fixture(t);
+    await setChatGPTAccountRouting("fill-first", options);
+    const selected = await plan("media-type"); let calls = 0;
+    const body = 'data: {"type":"response.output_text.delta","delta":"partial"}\n\ndata: {"type":"response.failed","response":{"error":{"code":"usage_limit_reached"}}}\n\n';
+    const result = await fetchWithChatGPTAccountRouting(selected, "https://synthetic.test", { method: "POST" }, { fetchImpl: async () => {
+      calls++; return new Response(body, { headers: { "content-type": mediaType } });
+    } });
+    assert.equal(await result.response.text(), body); assert.equal(calls, 1); await selected.close();
+    assert.equal(Boolean(readChatGPTAccountRouting(options.filePath).cooldowns[ids[0]] > Date.now()), quotaExpected);
+    const next = await plan("media-type"); assert.equal(next.profileId, quotaExpected ? ids[1] : ids[0]); await next.close();
+  });
+}

@@ -1,0 +1,1 @@
+- **ChatGPT account routing rejects malformed ownership reset flags and recognizes event-stream media types case-insensitively.** Invalid policy values cannot restore permissive legacy ownership. SSE quota cooldowns are recorded for mixed-case Content-Type values, while non-SSE types and parameters cannot masquerade as event streams.
