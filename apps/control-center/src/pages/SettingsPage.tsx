@@ -365,6 +365,25 @@ export function SettingsPage({ target, health, presence, chatgptSession, account
               title={t("settings.accounts.title")}
               description={t("settings.accounts.description")}
             />
+            <div className="setting-row">
+              <div>
+                <strong>{t("settings.accounts.routingTitle")}</strong>
+                <small>{t("settings.accounts.routingBody")}</small>
+              </div>
+              <select
+                aria-label={t("settings.accounts.routingTitle")}
+                disabled={!api || !accountPool || Boolean(accountPoolError)}
+                value={accountPool?.routing?.enabled ? accountPool.routing.strategy : "off"}
+                onChange={(event) => {
+                  const strategy = event.target.value as "off" | "round-robin" | "fill-first";
+                  if (api) void runAction(t("settings.accounts.routingTitle"), () => api.setChatGptAccountRouting(strategy));
+                }}
+              >
+                <option value="off">{t("settings.accounts.routingOff")}</option>
+                <option value="round-robin">{t("settings.accounts.routingRoundRobin")}</option>
+                <option value="fill-first">{t("settings.accounts.routingFillFirst")}</option>
+              </select>
+            </div>
             {accountPoolError ? (
               <InlineNotice tone="danger" title={t("settings.accounts.stateUnavailable")}>
                 {t("settings.accounts.stateUnavailableBody", { error: accountPoolError })}
@@ -420,6 +439,7 @@ export function SettingsPage({ target, health, presence, chatgptSession, account
                     <div>
                       <strong><UserRound aria-hidden size={14} strokeWidth={1.7} /> {title} {accountSelection === account.id ? <Badge tone="accent">{t("settings.accounts.selectedBadge")}</Badge> : null}</strong>
                       <small>{label}{status}{account.subscription?.expiresInHours !== undefined ? t("settings.accounts.tokenHours", { hours: account.subscription.expiresInHours }) : ""} · {usageLabel}</small>
+                      {(accountPool?.routing?.cooldowns?.[account.id] || 0) > Date.now() ? <small>{t("settings.accounts.routingCooldown", { time: new Date(accountPool!.routing!.cooldowns[account.id]).toLocaleString() })}</small> : null}
                       {accountLoginAttempt?.status === "failed" ? <small>{accountLoginAttempt.error}</small> : null}
                     </div>
                     <div className="settings-actions">

@@ -203,13 +203,14 @@ function protectPrivateFilesWin32(paths) {
 // cannot reliably consume redirected stdin on Windows; it can stay alive
 // without applying an ACL and strand every caller until the timeout. Keep the
 // credentials out of the helper environment and cap diagnostic output.
-function protectPrivateFilesWin32Async(paths) {
+function protectPrivateFilesWin32Async(paths, { signal, spawnImpl = spawn, timeoutMs = WINDOWS_PRIVATE_ASYNC_TIMEOUT_MS } = {}) {
+  signal?.throwIfAborted();
   const list = [...paths];
   return new Promise((resolve, reject) => {
     let settled = false;
     let timer;
     let stderr = "";
-    const child = spawn(
+    const child = spawnImpl(
       "powershell.exe",
       powershellPrivateArgs(),
       {
@@ -222,8 +223,14 @@ function protectPrivateFilesWin32Async(paths) {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
       if (error) reject(error);
       else resolve(list);
+    };
+    const abort = () => {
+      if (settled) return;
+      terminateWindowsChild(child);
+      settle(signal.reason);
     };
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk) => {
@@ -251,7 +258,9 @@ function protectPrivateFilesWin32Async(paths) {
     timer = setTimeout(() => {
       terminateWindowsChild(child);
       settle(new Error("Timed out protecting a private file ACL."));
-    }, WINDOWS_PRIVATE_ASYNC_TIMEOUT_MS);
+    }, timeoutMs);
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
   });
 }
 
@@ -320,18 +329,23 @@ export function writePrivateFile(target, contents, { directoryMode, hardenFailur
 // This async form retains the exact same temporary-file/DACL/rename boundary
 // without blocking the event loop; each operation is independently bounded and
 // cannot strand later requests behind a persistent helper.
-export async function writePrivateFileAsync(target, contents, { directoryMode } = {}) {
-  if (process.platform !== "win32") return writePrivateFile(target, contents, { directoryMode });
+export async function writePrivateFileAsync(target, contents, { directoryMode, signal, platform = process.platform, spawnImpl, timeoutMs } = {}) {
+  signal?.throwIfAborted();
+  if (platform !== "win32") return writePrivateFile(target, contents, { directoryMode });
   const directory = path.dirname(target);
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
-  if (directoryMode !== undefined) chmodSync(directory, directoryMode);
+  const createdDirectory = mkdirSync(directory, { recursive: true, mode: 0o700 });
+  if (createdDirectory !== undefined && directoryMode !== undefined) chmodSync(directory, directoryMode);
   const temporary = `${target}.tmp.${process.pid}.${randomBytes(8).toString("hex")}`;
   try {
-    writeFileSync(temporary, contents, { encoding: "utf8", mode: 0o600 });
-    await protectPrivateFilesWin32Async([temporary]);
+    writeFileSync(temporary, contents, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    await protectPrivateFilesWin32Async([temporary], { signal, spawnImpl, timeoutMs });
+    signal?.throwIfAborted();
     renameSync(temporary, target);
   } catch (error) {
-    if (existsSync(temporary)) unlinkSync(temporary);
+    try {
+      const metadata = lstatSync(temporary);
+      if (metadata.isFile() && !metadata.isSymbolicLink()) unlinkSync(temporary);
+    } catch { /* The exclusive temporary may already have been moved. */ }
     throw error;
   }
   return target;
@@ -342,8 +356,8 @@ export function writePrivateJson(target, value, { space = 2, directoryMode, hard
   return value;
 }
 
-export async function writePrivateJsonAsync(target, value, { space = 2, directoryMode } = {}) {
-  await writePrivateFileAsync(target, `${JSON.stringify(value, null, space)}\n`, { directoryMode });
+export async function writePrivateJsonAsync(target, value, { space = 2, ...options } = {}) {
+  await writePrivateFileAsync(target, `${JSON.stringify(value, null, space)}\n`, options);
   return value;
 }
 
@@ -437,4 +451,70 @@ export function privateFileIsProtected(target) {
   } catch {
     return false;
   }
+}
+
+// Validate a fresh batch without blocking the request event loop or passing
+// credentials to a helper. Never cache ACL decisions across requests.
+export async function privateFilesAreProtectedAsync(targets, {
+  signal, platform = process.platform, spawnImpl = spawn, timeoutMs = 15_000,
+} = {}) {
+  signal?.throwIfAborted();
+  const list = [...targets];
+  if (!list.length) return [];
+  if (platform !== "win32") return list.map((target) => privateFileIsProtected(target));
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    "$paths = @($env:CODEX_ROUTER_PRIVATE_FILES | ConvertFrom-Json)",
+    "$sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
+    "$fullControl = [System.Security.AccessControl.FileSystemRights]::FullControl",
+    "$results = @(foreach ($path in $paths) {",
+    "try {",
+    "$acl = [System.IO.File]::GetAccessControl($path)",
+    "$rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))",
+    "$hasFullControl = $false; $hasForeignAllow = $false; $hasInheritedRule = $false",
+    "foreach ($rule in $rules) { if ($rule.IsInherited) { $hasInheritedRule = $true }; if ($rule.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow) { if ($rule.IdentityReference.Value -eq $sid) { if (($rule.FileSystemRights -band $fullControl) -eq $fullControl) { $hasFullControl = $true } } else { $hasForeignAllow = $true } } }",
+    "($acl.AreAccessRulesProtected -and -not $hasInheritedRule -and $hasFullControl -and -not $hasForeignAllow)",
+    "} catch { $false }",
+    "})",
+    "[Console]::Out.Write((ConvertTo-Json -InputObject $results -Compress))",
+  ].join("\n");
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let output = "";
+    let timer;
+    const child = spawnImpl("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], {
+      env: windowsPowerShellEnvironment(list), stdio: ["ignore", "pipe", "ignore"], windowsHide: true,
+    });
+    const finish = (error, result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      if (result === undefined) reject(error); else resolve(result);
+    };
+    const abort = () => { terminateWindowsChild(child); finish(signal.reason); };
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      output += chunk;
+      if (Buffer.byteLength(output) > WINDOWS_PRIVATE_ASYNC_OUTPUT_LIMIT) {
+        terminateWindowsChild(child);
+        finish(new Error("Windows private-file verification output exceeded its bound."));
+      }
+    });
+    child.on("error", () => finish(new Error("Windows private-file verification could not start.")));
+    child.on("close", (code) => {
+      if (settled) return;
+      let result;
+      try { result = JSON.parse(output); } catch { /* Fail closed on invalid output. */ }
+      if (code !== 0 || !Array.isArray(result) || result.length !== list.length || result.some((value) => typeof value !== "boolean")) {
+        finish(new Error("Windows private-file verification failed."));
+      } else finish(undefined, result);
+    });
+    timer = setTimeout(() => {
+      terminateWindowsChild(child);
+      finish(new Error("Windows private-file verification timed out."));
+    }, timeoutMs);
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
+  });
 }

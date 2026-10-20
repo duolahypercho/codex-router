@@ -3,7 +3,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync
 import { randomBytes } from "node:crypto";
 import path from "node:path";
 
-import { acquireFileLock, runWithLockRelease } from "./file-lock.mjs";
+import { acquireFileLock, acquireFileLockWithSignal, runWithLockRelease } from "./file-lock.mjs";
 
 import { privateFileIsProtected, protectPrivateFile, writePrivateJson } from "./file-security.mjs";
 import { discoveryDisabled } from "./discovery-mode.mjs";
@@ -211,6 +211,9 @@ function normalizeState(raw) {
   }
   return result;
 }
+export function parseChatGPTAccountPoolState(document) {
+  return normalizeState(validatePersistedState(document));
+}
 export function readChatGPTAccountPoolState(filePath = CHATGPT_ACCOUNT_POOL_PATH) {
   assertAccountDiscoveryEnabled();
   let file;
@@ -229,7 +232,7 @@ export function readChatGPTAccountPoolState(filePath = CHATGPT_ACCOUNT_POOL_PATH
   } catch (error) {
     throw new Error("The saved ChatGPT account list could not be read as JSON.", { cause: error });
   }
-  return normalizeState(validatePersistedState(parsed));
+  return parseChatGPTAccountPoolState(parsed);
 }
 export function writeChatGPTAccountPoolState(state, filePath = CHATGPT_ACCOUNT_POOL_PATH) {
   assertAccountDiscoveryEnabled();
@@ -694,12 +697,15 @@ export function sanitizeChatGPTAccountPool(state) {
     accounts: Object.fromEntries(Object.entries(normalized.accounts).map(([id, account]) => [id, sanitizeChatGPTAccount(account)])), sessions: {},
   };
 }
-export async function withChatGPTAccountPoolLock(operation, { filePath = CHATGPT_ACCOUNT_POOL_PATH, waitMs = 120_000, retryMs = 25, staleMs = 10 * 60_000 } = {}) {
+export async function withChatGPTAccountPoolLock(operation, { filePath = CHATGPT_ACCOUNT_POOL_PATH, waitMs = 120_000, retryMs = 25, staleMs = 10 * 60_000, signal } = {}) {
   assertAccountDiscoveryEnabled();
   const lockTarget = `${filePath}.pool-lock`;
   const lockPath = `${lockTarget}.lock`;
   const retries = Math.max(0, Math.ceil(waitMs / retryMs) - 1);
   mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
-  const release = await acquireFileLock(lockTarget, { realpath: false, lockfilePath: lockPath, stale: Math.max(2_000, staleMs), retries: { retries, factor: 1, minTimeout: retryMs, maxTimeout: retryMs, randomize: false } });
+  const options = { realpath: false, lockfilePath: lockPath, stale: Math.max(2_000, staleMs), retries: { retries, factor: 1, minTimeout: retryMs, maxTimeout: retryMs, randomize: false } };
+  const release = signal
+    ? await acquireFileLockWithSignal(lockTarget, options, { signal, retryMs })
+    : await acquireFileLock(lockTarget, options);
   return runWithLockRelease(operation, release);
 }

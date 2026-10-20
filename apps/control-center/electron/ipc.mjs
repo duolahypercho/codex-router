@@ -2298,6 +2298,10 @@ export function registerIpcHandlers({
     }
     return runJson(["chatgpt-account-pool", "remove", id], { timeoutMs: 60_000 });
   });
+  handleAction("setChatGptAccountRouting", async ({ strategy } = {}) => {
+    if (!["off", "round-robin", "fill-first"].includes(strategy)) throw new Error("Invalid ChatGPT routing strategy.");
+    return runJson(["chatgpt-account-pool", "routing", strategy], { timeoutMs: 60_000 });
+  });
   handleAction("setChatGptAccountSelection", async ({ selection } = {}) => {
     return runJson(["chatgpt-account-pool", "select", stringValue(selection, "Account selection", CHATGPT_ACCOUNT_ID)], { timeoutMs: 60_000 });
   });

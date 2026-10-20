@@ -1,0 +1,1 @@
+- Keep native ownership checks, dispatch and encrypted relay cache scopes on one credential snapshot; reject noncanonical routing IDs, exclude cooldown profiles without a valid recovery deadline, and preserve planning failures when session cleanup also fails.

@@ -3,7 +3,7 @@ import test from "node:test";
 
 import lockfile from "proper-lockfile";
 
-import { acquireFileLock, runWithLockRelease } from "../src/file-lock.mjs";
+import { acquireFileLock, acquireFileLockWithSignal, runWithLockRelease } from "../src/file-lock.mjs";
 
 const INITIAL_TIME = 1_700_000_000_000;
 const nextTurn = () => new Promise((resolve) => setImmediate(resolve));
@@ -304,3 +304,29 @@ for (const method of ["mkdir", "stat"]) {
     assert.equal(env.directories.size, 0);
   });
 }
+
+test("abort during lock acquisition releases a late-acquired lease before rejecting", async (t) => {
+  const env = fixture(t); const controller = new AbortController(); const reason = new Error("router deadline");
+  const pending = assert.rejects(acquireFileLockWithSignal(env.target, env.options, { signal: controller.signal }), (error) => error === reason);
+  await nextTurn(); controller.abort(reason);
+  env.flush(); await nextTurn(); env.flush(); await pending;
+  assert.equal(env.directories.size, 0); assert.equal(env.removals, 1);
+  t.mock.timers.tick(60000); assert.equal(env.pending.length, 0);
+});
+
+test("abort cleanup preserves its reason and exposes a release failure", async (t) => {
+  const env = fixture(t); const controller = new AbortController(); const reason = new Error("router deadline");
+  const releaseError = fsError("EACCES"); env.failRemoval(releaseError);
+  const pending = assert.rejects(acquireFileLockWithSignal(env.target, env.options, { signal: controller.signal }), (error) => error === reason);
+  await nextTurn(); controller.abort(reason);
+  env.flush(); await nextTurn(); env.flush(); await pending;
+  assert.equal(reason.lockReleaseError, releaseError);
+  env.directories.clear(); t.mock.timers.tick(60000); assert.equal(env.pending.length, 0);
+});
+
+test("cancelable acquisition does not retry non-contention errors", async (t) => {
+  const env = fixture(t); const error = fsError("EACCES"); let calls = 0;
+  env.fs.mkdir = (_file, callback) => { calls++; callback(error); };
+  await assert.rejects(acquireFileLockWithSignal(env.target, env.options, { signal: new AbortController().signal }), (failure) => failure === error);
+  assert.equal(calls, 1); assert.equal(env.directories.size, 0);
+});
