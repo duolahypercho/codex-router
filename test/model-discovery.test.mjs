@@ -80,7 +80,7 @@ test("OpenCode Go discovery blocks live ids whose protocol route is not certifie
     assert.ok(result.registered.includes("glm-5"));
     assert.match(
       result.blocked["future-responses-only-model"],
-      /provider catalog lists future-responses-only-model.*has not verified whether the model uses Chat, Messages, or Responses.*router compatibility limitation.*future update/s,
+      /provider catalog lists future-responses-only-model.*has not verified whether the model uses Chat, Messages, Responses, or Gemini.*router compatibility limitation.*future update/s,
     );
   } finally {
     rmSync(testRoot, { recursive: true, force: true });
@@ -99,6 +99,7 @@ test("OpenCode Free discovery withholds the client-gated ids with their reason",
       { id: "deepseek-v4-flash-free" },
       { id: "mimo-v2.6-flash-free" },
       { id: "big-pickle" },
+      { id: "nemotron-3.5-super-vl-free" },
       { id: "glm-5.1" },
     ] }),
   );
@@ -111,15 +112,19 @@ test("OpenCode Free discovery withholds the client-gated ids with their reason",
     const result = JSON.parse(output);
     // The paid id never reaches the comparison: anonymousModelAllowed drops it.
     assert.equal(result.discovered.includes("glm-5.1"), false);
-    assert.deepEqual(result.addable, ["deepseek-v4-flash-free"]);
+    // Nothing on this provider is addable: the whole Zen free tier refuses
+    // to answer as of 2026-10-21, so every id it advertises is withheld.
+    assert.deepEqual(result.addable, []);
     assert.deepEqual(
       Object.keys(result.blocked).sort(),
-      ["big-pickle", "mimo-v2.6-flash-free"],
+      ["big-pickle", "deepseek-v4-flash-free", "mimo-v2.6-flash-free", "nemotron-3.5-super-vl-free"],
     );
     assert.match(
       result.blocked["mimo-v2.6-flash-free"],
       /only to its own client.*can only be used from within OpenCode.*access policy/s,
     );
+    // A withdrawn id is refused for its own reason, not the gate's.
+    assert.match(result.blocked["deepseek-v4-flash-free"], /has withdrawn/);
   } finally {
     rmSync(testRoot, { recursive: true, force: true });
   }
@@ -315,9 +320,12 @@ test("the current OpenCode catalogs remain fully fetchable without preselecting 
 
 test("the checked-in OpenCode Go set matches the official current-model table", () => {
   const documented = [
+    "beam-free",
     "deepseek-v4-flash", "deepseek-v4-flash-vision-exp", "deepseek-v4-pro", "deepseek-v4.1-flash", "glm-5", "glm-5.1", "glm-5.2", "glm-5.3", "glm-5.3-flash",
     "gpt-5.6-luna", "grok-4.5", "grok-4.6", "grok-4.7", "hy3", "hy4-preview", "kimi-k2.5", "kimi-k2.6", "kimi-k2.7-code", "kimi-k3", "longcat-2.0",
+    "longcat-2.5-preview-free",
     "mimo-v2.5", "mimo-v2.5-pro", "mimo-v2.6-flash", "mimo-v2.6-pro", "minimax-m2.5", "minimax-m2.7", "minimax-m3",
+    "minimax-m3.1-flash-free",
     "muse-spark-1.2-contributor", "muse-spark-1.3-contributor", "qwen3.5-plus", "qwen3.6-plus", "qwen3.7-max",
     "qwen3.7-plus", "qwen3.8-flash", "qwen3.8-max",
   ].sort();

@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "opencode-go/longcat-2.5-preview-free",
+      "gatewayModel": "opencode-go-longcat-2-5-preview-free",
+      "upstreamModel": "longcat-2.5-preview-free",
+      "provider": "opencode-go",
+      "listed": true,
+      "displayName": "LongCat 2.5 Preview Free",
+      "description": "LongCat 2.5 Preview Free through the opencode Go Chat Completions route. OpenCode publishes a 1,000,000-token context window and a 131,072-token output limit for this exact free id; auto-compaction preserves that output reserve. OpenCode documents toggle reasoning but no named effort ladder for this id, so high remains the conservative default.",
+      "priority": 50,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "high",
+          "description": "Adaptive reasoning"
+        }
+      ],
+      "contextWindow": 1000000,
+      "autoCompact": 850000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "isFree": true,
+      "compHash": "opencode-go-longcat-2-5-preview-free-v1"
+    }
+  ]
+}

@@ -7,6 +7,7 @@ import { grokGatewayStreamTimeoutSeconds } from "./grok-stream-timeouts.mjs";
 import { localTimeoutSeconds } from "./local-timeouts.mjs";
 import { LITELLM_CONFIG_PATH } from "./paths.mjs";
 import { MODELS, providerForModel } from "./model-registry.mjs";
+import { isOpenCodeGeminiModel } from "./opencode-gemini.mjs";
 import { assertStateOwnership } from "./state-owner.mjs";
 import { vertexAdapterForModel } from "./vertex-adapters.mjs";
 
@@ -29,6 +30,7 @@ export function renderLiteLlmConfig() {
   const lines = ["model_list:"];
   for (const model of MODELS) {
     const provider = providerForModel(model);
+    const openCodeGemini = isOpenCodeGeminiModel(model);
     const vertexAdapter = vertexAdapterForModel(model, provider);
     // A local model is routed with Ollama's own protocol rather than its
     // OpenAI-compatible surface, purely so `num_ctx` can be set. That surface
@@ -64,7 +66,11 @@ export function renderLiteLlmConfig() {
         ? "CODEX_ROUTER_ANTHROPIC_FORWARD_BASE_URL"
         : "CODEX_ROUTER_API_FORWARD_BASE_URL");
     const translatedModel =
-      provider.kind === "oauth" ? model.upstreamModel : model.gatewayModel;
+      openCodeGemini
+        ? `gemini/${model.upstreamModel}`
+        : provider.kind === "oauth"
+          ? model.upstreamModel
+          : model.gatewayModel;
     const protocol = vertexAdapter?.liteLlmProtocol ||
       (provider.protocol === "anthropic" ? "anthropic" : "openai");
     const responsesSurface = provider.protocol === "openai-responses";
@@ -72,7 +78,9 @@ export function renderLiteLlmConfig() {
       `  - model_name: ${yamlString(model.gatewayModel)}`,
       "    litellm_params:",
       `      model: ${yamlString(
-        `${protocol}/${responsesSurface ? "responses/" : ""}${translatedModel}`,
+        openCodeGemini
+          ? translatedModel
+          : `${protocol}/${responsesSurface ? "responses/" : ""}${translatedModel}`,
       )}`,
       `      api_base: ${yamlString(`os.environ/${apiBaseEnv}`)}`,
       '      api_key: "os.environ/CODEX_ROUTER_INTERNAL_KEY"',

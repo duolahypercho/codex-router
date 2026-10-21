@@ -133,9 +133,26 @@ test("OpenCode curation keeps each endpoint family on its documented protocol", 
     /Google's native protocol/,
   );
   assert.equal(curatedModelBlockReason("opencode-go", "grok-4.5"), undefined);
+  assert.equal(curatedModelBlockReason("opencode-go", "gemini-4-argon-contributor"), undefined);
+  assert.equal(
+    curatedModelProviderId("opencode-go", "gemini-4-argon-contributor"),
+    "opencode-go",
+  );
+  assert.equal(
+    curatedModelContextLength("opencode-go", "gemini-4-argon-contributor"),
+    1_048_576,
+  );
+  assert.deepEqual(
+    curatedModelInputModalities("opencode-go", "gemini-4-argon-contributor"),
+    ["text", "image"],
+  );
+  assert.deepEqual(
+    curatedModelReasoningLevels("opencode-go", "gemini-4-argon-contributor"),
+    ["low", "medium", "high"],
+  );
   assert.match(
     curatedModelBlockReason("opencode-go", "future-responses-only-model"),
-    /provider catalog lists future-responses-only-model.*has not verified whether the model uses Chat, Messages, or Responses.*router compatibility limitation.*future update/s,
+    /provider catalog lists future-responses-only-model.*has not verified whether the model uses Chat, Messages, Responses, or Gemini.*router compatibility limitation.*future update/s,
   );
   assert.throws(
     () => curatedModelProviderId("opencode-go", "future-responses-only-model"),
@@ -247,12 +264,12 @@ test("scripted OpenCode curation refuses an uncertified discovered protocol rout
 test("client-gated OpenCode Free ids are refused, and the one that answers is not", () => {
   for (const id of [
     "big-pickle",
-    "mimo-v2.5-free",
     "mimo-v2.6-flash-free",
-    "muse-spark-1.2-contributor-free",
-    "muse-spark-1.3-contributor-free",
-    "nemotron-3-ultra-free",
+    "deepseek-v4.1-flash-free",
+    "glm-5.3-flash-free",
+    "jev-1.13-free",
     "nemotron-3.5-lightning-free",
+    "nemotron-3.5-super-vl-free",
   ]) {
     const reason = curatedModelBlockReason("opencode-free", id);
     assert.equal(typeof reason, "string", `${id} is not refused`);
@@ -268,13 +285,24 @@ test("client-gated OpenCode Free ids are refused, and the one that answers is no
       /only to its own client/,
     );
   }
-  // Probed on the same run and not gated, so it stays addable. A blanket
-  // provider rule would have taken this one out with the rest.
-  assert.equal(curatedModelBlockReason("opencode-free", "deepseek-v4-flash-free"), undefined);
-  assert.equal(
-    curatedModelProviderId("opencode-free", "deepseek-v4-flash-free"),
-    "opencode-free",
-  );
+  // The ids Zen has withdrawn are refused for their own reason, not the
+  // gate's: the id no longer exists, so the cause is not OpenCode's access
+  // policy and the message must not point at it.
+  for (const id of [
+    "deepseek-v4-flash-free",
+    "hy3-free",
+    "laguna-s-2.1-free",
+    "mimo-v2.5-free",
+    "muse-spark-1.2-contributor-free",
+    "muse-spark-1.3-contributor-free",
+    "nemotron-3-ultra-free",
+  ]) {
+    const reason = curatedModelBlockReason("opencode-free", id);
+    assert.equal(typeof reason, "string", `${id} is not refused`);
+    assert.match(reason, /has withdrawn/);
+    assert.doesNotMatch(reason, /only to its own client/);
+    assert.throws(() => curatedModelProviderId("opencode-free", id), /has withdrawn/);
+  }
 });
 
 // The gate withholds a route's first appearance. It must not reach a row the
@@ -1255,21 +1283,49 @@ test("scripted OpenCode Free curation stores the documented window and its sourc
   const dir = mkdtempSync(path.join(os.tmpdir(), "curate-opencode-free-sourcing-"));
   const file = path.join(dir, "user-models.json");
   const fixture = path.join(dir, "models.json");
-  // Ox Alpha used to stand in for the documented-window case here, then
-  // Nemotron 3 Ultra Free did. Both are unreachable now -- Ox Alpha was
-  // withdrawn, Nemotron is client-gated -- so the case rests on Laguna, which
-  // has the same shape (a published window with a declared output limit) and
-  // is still addable. The undocumented-id half of this test moved out with
-  // `mimo-v2.5-free`: every free id that documents nothing is client-gated,
-  // and refusing those is what the gate test below covers.
-  const oxId = "laguna-s-2.1-free";
+  // This case has moved providers twice already: Ox Alpha stood in for the
+  // documented-window case, then Nemotron 3 Ultra Free, then Laguna. Every
+  // one of them is unreachable now -- Ox Alpha was withdrawn, Nemotron is
+  // client-gated, and Laguna has been withdrawn from Zen's catalog too. The
+  // whole Zen free tier refuses to answer as of 2026-10-21, so the case rests
+  // on the Go free tier, where the same shape (a published window with a
+  // declared output limit) is live.
+  //
+  // The Go free ids are checked in rather than curated, so the fixture has to
+  // name one the registry does not already carry; the point of the case is
+  // the documented window and its sourcing, and a checked-in route is the
+  // one place that window is actually stored.
+  const oxId = "beam-free";
   writeFileSync(fixture, JSON.stringify({ data: [{ id: oxId }] }));
+  // A curation run works on the operator's own set, so the id has to be in it
+  // already: the run's job is to upgrade a stored entry to the documented
+  // window and sourcing, not to discover a checked-in route.
+  writeFileSync(file, JSON.stringify({
+    version: 1,
+    models: [{
+      slug: "opencode-go/beam-free",
+      gatewayModel: "opencode-go-beam-free",
+      upstreamModel: oxId,
+      provider: "opencode-go",
+      listed: true,
+      displayName: "Beam Free",
+      description:
+        "User-curated opencode-go model; conservative default metadata that can be edited in the user model file.",
+      priority: 50,
+      defaultEffort: "high",
+      reasoningLevels: [{ effort: "high", description: "Adaptive reasoning" }],
+      contextWindow: 131072,
+      autoCompact: 110000,
+      inputModalities: ["text"],
+      compHash: "opencode-go-beam-free-user-v1",
+    }],
+  }));
   try {
     const result = spawnSync(
       process.execPath,
       [
         path.join(root, "src", "curate-models.mjs"),
-        "opencode-free",
+        "opencode-go",
         "--models",
         oxId,
         "--fixture",
@@ -1293,12 +1349,12 @@ test("scripted OpenCode Free curation stores the documented window and its sourc
     assert.equal(result.status, 0, result.stderr);
     const stored = JSON.parse(readFileSync(file, "utf8"));
     const ox = stored.models.find((model) => model.upstreamModel === oxId);
-    assert.equal(ox.contextWindow, 256_000);
-    assert.equal(ox.autoCompact, 217_600);
-    assert.equal(ox.description, curatedModelDescription("opencode-free", oxId));
+    assert.equal(ox.contextWindow, 1_048_576);
+    assert.equal(ox.autoCompact, 891_289);
+    assert.equal(ox.description, curatedModelDescription("opencode-go", oxId));
     // autoCompact has to leave room for the id's published output limit, or
     // compaction never fires early enough to keep a completion inside the window.
-    assert.ok(ox.contextWindow - ox.autoCompact >= curatedModelOutputLimit("opencode-free", oxId));
+    assert.ok(ox.contextWindow - ox.autoCompact >= curatedModelOutputLimit("opencode-go", oxId));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -1416,20 +1472,58 @@ test("an untuned entry gains the documented ladder while a tuned one is untouche
   assert.strictEqual(normalizeCurationModels([undocumented], "opencode-free")[0], undocumented);
 });
 
-test("a non-interactive OpenCode Free curation stores documented metadata and profiles", () => {
-  const dir = mkdtempSync(path.join(os.tmpdir(), "curate-opencode-free-ladders-"));
+test("a non-interactive OpenCode Go free curation stores documented metadata and profiles", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "curate-opencode-go-free-ladders-"));
   const file = path.join(dir, "user-models.json");
   const fixture = path.join(dir, "models.json");
-  const lagunaId = "laguna-s-2.1-free";
-  const flashId = "deepseek-v4-flash-free";
-  // Zen serves these exact id-only records: no context limit, no effort
-  // control. The Muse and undocumented ids this run used to carry are client-
-  // gated now, so they cannot be added at all; the profile and modality
-  // overlays they proved are covered against stored entries instead, by
-  // "OpenCode Free curation migrates Muse to Responses" and
-  // "OpenCode Free Muse Spark routes document text and image input".
+  // The Go free tier is where the live free ids are: Zen's whole free tier
+  // refused every id on 2026-10-21, so a curation that stored documented
+  // metadata had nothing left to store there. These two cover both halves of
+  // the case -- a published window with a published ladder, and a published
+  // window whose own output limit does not fit the default compaction ratio.
+  const beamId = "beam-free";
+  const minimaxId = "minimax-m3.1-flash-free";
   writeFileSync(fixture, JSON.stringify({
-    data: [{ id: lagunaId }, { id: flashId }],
+    data: [{ id: beamId }, { id: minimaxId }],
+  }));
+  writeFileSync(file, JSON.stringify({
+    version: 1,
+    models: [
+      {
+        slug: "opencode-go/beam-free",
+        gatewayModel: "opencode-go-beam-free",
+        upstreamModel: beamId,
+        provider: "opencode-go",
+        listed: true,
+        displayName: "Beam Free",
+        description:
+          "User-curated opencode-go model; conservative default metadata that can be edited in the user model file.",
+        priority: 50,
+        defaultEffort: "high",
+        reasoningLevels: [{ effort: "high", description: "Adaptive reasoning" }],
+        contextWindow: 131072,
+        autoCompact: 110000,
+        inputModalities: ["text"],
+        compHash: "opencode-go-beam-free-user-v1",
+      },
+      {
+        slug: "opencode-go/minimax-m3.1-flash-free",
+        gatewayModel: "opencode-go-minimax-m3-1-flash-free",
+        upstreamModel: minimaxId,
+        provider: "opencode-go",
+        listed: true,
+        displayName: "MiniMax M3.1 Flash Free",
+        description:
+          "User-curated opencode-go model; conservative default metadata that can be edited in the user model file.",
+        priority: 50,
+        defaultEffort: "high",
+        reasoningLevels: [{ effort: "high", description: "Adaptive reasoning" }],
+        contextWindow: 131072,
+        autoCompact: 110000,
+        inputModalities: ["text"],
+        compHash: "opencode-go-minimax-m3-1-flash-free-user-v1",
+      },
+    ],
   }));
   const env = {
     ...process.env,
@@ -1444,9 +1538,9 @@ test("a non-interactive OpenCode Free curation stores documented metadata and pr
     process.execPath,
     [
       path.join(root, "src", "curate-models.mjs"),
-      "opencode-free",
+      "opencode-go",
       "--models",
-      `${lagunaId},${flashId}`,
+      `${beamId},${minimaxId}`,
       "--fixture",
       fixture,
       "--no-apply",
@@ -1461,38 +1555,46 @@ test("a non-interactive OpenCode Free curation stores documented metadata and pr
     const find = (id) => stored.models.find((model) => model.upstreamModel === id);
 
     // Documented window and documented ladder.
-    const laguna = find(lagunaId);
-    assert.equal(laguna.contextWindow, 256_000);
-    assert.equal(laguna.autoCompact, 217_600);
+    const beam = find(beamId);
+    assert.equal(beam.contextWindow, 1_048_576);
+    assert.equal(beam.autoCompact, 891_289);
     assert.ok(
-      laguna.contextWindow - laguna.autoCompact >=
-        curatedModelOutputLimit("opencode-free", lagunaId),
+      beam.contextWindow - beam.autoCompact >=
+        curatedModelOutputLimit("opencode-go", beamId),
     );
     assert.deepEqual(
-      laguna.reasoningLevels.map((level) => level.effort),
-      ["low", "medium", "high"],
+      beam.reasoningLevels.map((level) => level.effort),
+      ["low", "medium", "high", "xhigh", "max"],
     );
-    assert.equal(laguna.defaultEffort, "high");
-    assert.equal(laguna.description, curatedModelDescription("opencode-free", lagunaId));
-    assert.match(laguna.description, /256,000/);
-    assert.match(laguna.description, /models\.dev/);
+    assert.equal(beam.defaultEffort, "high");
+    assert.equal(beam.description, curatedModelDescription("opencode-go", beamId));
+    assert.match(beam.description, /1,048,576/);
+    assert.match(beam.description, /models\.dev/);
 
-    // Documented ladder, window deliberately left on the conservative default.
-    const flash = find(flashId);
+    // A documented output limit that does not fit the default ratio lowers the
+    // compaction threshold instead of overruling the window the id published.
+    const minimax = find(minimaxId);
     assert.deepEqual(
-      flash.reasoningLevels.map((level) => level.effort),
-      ["low", "high", "max"],
+      minimax.reasoningLevels.map((level) => level.effort),
+      ["low", "medium", "high", "xhigh", "max"],
     );
-    assert.equal(flash.contextWindow, DEFAULT_CONTEXT_WINDOW);
-    assert.equal(flash.autoCompact, DEFAULT_AUTO_COMPACT);
-    // The entry itself says which half is documented and which is unknown.
-    assert.match(flash.description, /unknown/);
-    assert.match(flash.description, /low\/high\/max/);
+    assert.equal(minimax.contextWindow, 1_000_000);
+    assert.ok(
+      minimax.contextWindow - minimax.autoCompact >=
+        curatedModelOutputLimit("opencode-go", minimaxId),
+      `${minimaxId} reserves ${minimax.contextWindow - minimax.autoCompact} against ` +
+        `a ${curatedModelOutputLimit("opencode-go", minimaxId)}-token output limit`,
+    );
+    assert.match(minimax.description, /1,000,000/);
 
     // Muse's exact-model profile is never spread across the Chat routes beside
     // it, so a free id that documents no profile still stores none.
-    assert.equal(laguna.requestProfile, undefined);
-    assert.deepEqual(laguna.inputModalities, ["text"]);
+    assert.equal(beam.requestProfile, undefined);
+    assert.deepEqual(beam.inputModalities, ["text"]);
+    // A stored entry keeps the modalities it was curated with; the
+    // documented image input is widened onto it when the registry publishes
+    // the route, not when curation rewrites the document.
+    assert.deepEqual(minimax.inputModalities, ["text"]);
 
     // A rerun is additive and must not rewrite what it already stored.
     const before = readFileSync(file, "utf8");
@@ -1505,19 +1607,40 @@ test("a non-interactive OpenCode Free curation stores documented metadata and pr
 });
 
 test("--efforts still overrides a documented ladder", () => {
-  const dir = mkdtempSync(path.join(os.tmpdir(), "curate-opencode-free-efforts-"));
+  const dir = mkdtempSync(path.join(os.tmpdir(), "curate-opencode-go-free-efforts-"));
   const file = path.join(dir, "user-models.json");
   const fixture = path.join(dir, "models.json");
-  const lagunaId = "laguna-s-2.1-free";
-  writeFileSync(fixture, JSON.stringify({ data: [{ id: lagunaId }] }));
+  const beamId = "beam-free";
+  const stepId = "step-5-preview-free";
+  writeFileSync(fixture, JSON.stringify({ data: [{ id: beamId }, { id: stepId }] }));
+  writeFileSync(file, JSON.stringify({
+    version: 1,
+    models: [{
+      slug: "opencode-go/beam-free",
+      gatewayModel: "opencode-go-beam-free",
+      upstreamModel: beamId,
+      provider: "opencode-go",
+      listed: true,
+      displayName: "Beam Free",
+      description:
+        "User-curated opencode-go model; conservative default metadata that can be edited in the user model file.",
+      priority: 50,
+      defaultEffort: "high",
+      reasoningLevels: [{ effort: "high", description: "Adaptive reasoning" }],
+      contextWindow: 131072,
+      autoCompact: 110000,
+      inputModalities: ["text"],
+      compHash: "opencode-go-beam-free-user-v1",
+    }],
+  }));
   try {
     const result = spawnSync(
       process.execPath,
       [
         path.join(root, "src", "curate-models.mjs"),
-        "opencode-free",
+        "opencode-go",
         "--models",
-        lagunaId,
+        stepId,
         "--efforts",
         "medium,high",
         "--fixture",
@@ -1539,16 +1662,23 @@ test("--efforts still overrides a documented ladder", () => {
       },
     );
     assert.equal(result.status, 0, result.stderr);
-    const [stored] = JSON.parse(readFileSync(file, "utf8")).models;
+    const storedModels = JSON.parse(readFileSync(file, "utf8")).models;
+    const find = (id) => storedModels.find((model) => model.upstreamModel === id);
+    // The flag is the operator speaking, so it is the ladder that is stored.
+    const stored = find(stepId);
     assert.deepEqual(
       stored.reasoningLevels.map((level) => level.effort),
       ["medium", "high"],
     );
-    // The stored ladder is the operator's, so the note must not claim OpenCode
-    // published it -- while the documented window it did supply keeps its note.
-    assert.equal(stored.contextWindow, 256_000);
-    assert.match(stored.description, /256,000/);
-    assert.doesNotMatch(stored.description, /low\/medium\/high ladder/);
+    // An id with no published ladder keeps no claim of one.
+    assert.doesNotMatch(stored.description || "", /ladder/);
+    // The checked-in route keeps its own published ladder: a curated copy of
+    // a route the registry already carries is skipped, so the flag never
+    // reaches it.
+    assert.deepEqual(
+      find(beamId).reasoningLevels.map((level) => level.effort),
+      ["low", "medium", "high", "xhigh", "max"],
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

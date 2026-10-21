@@ -80,6 +80,13 @@ import { threadIdFromHeaders } from "./codex-session-names.mjs";
 import { applyOpenCodeSessionHeaders, isOpenCodeProvider } from "./opencode-session.mjs";
 import { clampOpenCodeMessageContent } from "./opencode-message-compat.mjs";
 import {
+  ensureOpenCodeGeminiThoughtSignatures,
+  isOpenCodeGeminiModel,
+  OPENCODE_GEMINI_BASE_URL,
+  OPENCODE_GEMINI_BASE_URL_ENV,
+  openCodeGeminiModelFromRoute,
+} from "./opencode-gemini.mjs";
+import {
   effectiveProviderCredentialStatus,
   providerApiKeyAuthoritySnapshot,
   recordProviderApiKeyRequestOutcome,
@@ -1037,12 +1044,18 @@ function normalizeBody(buffer, contentType, route) {
   // no upstream provider consumes; strict providers reject the unknown field outright.
   delete payload.client_metadata;
   delete payload.access_programs;
-  const requestedModel = String(payload.model || "");
+  const nativeGeminiModel = openCodeGeminiModelFromRoute(route);
+  const requestedModel = String(payload.model || nativeGeminiModel || "");
   // LiteLLM's Responses bridge prefixes the gateway id with `responses/` on
   // the upstream wire format; the forwarder still owns the id translation.
   const model =
     MODEL_BY_GATEWAY_ID.get(requestedModel.replace(/^responses\//, "")) ||
-    MODEL_BY_GATEWAY_ID.get(requestedModel);
+    MODEL_BY_GATEWAY_ID.get(requestedModel) ||
+    API_MODELS.find(
+      (candidate) =>
+        isOpenCodeGeminiModel(candidate) &&
+        candidate.upstreamModel === nativeGeminiModel,
+    );
   const provider = model && providerForModel(model);
   const adapter = vertexAdapterForModel(model, provider);
   if (!model || provider?.kind !== "openai-compatible") {
@@ -1050,15 +1063,18 @@ function normalizeBody(buffer, contentType, route) {
     error.status = 400;
     throw error;
   }
-  const expectedRoute =
-    adapter?.route ||
-    (provider.protocol === "anthropic"
-      ? "/messages"
-      : provider.protocol === "openai-responses"
-        ? "/responses"
-        : provider.protocol === "openai-decisions"
-          ? "/decisions"
-        : "/chat/completions");
+  const openCodeGeminiNative = isOpenCodeGeminiModel(model) &&
+    nativeGeminiModel === model.upstreamModel;
+  const expectedRoute = openCodeGeminiNative
+    ? route
+    : adapter?.route ||
+      (provider.protocol === "anthropic"
+        ? "/messages"
+        : provider.protocol === "openai-responses"
+          ? "/responses"
+          : provider.protocol === "openai-decisions"
+            ? "/decisions"
+          : "/chat/completions");
   if (
     route === "/embeddings"
       ? !supportsOpenAIModelEndpoint(route, { model, provider })
@@ -1072,6 +1088,26 @@ function normalizeBody(buffer, contentType, route) {
     const error = new Error(`Model ${model.gatewayModel} does not support ${route}.`);
     error.status = 400;
     throw error;
+  }
+
+  if (openCodeGeminiNative) {
+    // LiteLLM writes native Gemini history with snake_case function_call
+    // parts. Older synthetic tool-call history has no signature, which Gemini
+    // rejects before it can read the function response.
+    ensureOpenCodeGeminiThoughtSignatures(payload);
+    delete payload.model;
+    return {
+      body: Buffer.from(JSON.stringify(payload), "utf8"),
+      model,
+      provider,
+      endpoint: {
+        ...provider,
+        baseUrl: OPENCODE_GEMINI_BASE_URL,
+        baseUrlEnv: OPENCODE_GEMINI_BASE_URL_ENV,
+      },
+      payload,
+      targetPath: route,
+    };
   }
 
   payload.model = model.upstreamModel;
@@ -1589,7 +1625,12 @@ function upstreamHeaders(requestHeaders, body, apiKey, provider, extraHeaders = 
   ]);
   for (const [name, value] of Object.entries(requestHeaders)) {
     const lower = name.toLowerCase();
-    if (HOP_BY_HOP_HEADERS.has(lower) || lower === "authorization" || lower === "x-api-key") continue;
+    if (
+      HOP_BY_HOP_HEADERS.has(lower) ||
+      lower === "authorization" ||
+      lower === "x-api-key" ||
+      lower === "x-goog-api-key"
+    ) continue;
     if (provider.protocol === "vertex" && lower === "anthropic-version") continue;
     if (provider.authProfile === "github-copilot" && providerIdentityHeaders.has(lower)) continue;
     if (lower.startsWith("x-msh-") || lower.startsWith("x-codex-")) continue;
@@ -1944,7 +1985,8 @@ async function handleRequest(request, response) {
   }
   if (
     request.method !== "POST" ||
-    !["/chat/completions", "/messages", "/responses", "/embeddings", "/decisions"].includes(route)
+    (!["/chat/completions", "/messages", "/responses", "/embeddings", "/decisions"].includes(route) &&
+      !openCodeGeminiModelFromRoute(route))
   ) {
     writeJson(response, 404, {
       error: { type: "proxy_route_not_found", message: "Unsupported API-provider route." },

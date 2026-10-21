@@ -859,7 +859,8 @@ export function requireInternalAuth(request, response, secret) {
   const authorized = secretEqual(
     request.headers.authorization,
     `Bearer ${secret}`,
-  ) || secretEqual(request.headers["x-api-key"], secret);
+  ) || secretEqual(request.headers["x-api-key"], secret)
+    || secretEqual(request.headers["x-goog-api-key"], secret);
   if (!authorized) {
     writeJson(response, 401, {
       error: {

@@ -1,0 +1,1 @@
+- Add local support for OpenCode Go's Gemini 4 Argon Contributor model through its native Google Gemini endpoint.

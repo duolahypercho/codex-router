@@ -1,3 +1,5 @@
+import { OPENCODE_GEMINI_MODEL } from "./opencode-gemini.mjs";
+
 // OpenCode's anonymous catalog exposes documented free models on Chat
 // Completions and one on Responses. Keep this mapping deliberately separate
 // from paid Zen and the Go subscription family: those providers have different
@@ -61,6 +63,86 @@ const UNDOCUMENTED_EFFORTS =
   "OpenCode documents no effort control for this free id -- its `reasoning_options` in " +
   "that record is empty -- so the stored single `high` level is this repository's " +
   "conservative default, not an advertised capability.";
+
+// The Go subscription's free ids are a different animal from Zen's. They
+// answer on the same endpoint and the same credential as the paid Go models,
+// they cost nothing against the plan's usage meter, and they are listed in
+// the Go catalog itself -- so unlike the Zen free tier below they are not
+// gated to OpenCode's own client and do not need a separate provider.
+//
+// Every id here was probed on 2026-10-20 against
+// https://opencode.ai/zen/go/v1 with the Go credential and the
+// `x-opencode-session` header this repository attaches: Chat Completions,
+// streaming, an automatic tool call, a forced `tool_choice: "required"` tool
+// call, and each published effort level. The window, output limit, and
+// modality set come from OpenCode's own published record for these exact
+// ids (the `opencode` provider in https://models.dev/api.json), which keys
+// `limit`, `reasoning_options`, and `modalities` per free id.
+//
+// The window a free id publishes is the free route's own served cap, not the
+// paid model's: `beam-free` publishes 1,048,576 against a paid Beam route's
+// larger cap elsewhere in the same dataset, and `minimax-m3.1-flash-free`
+// publishes 1,000,000 while `minimax-m3` publishes 512,000. So a free id's
+// figure describes the free route itself.
+
+const OPENCODE_GO_FREE_MODELS = Object.freeze({
+  "beam-free": Object.freeze({
+    contextWindow: 1_048_576,
+    outputLimit: 131_072,
+    reasoningLevels: Object.freeze(["low", "medium", "high", "xhigh", "max"]),
+    // Beam refuses image input in so many words ("Beam supports text input
+    // only"), so advertising image paste would only produce a 400 that names
+    // no modality.
+    inputModalities: Object.freeze(["text"]),
+    displayName: "Beam Free",
+    isFree: true,
+    summary: "Beam Free through OpenCode Go's Chat Completions route.",
+    contextNote:
+      "The 1,048,576-token window and 131,072-token output limit are OpenCode's own " +
+      "published figures for this exact free id (the `opencode` provider in " +
+      "models.dev/api.json), which describes the free route rather than a paid twin.",
+    reasoningNote:
+      "The low/medium/high/xhigh/max ladder is that same record's `reasoning_options` " +
+      "for this free id; every one of those levels was accepted on a live probe.",
+  }),
+  "longcat-2.5-preview-free": Object.freeze({
+    contextWindow: 1_000_000,
+    outputLimit: 131_072,
+    inputModalities: Object.freeze(["text", "image"]),
+    displayName: "LongCat 2.5 Preview Free",
+    isFree: true,
+    summary: "LongCat 2.5 Preview Free through OpenCode Go's Chat Completions route.",
+    contextNote:
+      "The 1,000,000-token window and 131,072-token output limit are OpenCode's own " +
+      "published figures for this exact free id (the `opencode` provider in " +
+      "models.dev/api.json), which describes the free route rather than a paid twin.",
+    reasoningNote:
+      "OpenCode documents toggle reasoning for this free id rather than a named " +
+      "effort ladder -- its `reasoning_options` is a single toggle -- so the stored " +
+      "single `high` level is this repository's conservative default, not an " +
+      "advertised capability.",
+  }),
+  "minimax-m3.1-flash-free": Object.freeze({
+    contextWindow: 1_000_000,
+    outputLimit: 512_000,
+    reasoningLevels: Object.freeze(["low", "medium", "high", "xhigh", "max"]),
+    inputModalities: Object.freeze(["text", "image"]),
+    displayName: "MiniMax M3.1 Flash Free",
+    isFree: true,
+    summary: "MiniMax M3.1 Flash Free through OpenCode Go's Chat Completions route.",
+    contextNote:
+      "The 1,000,000-token window and 512,000-token output limit are OpenCode's own " +
+      "published figures for this exact free id (the `opencode` provider in " +
+      "models.dev/api.json), which describes the free route rather than a paid twin. " +
+      "That output limit is why this route compacts at 488,000 rather than the " +
+      "0.85 ratio's 850,000: at the default the reserve left over would be 150,000 " +
+      "tokens against a completion that may run to 512,000, so a full-length answer " +
+      "would overrun the window the entry declares.",
+    reasoningNote:
+      "The low/medium/high/xhigh/max ladder is that same record's `reasoning_options` " +
+      "for this free id; every one of those levels was accepted on a live probe.",
+  }),
+});
 
 const OPENCODE_FREE_MODELS = Object.freeze({
   "muse-spark-1.2-contributor-free": Object.freeze({
@@ -183,21 +265,50 @@ const OPENCODE_FREE_MODELS = Object.freeze({
 // applies, for a cause that is the provider's policy rather than this
 // router's coverage.
 //
-// Probed 2026-09-23 against https://opencode.ai/zen/v1 in the exact shape the
-// router uses: no credential (`opencode-free` is in the registry's
-// ANONYMOUS_ENDPOINTS), the `x-opencode-session` header this repository
-// attaches, Chat Completions for the primary ids and Responses for the Muse
-// pair. Every id below answered FreeTierError. The list is per id and not a
-// blanket provider rule because `deepseek-v4-flash-free` cleared the same
-// gate on the same run, so it stays curatable.
+// Probed 2026-09-23 and re-probed 2026-10-21 against
+// https://opencode.ai/zen/v1 in the exact shape the router uses: no credential
+// (`opencode-free` is in the registry's ANONYMOUS_ENDPOINTS), the
+// `x-opencode-session` header this repository attaches, Chat Completions for
+// the primary ids and Responses for the Muse pair.
+//
+// The 2026-10-21 probe changed the picture. Every free id OpenCode still
+// lists now answers FreeTierError, so the gate covers the whole advertised
+// tier rather than all but one id -- and the ids it has withdrawn answer
+// `ModelDeprecated` or "Model is unavailable" instead. Nothing on this
+// provider answers any more.
+//
+// The two lists separate the two failures because they are different facts
+// about the provider, and an operator reading the refusal deserves to know
+// which one they hit. OPENCODE_FREE_CLIENT_GATED holds the ids Zen still
+// advertises, which are refused because OpenCode serves them only to its own
+// client. OPENCODE_FREE_WITHDRAWN holds the ids Zen has dropped, which are
+// refused because the id no longer exists.
+//
+// The lists are per id rather than a blanket provider rule, because the tier
+// was not always gated: `deepseek-v4-flash-free` cleared the same gate on
+// the 2026-09-23 run, so the gate is a property of OpenCode's access policy
+// at a point in time rather than of the id's name.
 const OPENCODE_FREE_CLIENT_GATED = Object.freeze([
   "big-pickle",
-  "mimo-v2.5-free",
+  "deepseek-v4.1-flash-free",
+  "glm-5.3-flash-free",
+  "jev-1.13-free",
   "mimo-v2.6-flash-free",
+  "nemotron-3.5-lightning-free",
+  "nemotron-3.5-super-vl-free",
+]);
+
+// Free ids OpenCode has withdrawn from its catalog. These answer
+// `ModelDeprecated` (410) or "Model is unavailable" (400) rather than the
+// client gate, so they are refused with their own reason.
+const OPENCODE_FREE_WITHDRAWN = Object.freeze([
+  "deepseek-v4-flash-free",
+  "hy3-free",
+  "laguna-s-2.1-free",
+  "mimo-v2.5-free",
   "muse-spark-1.2-contributor-free",
   "muse-spark-1.3-contributor-free",
   "nemotron-3-ultra-free",
-  "nemotron-3.5-lightning-free",
 ]);
 
 function clientGatedReason(upstreamModel) {
@@ -206,6 +317,14 @@ function clientGatedReason(upstreamModel) {
     + `router is answered "OpenCode's free tier can only be used from within OpenCode". `
     + `That is OpenCode's access policy rather than a router compatibility limitation, so `
     + `the id cannot be curated into a route that works.`
+  );
+}
+
+function withdrawnReason(upstreamModel) {
+  return (
+    `OpenCode has withdrawn ${upstreamModel}: the same request from this router is `
+    + `answered "Model is unavailable" or "ModelDeprecated". The id is gone from the `
+    + `provider's catalog, so it cannot be curated into a route that works.`
   );
 }
 
@@ -277,7 +396,7 @@ const CURATION_ROUTES = Object.freeze({
       "opencode-go-messages",
       "opencode-go-responses",
     ]),
-    protocols: Object.freeze(["Chat", "Messages", "Responses"]),
+    protocols: Object.freeze(["Chat", "Messages", "Responses", "Gemini"]),
     messagesProvider: "opencode-go-messages",
     messagesModels: Object.freeze([
       "minimax-m2.5",
@@ -298,7 +417,11 @@ const CURATION_ROUTES = Object.freeze({
       "muse-spark-1.2-contributor",
       "muse-spark-1.3-contributor",
     ]),
+    geminiModels: Object.freeze([
+      OPENCODE_GEMINI_MODEL,
+    ]),
     primaryModels: Object.freeze([
+      "beam-free",
       "deepseek-v4-flash",
       "deepseek-v4-flash-vision-exp",
       "deepseek-v4-pro",
@@ -315,15 +438,34 @@ const CURATION_ROUTES = Object.freeze({
       "kimi-k2.7-code",
       "kimi-k3",
       "longcat-2.0",
+      "longcat-2.5-preview-free",
       "mimo-v2.5",
       "mimo-v2.5-pro",
       "mimo-v2.6-flash",
       "mimo-v2.6-pro",
+      "minimax-m3.1-flash-free",
       "qwen3.5-plus",
       "step-5-preview-free",
       "x-preview-f",
     ]),
-    models: Object.freeze({}),
+    models: Object.freeze({
+      [OPENCODE_GEMINI_MODEL]: Object.freeze({
+        contextWindow: 1_048_576,
+        outputLimit: 65_536,
+        reasoningLevels: Object.freeze(["low", "medium", "high"]),
+        inputModalities: Object.freeze(["text", "image"]),
+        displayName: "Gemini 4 Argon Contributor (OpenCode Go)",
+        summary:
+          "Gemini 4 Argon Contributor through OpenCode Go's native Gemini endpoint.",
+        contextNote:
+          "The 1,048,576-token window and 65,536-token output limit are OpenCode's " +
+          "published Go model metadata for this exact model.",
+        reasoningNote:
+          "The low/medium/high ladder is OpenCode's published thinking-level mapping " +
+          "for this exact model.",
+      }),
+      ...OPENCODE_GO_FREE_MODELS,
+    }),
   }),
   "opencode-free": Object.freeze({
     providers: Object.freeze(["opencode-free", "opencode-free-responses"]),
@@ -344,6 +486,7 @@ const CURATION_ROUTES = Object.freeze({
       "nemotron-3.5-lightning-free",
     ]),
     clientGatedModels: OPENCODE_FREE_CLIENT_GATED,
+    withdrawnModels: OPENCODE_FREE_WITHDRAWN,
     models: OPENCODE_FREE_MODELS,
   }),
   "opencode-zen": Object.freeze({
@@ -416,12 +559,16 @@ function curatedModelRouteSelection(providerId, upstreamModel, { existingProvide
   if (!existingProvider && route?.clientGatedModels?.includes(upstreamModel)) {
     return { blockedReason: clientGatedReason(upstreamModel) };
   }
+  if (!existingProvider && route?.withdrawnModels?.includes(upstreamModel)) {
+    return { blockedReason: withdrawnReason(upstreamModel) };
+  }
   if (route?.responsesModels.includes(upstreamModel)) {
     return { providerId: route.responsesProvider };
   }
   if (route?.messagesModels?.includes(upstreamModel)) {
     return { providerId: route.messagesProvider };
   }
+  if (route?.geminiModels?.includes(upstreamModel)) return { providerId: primary };
   if (route?.primaryModels?.includes(upstreamModel)) return { providerId: primary };
   if (route?.providers.length > 1) {
     // Preserve a route the operator already chose, but never invent a protocol

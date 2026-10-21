@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "opencode-go/minimax-m3.1-flash-free",
+      "gatewayModel": "opencode-go-minimax-m3-1-flash-free",
+      "upstreamModel": "minimax-m3.1-flash-free",
+      "provider": "opencode-go",
+      "listed": true,
+      "displayName": "MiniMax M3.1 Flash Free",
+      "description": "MiniMax M3.1 Flash Free through the opencode Go Chat Completions route. OpenCode publishes a 1,000,000-token context window and a 512,000-token output limit for this exact free id, so this route compacts at 488,000 rather than the usual 0.85 ratio -- at the default the reserve left over would be smaller than a full-length completion. The low/medium/high/xhigh/max effort ladder is OpenCode's published one for this id.",
+      "priority": 50,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Quick reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Extended reasoning"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning"
+        }
+      ],
+      "contextWindow": 1000000,
+      "autoCompact": 488000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "isFree": true,
+      "compHash": "opencode-go-minimax-m3-1-flash-free-v1"
+    }
+  ]
+}

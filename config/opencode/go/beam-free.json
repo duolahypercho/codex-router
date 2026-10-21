@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "opencode-go/beam-free",
+      "gatewayModel": "opencode-go-beam-free",
+      "upstreamModel": "beam-free",
+      "provider": "opencode-go",
+      "listed": true,
+      "displayName": "Beam Free",
+      "description": "Beam Free through the opencode Go Chat Completions route. OpenCode publishes a 1,048,576-token context window and a 131,072-token output limit for this exact free id; auto-compaction preserves that output reserve. The route accepts text only -- Beam refuses image input -- and the low/medium/high/xhigh/max effort ladder is OpenCode's published one for this id.",
+      "priority": 50,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Quick reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Extended reasoning"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning"
+        }
+      ],
+      "contextWindow": 1048576,
+      "autoCompact": 891289,
+      "inputModalities": [
+        "text"
+      ],
+      "isFree": true,
+      "compHash": "opencode-go-beam-free-v1"
+    }
+  ]
+}
