@@ -719,6 +719,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private var widgetSnapshotPublishing: AnyCancellable?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
+    ControlCenterLauncher.logLaunchEvent("host-finished-launching")
     NSApp.setActivationPolicy(.accessory)
     trayMenuController = TrayMenuController(store: store)
     islandController = IslandWindowController(store: store)
@@ -764,6 +765,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   // handling it the second open is silently swallowed and the app reads as
   // broken.
   func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+    ControlCenterLauncher.logLaunchEvent("host-reopen-received")
     store.revealForUserLaunch()
     ControlCenterLauncher.open()
     return true
@@ -873,8 +875,13 @@ enum ControlCenterLauncher {
     return FileManager.default.fileExists(atPath: candidate.path) ? candidate : nil
   }
 
+  nonisolated static func logLaunchEvent(_ event: String) {
+    FileHandle.standardError.write(Data("codex-router-control-center: \(event)\n".utf8))
+  }
+
   static func open(navigation: ControlCenterNavigationRequest? = nil) {
     guard let application = bundledApplicationURL else {
+      logLaunchEvent("embedded-bundle-missing")
       RouterStore.shared.reportControlCenterLaunchFailure(
         routerLocalized("The embedded Control Center is missing. Rebuild Codex Router.")
       )
@@ -885,6 +892,7 @@ enum ControlCenterLauncher {
         try await retireSupersededControlCenters(except: application)
         openBundledApplication(application, navigation: navigation)
       } catch {
+        logLaunchEvent("superseded-instance-retirement-failed")
         RouterStore.shared.reportControlCenterLaunchFailure(error.localizedDescription)
       }
     }
@@ -924,8 +932,13 @@ enum ControlCenterLauncher {
     let configuration = NSWorkspace.OpenConfiguration()
     configuration.activates = true
     configuration.environment = embeddedEnvironment(processEnvironment: ProcessInfo.processInfo.environment)
-    let completion: @Sendable (NSRunningApplication?, (any Error)?) -> Void = { _, error in
-      guard let error else { return }
+    logLaunchEvent("embedded-open-requested")
+    let completion: @Sendable (NSRunningApplication?, (any Error)?) -> Void = { application, error in
+      guard let error else {
+        logLaunchEvent(application == nil ? "embedded-open-no-application" : "embedded-open-accepted")
+        return
+      }
+      logLaunchEvent("embedded-open-failed code=\((error as NSError).code)")
       let message = error.localizedDescription
       Task { @MainActor in
         RouterStore.shared.reportControlCenterLaunchFailure(

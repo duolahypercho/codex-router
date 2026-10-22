@@ -377,35 +377,21 @@ line. The forwarder now accepts all three shapes and restores final tool
 arguments without holding the full turn, so Codex sees the tool call instead of
 mistaking the preceding status text for the completed task.
 
-A remaining Grok OAuth shape is a progress-only stop: the model reasons,
-emits a status sentence, and never calls a tool. On turns following a user
-message, attempt 1 still streams live; when the client offered tools and the
-short-text/token trigger fires, the forwarder retries once and appends a
-retry tool call onto the same stream. On turns following a tool result, the
-stricter certified-repair path opens the response as soon as xAI returns its
-headers and relays reasoning, but stages the short visible answer until the
-terminal event proves it is safe.
-After a conversation has exhibited that shape once, later user-message turns
-buffer only a short visible prefix up to the same text threshold. Headers and
-preceding reasoning remain live, and a tool call or longer answer releases the
-prefix; if the upstream stream aborts instead, Codex receives the terminal
-stream error without first recording another partial progress sentence. Unaffected
-conversation IDs retain the fully live path, and the evidence set is bounded
-in memory.
+A completed short answer is not evidence that Grok stalled. The forwarder
+accepts native text regardless of its length or reasoning-token count. It no
+longer repeats user-message generations based on that heuristic or remembers
+conversation IDs to buffer their later short replies. The old
+`CODEX_ROUTER_GROK_PROGRESS_ONLY_MIN_OUTPUT_TOKENS` and
+`CODEX_ROUTER_GROK_PROGRESS_ONLY_MAX_TEXT` settings no longer apply.
 
-The trigger is a shape, not a diagnosis, and it is worth knowing which turns
-pay for it. After a tool result, every no-tool prose response is held and
-repaired once — no language match, token floor, or length threshold. The
-repair must call exactly one function: either a client tool or the private
-router final-answer tool. The latter is converted to ordinary assistant text
-and never reaches Codex. A retry that does neither returns an explicit 502; it
-is never converted into a clean `stop`. After a user message the older rule
-remains: both a finished one-liner and a stalled plan retry when output tokens
-clear the floor, and the nudge offers the no-tool branch first so "Yes, that
-is correct." is not talked into a call the client would then run. Raise
-`CODEX_ROUTER_GROK_PROGRESS_ONLY_MIN_OUTPUT_TOKENS` or lower
-`CODEX_ROUTER_GROK_PROGRESS_ONLY_MAX_TEXT` to fire less often on that
-user-message path; those settings do not weaken the post-tool invariant.
+After a tool result, the forwarder still offers client tools and a private
+final-answer tool. Native completed prose is also accepted. It relays reasoning
+but holds actions until a successful terminal, so a partial action followed by
+failure cannot reach the client. Only an empty completed response with no tool
+call triggers one recovery request. That recovery must produce completed text,
+a valid private final answer, or valid client tools; otherwise it fails explicitly.
+Malformed or mixed calls and unsuccessful terminals are never repaired into
+success. Explicit caller tool choices remain authoritative.
 
 For a quiet worker, run `bin/control activity <thread-id>` from the installed
 checkout (on Windows, `codex-router.ps1 activity <thread-id>` from
@@ -428,7 +414,7 @@ whether the user or a parent agent initiated it. Wait timeouts and quiet streams
 are not authorization to replace a worker. Consult its native task state and
 confirm that the old writer has stopped before starting another.
 
-Both attempts are billed. The usage returned to Codex reports only the
+When an empty post-tool response requires recovery, both attempts are billed. The usage returned to Codex reports only the
 selected attempt's context size, while the local ledger retains the aggregate
 as billed input/output tokens. The response sets
 `progress_only_retried: true`, and the log line `progress-only-retried=true`

@@ -1,0 +1,1 @@
+- **Grok tool routing:** Preserve native tool-search actions through empty-completion detection instead of retrying them, retain explicit parallel-tool-call controls through the OAuth bridge, avoid injecting legacy app tools beside modern MCP registrations, and add bounded discovery and call-policy diagnostics.

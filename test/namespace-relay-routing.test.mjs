@@ -120,6 +120,21 @@ async function waitFor(url, child, headers = {}) {
   throw new Error(`Timed out waiting for ${url}: ${child.testErrors()}`);
 }
 
+// HTTP completion and stderr delivery are independent cross-process events.
+// Wait for the full diagnostic record before teardown, especially on Windows
+// where SIGTERM can terminate the child before its asynchronous pipe is drained.
+async function waitForLog(child, pattern) {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    if (pattern.test(child.testErrors())) return;
+    if (child.exitCode !== null || child.signalCode !== null) {
+      throw new Error(`Child exited before log record: ${child.testErrors()}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`Timed out waiting for log record: ${child.testErrors()}`);
+}
+
 async function stopChild(child) {
   if (child.exitCode !== null || child.signalCode !== null) return;
   child.kill("SIGTERM");
@@ -902,6 +917,7 @@ async function scenario(
     prepareRouterEnv,
     visionJsonBody,
     expectedStatus = 200,
+    routerLogPattern,
   } = {},
 ) {
   const gatewayBodies = [];
@@ -960,6 +976,7 @@ async function scenario(
     });
     assert.equal(response.status, expectedStatus, `router status ${response.status}`);
     const clientBody = await response.text();
+    if (routerLogPattern) await waitForLog(router, routerLogPattern);
     return { gatewayBodies, gatewayHeaders, visionBodies, clientBody, router, status: response.status };
   } finally {
     await stopChild(router);
@@ -2909,9 +2926,10 @@ function grokApplyPatchSseBody() {
   ].join("");
 }
 
-test("Grok 4.6 OAuth annotates native custom apply_patch and leaves history, collisions, and other models alone", async () => {
+test("Grok structured-patch opt-out retains native guidance, history and collisions", async () => {
   const guided = await scenario(true, {
     model: "grok-oauth/grok-4.6",
+    routerEnv: { CODEX_ROUTER_GROK_STRUCTURED_PATCH: "0" },
     requestPayload: grokApplyPatchPayload,
     sseBody: grokApplyPatchSseBody,
   });
@@ -2987,11 +3005,11 @@ function structuredPatchSse(body) {
   ].join("");
 }
 
-test("Grok structured patch opt-in crosses the real Router with collision, choice and historical identity intact", async () => {
+test("Grok structured patch default crosses the real Router with collision, choice and historical identity intact", async () => {
   for (const stream of [true, false]) {
     const result = await scenario(stream, {
       model: "grok-oauth/grok-4.6",
-      routerEnv: { CODEX_ROUTER_GROK_STRUCTURED_PATCH: "1" },
+      routerEnv: { CODEX_ROUTER_GROK_STRUCTURED_PATCH: "" },
       requestPayload: (stream, model) => ({ ...grokApplyPatchPayload(stream, model), tool_choice: { type: "custom", name: "apply_patch" } }),
       sseBody: structuredPatchSse,
       jsonBody: (body) => ({ id: "response_structured", output: [structuredPatchCall(body)] }),
@@ -3005,7 +3023,8 @@ test("Grok structured patch opt-in crosses the real Router with collision, choic
     assert.deepEqual(outgoing.tools.find((tool) => tool.name === "future_custom"), { type: "custom", name: "future_custom", description: "leave me" });
     assert.deepEqual(outgoing.tool_choice, { type: "function", name: tool.name });
     const old = outgoing.input.find((item) => item.call_id === "call_history");
-    assert.equal(old.name, tool.name);
+    assert.notEqual(old.name, tool.name);
+    assert.equal(outgoing.tools.some((tool) => tool.name === old.name), false);
     assert.equal(Object.hasOwn(old, "id"), false);
     assert.equal(JSON.parse(old.arguments).input, grokApplyPatchPayload(stream, outgoing.model).input[1].input);
     assert.deepEqual(outgoing.input.find((item) => item.type === "function_call_output"), { type: "function_call_output", call_id: "call_history", output: "Done!" });
@@ -3029,7 +3048,13 @@ test("the enabled flag leaves another route and undeclared native patch requests
     requestPayload: grokApplyPatchPayload,
     sseBody: grokApplyPatchSseBody,
   });
-  assert.deepEqual(control.gatewayBodies, disabled.gatewayBodies);
+  const withoutOwnedTimingId = (body) => {
+    const { extra_headers, ...rest } = body;
+    assert.deepEqual(Object.keys(extra_headers), ["x-codex-router-request-id"]);
+    assert.match(extra_headers["x-codex-router-request-id"], /^[0-9a-f-]{36}:[0-9]+$/);
+    return rest;
+  };
+  assert.deepEqual(control.gatewayBodies.map(withoutOwnedTimingId), disabled.gatewayBodies.map(withoutOwnedTimingId));
   assert.equal(control.clientBody, disabled.clientBody);
   const undeclared = await scenario(false, {
     model: "grok-oauth/grok-4.6",
@@ -3426,4 +3451,59 @@ test("Console Go Muse Contributor routes carry Codex handoffs as user messages",
     [{ ...handoff, content: expected.content }],
     "an untouched Console Go route keeps the collaboration item",
   );
+});
+
+
+test("Grok timing records a rejected streamed patch as failed despite committed HTTP 200", async () => {
+  const result = await scenario(true, {
+    model: "grok-oauth/grok-4.7",
+    routerLogPattern: /^\[grok-timing\] [^\r\n]+\r?\n/m,
+    routerEnv: { CODEX_ROUTER_GROK_STRUCTURED_PATCH: "1", CODEX_ROUTER_GROK_PATCH_HOOK: "0" },
+    requestPayload: (stream, model) => ({ model, stream, input: "Synthetic patch rejection.", tools: [{ type: "custom", name: "apply_patch" }] }),
+    sseBody: (body) => {
+      const name = body.tools.find(tool => tool.parameters?.properties?.operations)?.name;
+      assert.ok(name, "the actual routed structured patch schema is advertised");
+      return [
+        { type: "response.created", response: { id: "resp_timing_failure", status: "in_progress", model: body.model, output: [] } },
+        { type: "response.output_item.added", output_index: 0, item: {
+          id: "fc_timing", call_id: "call_timing", type: "function_call", name, arguments: "", status: "in_progress",
+        } },
+        { type: "response.function_call_arguments.done", item_id: "fc_timing", output_index: 0, arguments: '{"operations":[]}' },
+        { type: "response.completed", response: { id: "resp_timing_failure", status: "completed", output: [] } },
+      ].map(event => `data: ${JSON.stringify(event)}\n\n`).join("");
+    },
+  });
+  assert.equal(result.status, 200);
+  assert.equal(result.gatewayBodies.length, 1);
+  assert.doesNotMatch(result.clientBody, /"type":"response.completed"/);
+  const rows = result.router.testErrors().split("\n").filter(line => line.startsWith("[grok-timing] "))
+    .map(line => JSON.parse(line.slice("[grok-timing] ".length)));
+  assert.equal(rows.length, 1, "finish and close must not duplicate timing records");
+  assert.equal(rows[0].httpStatus, 200);
+  assert.equal(rows[0].requestStatus, 502);
+  assert.equal(rows[0].generationOutcome, "failed");
+  assert.match(result.router.testErrors(), /invalid custom tool arguments done/);
+});
+
+
+test("Grok timing waits for a successful handler outcome after the response finishes", async () => {
+  const result = await scenario(false, {
+    model: "grok-oauth/grok-4.7",
+    routerLogPattern: /^\[grok-timing\] [^\r\n]+\r?\n/m,
+    requestPayload: (stream, model) => ({ model, stream, input: "Synthetic completed response.",
+      client_metadata: { "x-codex-turn-metadata": JSON.stringify({ thread_source: "composer_predictions", prediction_source_thread_id: "private" }) },
+    }),
+    jsonBody: (body) => ({ id: "resp_timing_ok", object: "response", status: "completed", model: body.model,
+      output: [{ type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: "done" }] }],
+      usage: { input_tokens: 10, output_tokens: 1, total_tokens: 11 },
+    }),
+  });
+  const rows = result.router.testErrors().split("\n").filter(line => line.startsWith("[grok-timing] "))
+    .map(line => JSON.parse(line.slice("[grok-timing] ".length)));
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].httpStatus, 200);
+  assert.equal(rows[0].requestStatus, 200);
+  assert.equal(rows[0].generationOutcome, "completed");
+  assert.equal(rows[0].clientSource, "composer_predictions");
+  assert.doesNotMatch(JSON.stringify(rows), /private/);
 });

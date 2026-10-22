@@ -1,5 +1,8 @@
+import { AGENT_PAYLOAD_RELAY_TOOL, agentRelayHeaders, agentRelayError, parseAgentRelayResponse } from "./agent-payload-relay.mjs";
 import { rejectGenerationRedirect } from "./generation-redirect.mjs";
 import { resolveGenerationOutcome } from "./response-outcome.mjs";
+import { createGrokRequestTiming, setGrokTimingRequestId } from "./grok-request-timing.mjs";
+import { grokBridgeRequest } from "./grok-request-compat.mjs";
 import { readFileSync } from "node:fs";
 import http from "node:http";
 import { createHash, randomUUID } from "node:crypto";
@@ -20,7 +23,6 @@ import {
 } from "./caller-auth.mjs";
 import {
   CHECKPOINT_WARNING,
-  COMPACTION_PROMPT,
   encodeCheckpoint,
   finalizeCheckpoint,
   isRouterCompactionValue,
@@ -30,6 +32,7 @@ import {
   renderCheckpoint,
   renderCompactionValue,
 } from "./compaction-checkpoint.mjs";
+import { compactionInstructionBoundary } from "./compaction-instructions.mjs";
 import { handlePanelRequest, isPanelRoute } from "./desktop-panel.mjs";
 import { handleGeminiRequest, isGeminiRoute } from "./gemini-surface.mjs";
 import { handleCursorRequest, isCursorRoute } from "./cursor-surface.mjs";
@@ -443,18 +446,18 @@ function fetchForRoute(route, url, init) {
 // it advertises that tier (checked-in or curated `serviceTiers`), so a failover
 // candidate or a compaction for another route never inherits a tier it did not
 // offer.
-// A Grok OAuth route that publishes a tier of its own. The registry entry
+// A first-party Grok route that publishes a tier of its own. The registry entry
 // decides, so a second Grok model joins by declaring `serviceTiers` rather
 // than by being named here.
-function offersGrokOauthServiceTier(route) {
-  return route?.provider === GROK_OAUTH_PROVIDER && Boolean(route.serviceTiers?.length);
+function offersGrokServiceTier(route) {
+  return [GROK_OAUTH_PROVIDER, "grok-api"].includes(route?.provider) && Boolean(route.serviceTiers?.length);
 }
 
 function applyRoutedServiceTier(body, payload, route) {
   if (!route?.serviceTiers?.some((entry) => entry?.id === payload.service_tier)) {
     delete body.service_tier;
   }
-  if (!offersGrokOauthServiceTier(route)) return body;
+  if (!offersGrokServiceTier(route)) return body;
   const tier = knownServiceTier(payload.service_tier);
   // Locked LiteLLM loses the Responses service_tier argument at its Chat
   // bridge. extra_body reaches the forwarder without changing other routes.
@@ -530,7 +533,6 @@ const NATIVE_IMAGE_PATHS = new Set([
   "/v1/images/generations",
 ]);
 const NATIVE_SEARCH_PATHS = new Set(["/alpha/search", "/v1/alpha/search"]);
-const AGENT_PAYLOAD_RELAY_TOOL = "relay_external_agent_payload";
 const configuredAgentPayloadCacheTtlMs = Number(
   process.env.MODEL_ROUTER_AGENT_PAYLOAD_CACHE_TTL_MS ||
     process.env.CODEX_ROUTER_AGENT_PAYLOAD_CACHE_TTL_MS ||
@@ -1841,83 +1843,8 @@ function encryptedAgentPayload(item) {
   };
 }
 
-function parseRelayedAgentPayload(payload) {
-  const output = payload?.item
-    ? [payload.item]
-    : Array.isArray(payload?.output)
-      ? payload.output
-      : Array.isArray(payload?.response?.output)
-        ? payload.response.output
-        : [];
-  const call = output.find(
-    (item) => item?.type === "function_call" && item.name === AGENT_PAYLOAD_RELAY_TOOL,
-  );
-  if (!call) return undefined;
-  return parseRelayedAgentArguments(call.arguments);
-}
-
-function parseRelayedAgentArguments(value) {
-  try {
-    const args = typeof value === "string" ? JSON.parse(value) : value;
-    return typeof args?.payload === "string" ? args.payload : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function parseRelayedAgentPayloadSse(bytes) {
-  const events = bytes.toString("utf8").split(/\r?\n\r?\n/);
-  const relayItems = new Set();
-  let argumentDeltas = "";
-  for (const rawEvent of events) {
-    const data = rawEvent
-      .split(/\r?\n/)
-      .filter((line) => line.startsWith("data:"))
-      .map((line) => line.slice(5).trimStart())
-      .join("\n")
-      .trim();
-    if (!data || data === "[DONE]") continue;
-    try {
-      const event = JSON.parse(data);
-      if (
-        event?.type === "response.output_item.added" &&
-        event.item?.type === "function_call" &&
-        event.item.name === AGENT_PAYLOAD_RELAY_TOOL
-      ) {
-        if (event.item.id) relayItems.add(event.item.id);
-        if (event.item.call_id) relayItems.add(event.item.call_id);
-      }
-      const relatedArgumentEvent =
-        relayItems.size === 0 ||
-        relayItems.has(event?.item_id) ||
-        relayItems.has(event?.call_id);
-      if (
-        event?.type === "response.function_call_arguments.delta" &&
-        relatedArgumentEvent &&
-        typeof event.delta === "string"
-      ) {
-        argumentDeltas += event.delta;
-      }
-      if (
-        event?.type === "response.function_call_arguments.done" &&
-        relatedArgumentEvent
-      ) {
-        const completed = parseRelayedAgentArguments(event.arguments);
-        if (completed !== undefined) return completed;
-      }
-      const plaintext = parseRelayedAgentPayload(event);
-      if (plaintext !== undefined) return plaintext;
-    } catch {
-      // Ignore malformed or unrelated events and continue to the completion item.
-    }
-  }
-  const accumulated = parseRelayedAgentArguments(argumentDeltas);
-  if (accumulated !== undefined) return accumulated;
-  return undefined;
-}
-
 function nativeRelayContext(request) {
-  const headers = nativeHeaders(request);
+  const headers = agentRelayHeaders(nativeHeaders(request));
   const authorization =
     typeof headers.authorization === "string" ? headers.authorization : "";
   const account = nativeAccountKey(headers);
@@ -1941,17 +1868,11 @@ function agentPayloadCacheKey(encrypted, accountScope) {
 }
 
 function nativeAgentRelayRateLimitError() {
-  const error = new Error("Native collaboration payload relay is rate limited.");
-  error.status = 429;
-  error.code = "ERR_NATIVE_AGENT_RELAY_RATE_LIMITED";
-  return error;
+  return agentRelayError("rate_limited");
 }
 
 function nativeAgentRelayUnauthorizedError() {
-  const error = new Error("Native collaboration payload relay requires refreshed authentication.");
-  error.status = 401;
-  error.code = "ERR_NATIVE_AGENT_RELAY_UNAUTHORIZED";
-  return error;
+  return agentRelayError("unauthorized");
 }
 
 function purgeExpiredAgentRelayFailures(now = Date.now()) {
@@ -2117,20 +2038,10 @@ async function relayEncryptedAgentPayloadOnce(
     throw error;
   }
   let plaintext;
-  const contentType = String(upstream.headers.get("content-type") || "").toLowerCase();
-  const looksLikeSse = /^(?:event|data):/m.test(bytes.toString("utf8"));
-  if (contentType.includes("text/event-stream") || looksLikeSse) {
-    plaintext = parseRelayedAgentPayloadSse(bytes);
-  } else {
-    try {
-      plaintext = parseRelayedAgentPayload(JSON.parse(bytes.toString("utf8")));
-    } catch {
-      // The error below intentionally avoids logging the opaque collaboration body.
-    }
-  }
-  if (plaintext === undefined) {
-    const error = new Error("Native collaboration payload relay omitted the task payload.");
-    error.status = 502;
+  try {
+    plaintext = parseAgentRelayResponse(bytes, upstream.headers.get("content-type") || "");
+  } catch (error) {
+    if (error?.code === "ERR_NATIVE_AGENT_RELAY_RATE_LIMITED") rememberAgentRelayFailure(cacheKey);
     throw error;
   }
   rememberAgentPayload(cacheKey, plaintext);
@@ -3093,6 +3004,15 @@ function compactionOverflowHops(ranked, { need, tried }) {
     .slice(0, MAX_FAILOVER_HOPS);
 }
 
+function routedUsageDiagnostics(payload, route) {
+  return {
+    requestedReasoningEffort: payload.reasoning?.effort ?? payload.reasoning_effort,
+    reasoningEffort: payload.reasoning?.effort ?? payload.reasoning_effort ?? route.defaultEffort,
+    providerToolCount: Array.isArray(payload.tools) ? payload.tools.length : 0,
+    providerToolSchemaBytes: utf8JsonBytes(payload.tools),
+  };
+}
+
 // One compaction attempt against one model. Everything route-dependent lives
 // here so a compaction can be moved to another model exactly like an ordinary
 // turn -- a compaction that fails ends the session just as hard, because the
@@ -3104,7 +3024,7 @@ async function summarizeWith(
   aged,
   prepared,
   signal,
-  { searchContract } = {},
+  { searchContract, observation } = {},
 ) {
   const compatibleInput = genericResponsesCompatibleInput(
     consoleGoCompatibleInput(
@@ -3132,25 +3052,27 @@ async function summarizeWith(
     route,
     request,
   );
+  const summaryContext = compactionInstructionBoundary(payload, bridged);
   let body = {
     ...payload,
+    instructions: summaryContext.instructions,
     model: route.gatewayModel,
     // Some OpenAI-Responses gateways (Codex LBs) refuse non-streaming
     // requests outright ("Stream must be set to true"). Only those generic
     // providers stream the summarizer; every other route keeps the plain
     // non-streaming call it already worked with.
     stream: providerForModel(route)?.generic === true,
-    // An empty tool list already disables tool use on every forwarder, and
-    // xAI rejects tool_choice "none" paired with it, so the field is omitted
-    // rather than sent redundantly.
     tools: [],
     input: [
-      ...bridged,
+      ...summaryContext.input,
       messageItem(prepared.catalogText),
-      messageItem(COMPACTION_PROMPT),
     ],
   };
-  delete body.tool_choice;
+  // Grok's forwarder can add hosted search even to an empty client tool list.
+  // The standard prohibition must cross that boundary; the forwarder consumes
+  // it by removing all tools and omitting none on xAI's empty-tool request.
+  if (route.provider === "grok-oauth") body.tool_choice = "none";
+  else delete body.tool_choice;
   normalizeAutoToolChoice(body, route);
   delete body.previous_response_id;
   delete body.client_metadata;
@@ -3165,6 +3087,7 @@ async function summarizeWith(
   }
   applyRoutedServiceTier(body, payload, route);
   body = applyZenFreeIncludeCompatibility(body, route);
+  body = grokBridgeRequest(body, route, request);
   // Compaction re-enters the same provider as the routed turn. Strict Chat
   // Completions surfaces reject this OpenAI search parameter even though it
   // is unrelated to the compaction body.
@@ -3183,7 +3106,8 @@ async function summarizeWith(
   }
   // Compaction is another hop on the route's transport: a Grok summary can
   // reason for as long as a turn, so it uses the same long-idle pool.
-  const upstream = await fetchForRoute(route, routedResponsesTarget(route), {
+  observation?.prepared(searchCompatibility.payload, route);
+  const upstream = await (observation?.fetch ?? fetchForRoute)(route, routedResponsesTarget(route), {
     method: "POST",
     headers: routedHeaders(),
     body: serialized,
@@ -3192,7 +3116,7 @@ async function summarizeWith(
   return { upstream, bridged, bytes: Buffer.byteLength(serialized, "utf8") };
 }
 
-async function summarize(request, payload, route, signal, { allowFailover = true } = {}) {
+async function summarize(request, payload, route, signal, { allowFailover = true, observation } = {}) {
   // The conversation's selected route owns the capability contract. Resolve
   // it before normalization so a fallback cannot add back ambient search that
   // the selected model never advertised. Compaction itself sends no tools or
@@ -3271,7 +3195,7 @@ async function summarize(request, payload, route, signal, { allowFailover = true
       aged,
       prepared,
       signal,
-      { searchContract },
+      { searchContract, observation },
     );
     if (sent.searchCapabilityChanged) {
       if (attemptRoute === route) throw unsupportedSearchContractError(route.slug);
@@ -3340,7 +3264,10 @@ async function summarize(request, payload, route, signal, { allowFailover = true
     // provider sends one) is already in hand. `tokenUsageFromPayload` returns
     // undefined when it is absent, and `recordUsageEvent` then omits the token
     // fields entirely rather than metering an invented zero.
-    const usage = tokenUsageFromPayload(parsed);
+    const usage = tokenUsageFromPayload(parsed, {
+      grokServiceTier: offersGrokServiceTier(attemptRoute),
+      grokContextUsage: attemptRoute.provider === GROK_OAUTH_PROVIDER,
+    });
     if (upstreamOk) {
       clearProviderCooldown(attemptRoute.provider);
       const answer = extractResponseText(parsed);
@@ -3472,6 +3399,8 @@ function recordCompactionUsage(result, route, startedAt, diagnostics) {
       model: servedRoute.slug,
       provider: canonicalProviderId(servedRoute.provider),
       status: result?.ok ? 200 : result?.status || 502,
+      ...(result?.httpStatus === undefined ? {} : { httpStatus: result.httpStatus }),
+      ...(result?.generationOutcome ? { generationOutcome: result.generationOutcome } : {}),
       durationMs: Date.now() - startedAt,
       ...result?.usage,
       ...result?.toolResultAging,
@@ -3524,9 +3453,10 @@ async function handleRoutedCompaction(
   route,
   signal,
   v2,
-  { allowFailover = true } = {},
+  { allowFailover = true, observation } = {},
 ) {
-  const result = await summarize(request, payload, route, signal, { allowFailover });
+  const result = await summarize(request, payload, route, signal, { allowFailover, observation });
+  observation?.complete(result.ok);
   // A compaction moved to another model is metered against the model that
   // actually produced the summary, the same as any other turn.
   const served = {
@@ -3564,6 +3494,8 @@ async function handleRoutedCompaction(
     });
     return {
       status: translatedStatus,
+      httpStatus: response.statusCode,
+      generationOutcome: "failed",
       usage: result.usage,
       toolResultAging: result.toolResultAging,
       ...served,
@@ -3582,6 +3514,8 @@ async function handleRoutedCompaction(
     }
     return {
       status: 200,
+      httpStatus: response.statusCode,
+      generationOutcome: "completed",
       usage: result.usage,
       toolResultAging: result.toolResultAging,
       ...served,
@@ -3590,6 +3524,8 @@ async function handleRoutedCompaction(
   writeJson(response, 200, { output: compactOutput(result.input, result.checkpoint) });
   return {
     status: 200,
+    httpStatus: response.statusCode,
+    generationOutcome: "completed",
     usage: result.usage,
     toolResultAging: result.toolResultAging,
     ...served,
@@ -4114,14 +4050,10 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
     delete routed.reasoning_effort;
   }
   if (rejectsWebSearchOptions(route)) delete routed.web_search_options;
-  const usageDiagnostics = {
-    reasoningEffort:
-      routed.reasoning?.effort ??
-      routed.reasoning_effort ??
-      route.defaultEffort,
-    providerToolCount: Array.isArray(routed.tools) ? routed.tools.length : 0,
-    providerToolSchemaBytes: utf8JsonBytes(routed.tools),
-  };
+  // Adapt the final caller policy, including child effort overrides, at the
+  // Responses-to-Chat boundary so the bridge cannot retain an earlier effort.
+  routed = grokBridgeRequest(routed, route, request);
+  const usageDiagnostics = routedUsageDiagnostics(routed, route);
   const interruptPlan = pendingInterruptPlan(
     needsZenFreeToolCompatibility(route) ? agedInput : input,
     { namespaces: flattenedNamespaces },
@@ -4129,6 +4061,7 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
   return {
     body: Buffer.from(JSON.stringify(routed), "utf8"),
     usageDiagnostics,
+    providerTools: routed.tools,
     target: routedResponsesTarget(route),
     headers: routedHeaders(),
     // The exact mode used while constructing this body. Failover compares it
@@ -4468,16 +4401,36 @@ async function handleResponses(request, response, requestUrl) {
   const startedAt = Date.now();
   const controller = new AbortController();
   const activity = beginRequestActivity({ request, response, controller });
-  const fetchObservedUpstream = async (url, init) => {
+  setGrokTimingRequestId(request, activity.requestId);
+  const timing = createGrokRequestTiming({ layer: "router", requestId: activity.requestId });
+  let timingTransportOutcome;
+  let timingRequestResult;
+  const finishTiming = (outcome) => {
+    timingTransportOutcome ??= outcome;
+    // A response may finish before the request handler settles (including
+    // compaction), or after its finally block when the outer handler reports
+    // an error. Join both facts instead of treating a committed 200 as success.
+    if (route?.provider === "grok-oauth" && timingTransportOutcome && timingRequestResult) {
+      timing.identify(route.slug, requestedReasoningEffort);
+      timing.finish(timingTransportOutcome, response.statusCode, timingRequestResult);
+    }
+  };
+  response.once("finish", () => finishTiming("response_finished"));
+  response.once("close", () => finishTiming("connection_closed"));
+  const fetchObservedForRoute = async (attemptRoute, url, init) => {
+    timing.mark("firstGatewayDispatchMs");
     activity.progress.attempt();
-    const upstream = await fetchForRoute(route, url, init);
+    const upstream = await fetchForRoute(attemptRoute, url, init);
     activity.progress.headers();
+    timing.mark("firstGatewayHeadersMs");
     return upstream;
   };
+  const fetchObservedUpstream = (url, init) => fetchObservedForRoute(route, url, init);
   const diagnostics = { requestId: activity.requestId };
   let clientGone = false;
   let requestedModel = "";
   let route;
+  let requestedReasoningEffort;
   let upstreamRetries;
   const upstreamAttempts = [];
   let upstreamStatus;
@@ -4549,6 +4502,7 @@ async function handleResponses(request, response, requestUrl) {
       maxHistoryBytes: INCOMING_HISTORY_DECODED_BYTES,
     });
     let payload = received.payload;
+    timing.mark("parsedMs");
     if (received.stats.imagesDropped > 0) {
       console.error(`[codex-router] bounded incoming image history dropped=${received.stats.imagesDropped} image-bytes-saved=${received.stats.imageBytesSaved} decoded-bytes=${received.stats.decodedBytes}`);
     }
@@ -4654,12 +4608,28 @@ async function handleResponses(request, response, requestUrl) {
       ...activityMetadataFromHeaders(request.headers),
     });
     diagnostics.contextBytes = grokOauthIngressContextBytes(payload, route);
-    if (offersGrokOauthServiceTier(route)) diagnostics.requestedServiceTier = payload.service_tier;
+    if (offersGrokServiceTier(route)) diagnostics.requestedServiceTier = payload.service_tier;
     const compactV1 = /\/responses\/compact$/.test(requestUrl.pathname);
     // Codex remote compaction V2 uses the ordinary Responses endpoint with a
     // terminal trigger. Detect the protocol shape before route dispatch so the
     // native path can also preserve the full tool results being summarized.
     const compactV2 = isRemoteCompactV2Trigger(payload);
+    if (route?.provider === "grok-oauth") {
+      diagnostics.requestKind = compactV1 || compactV2 ? "compaction" : "generation";
+      timing.kind(diagnostics.requestKind);
+      timing.clientRequest(payload, request.headers);
+      timing.serviceTier("requested", payload.service_tier);
+      timing.tools("client", payload.tools);
+      timing.parallelTools("client", payload.parallel_tool_calls);
+    }
+    const setRoutingDiagnostics = (built) => {
+      timing.mark("preparedMs");
+      requestedReasoningEffort = built.usageDiagnostics?.requestedReasoningEffort;
+      diagnostics.reasoningEffort = built.usageDiagnostics?.reasoningEffort;
+      diagnostics.providerToolCount = built.usageDiagnostics?.providerToolCount;
+      diagnostics.providerToolSchemaBytes = built.usageDiagnostics?.providerToolSchemaBytes;
+      if (route?.provider === "grok-oauth") timing.tools("gateway", built.providerTools);
+    };
     // Gate generation only, before conversion or any provider request.
     // Compaction summarizes existing history rather than continuing a goal.
     if (route?.goalContinuationGuard === true && !compactV1 && !compactV2) {
@@ -4683,6 +4653,7 @@ async function handleResponses(request, response, requestUrl) {
         id: `cmp_${randomUUID().replaceAll("-", "")}`,
         encrypted_content: encodeCheckpoint(checkpoint),
       };
+      timing.event({ type: "response.completed" });
       if (payload.stream === false) {
         writeJson(response, 200, compactionSnapshot(payload.model, item));
       } else {
@@ -4718,13 +4689,21 @@ async function handleResponses(request, response, requestUrl) {
         route,
         controller.signal,
         compactV2,
-        { allowFailover: !exactRouteProbe },
+        { allowFailover: !exactRouteProbe, observation: {
+          prepared: (body, attemptRoute) => setRoutingDiagnostics({
+            usageDiagnostics: routedUsageDiagnostics(body, attemptRoute), providerTools: body.tools,
+          }),
+          fetch: fetchObservedForRoute,
+          complete: ok => timing.event({ type: ok ? "response.completed" : "response.failed" }),
+        } },
       );
       const compacted = compaction.route || route;
       recordCompactionUsage(compaction, route, startedAt, diagnostics);
       usage = compaction.usage;
       finalStatus = compaction.status;
       activityStatus = compaction.status;
+      generationOutcome = compaction.generationOutcome;
+      turnHttpStatus = compaction.httpStatus;
       usageRecorded = true;
       // The compaction chose its own model inside `summarize`, so the outer
       // route still names the one the conversation is on. Adopt what actually
@@ -4757,11 +4736,6 @@ async function handleResponses(request, response, requestUrl) {
     let agingEnabled = false;
     let agedInput;
     let searchContract;
-    const setRoutingDiagnostics = (built) => {
-      diagnostics.reasoningEffort = built.usageDiagnostics?.reasoningEffort;
-      diagnostics.providerToolCount = built.usageDiagnostics?.providerToolCount;
-      diagnostics.providerToolSchemaBytes = built.usageDiagnostics?.providerToolSchemaBytes;
-    };
     // Adopts a rebuilt request for a different model. Everything downstream --
     // the response transforms, the prompt-token estimate, the empty-completion
     // retry -- reads these, so all of them have to move together or the turn
@@ -4793,7 +4767,7 @@ async function handleResponses(request, response, requestUrl) {
       // serving row of another model must not inherit them.
       diagnostics.contextBytes = grokOauthIngressContextBytes(payload, route);
       diagnostics.requestedServiceTier =
-        offersGrokOauthServiceTier(route) ? payload.service_tier : undefined;
+        offersGrokServiceTier(route) ? payload.service_tier : undefined;
       // The tray Island has to name the model that is actually answering.
       activity.setRoute({
         provider: canonicalProviderId(route.provider),
@@ -5306,11 +5280,16 @@ async function handleResponses(request, response, requestUrl) {
       response.setHeader("Content-Type", upstreamContentType);
     }
     const createResponsePipeline = (contentType, preludeMs = EMPTY_COMPLETION_PRELUDE_MS) => {
+      // xAI agentic usage bills every internal search step, repeatedly counting
+      // the prompt. Preserve those raw counters for metering; Codex needs the
+      // current request's context size to decide when to compact.
+      const cumulativeInputUsage = route?.provider === "grok-oauth";
       const usageObserver = new ResponseUsageTransform(contentType, {
-        grokServiceTier: offersGrokOauthServiceTier(route),
+        cumulativeInputUsage,
+        grokServiceTier: offersGrokServiceTier(route),
         onEvent: (payload) => activity.progress.event(payload),
         estimatedInputTokens:
-          ZERO_INPUT_ESTIMATE && route
+          ZERO_INPUT_ESTIMATE && route && !cumulativeInputUsage
             ? estimateInputTokens(routedBody, {
                 contextWindow: route.contextWindow,
                 maxTokensPerImage: maxImageTokensForRoute(route),
@@ -5451,6 +5430,11 @@ async function handleResponses(request, response, requestUrl) {
       // discarded attempt never announces its identity to this observer.
       const failureMetadata = responsesStreamFailureTransform(response, contentType);
       if (failureMetadata) transforms.push(failureMetadata);
+      if (route?.provider === "grok-oauth") {
+        // Observe the actual client-facing stream after every holding stage.
+        // Default observer mode passes bytes through without rewriting usage.
+        transforms.push(new ResponseUsageTransform(contentType, { onEvent: event => timing.event(event) }));
+      }
       return { transforms, usageObserver, guard, leakedToolCalls };
     };
     // The guard's pre-content budget scales with this request's size: a large
@@ -6128,6 +6112,8 @@ async function handleResponses(request, response, requestUrl) {
     throw error;
   } finally {
     const status = activityStatus ?? finalStatus ?? response.statusCode;
+    timingRequestResult = { requestStatus: status, generationOutcome };
+    finishTiming();
     activity.finish(status, { generationOutcome, httpStatus: turnHttpStatus });
     // Timestamped per-request timing for latency diagnosis. Never gated on
     // QUIET: the production LaunchAgent hard-sets CODEX_ROUTER_QUIET=1. A

@@ -1653,6 +1653,7 @@ test("router relays encrypted Codex subagent payloads before external routing", 
         item_id: "fc_relay",
         arguments: relayArguments,
       },
+      { type: "response.completed", response: { status: "completed", output: [] } },
     ];
     const event = `${relayEvents
       .map((entry) => `event: ${entry.type}\ndata: ${JSON.stringify(entry)}\n\n`)
@@ -1683,6 +1684,8 @@ test("router relays encrypted Codex subagent payloads before external routing", 
         Authorization: "Bearer CHATGPT_SESSION_TOKEN",
         "ChatGPT-Account-Id": "account-id",
         "Content-Type": "application/json",
+        "x-openai-internal-codex-responses-lite": "true",
+        "x-codex-turn-state": "parent-turn-affinity",
       },
       body: JSON.stringify({
         model: "kimi-oauth/k3",
@@ -1706,6 +1709,8 @@ test("router relays encrypted Codex subagent payloads before external routing", 
 
     assert.equal(response.status, 200, await response.text());
     assert.equal(nativeRequests.length, 1);
+    assert.equal(nativeRequests[0].headers["x-openai-internal-codex-responses-lite"], undefined);
+    assert.equal(nativeRequests[0].headers["x-codex-turn-state"], undefined);
     assert.equal(nativeRequests[0].headers.authorization, "Bearer CHATGPT_SESSION_TOKEN");
     assert.equal(nativeRequests[0].headers["chatgpt-account-id"], "account-id");
     assert.equal(nativeRequests[0].body.model, "gpt-5.6-sol");
@@ -1859,12 +1864,20 @@ test("router preserves relay 401 so Codex can refresh authentication", async () 
   }
 });
 
-test("router preserves relay 429 and suppresses repeated native attempts per account", async () => {
+for (const sseError of [false, true]) {
+test(`router preserves relay 429 and suppresses repeated native attempts per account (${sseError ? "SSE" : "HTTP"})`, async () => {
   let nativeRequests = 0;
   const native = await mockServer(async (request, response) => {
     nativeRequests += 1;
     await bodyJson(request);
-    json(response, 429, { error: { message: "native relay quota exhausted" } });
+    if (sseError) {
+      response.writeHead(200, { "Content-Type": "text/event-stream" });
+      response.end(`data: ${JSON.stringify({ type: "error", error: {
+        code: "rate_limit_exceeded", message: "native relay quota exhausted",
+      } })}\n\n`);
+    } else {
+      json(response, 429, { error: { message: "native relay quota exhausted" } });
+    }
   });
   let gatewayRequests = 0;
   const gateway = await mockServer(async (_request, response) => {
@@ -1931,6 +1944,7 @@ test("router preserves relay 429 and suppresses repeated native attempts per acc
     await Promise.all([closeServer(native.server), closeServer(gateway.server)]);
   }
 });
+}
 
 test("router sends standalone image requests only to the native OpenAI backend", async () => {
   const nativeRequests = [];
@@ -2491,8 +2505,8 @@ test("router synthesizes routed compaction and safely replays it to native model
     assert.equal(gatewayRequests[0].body.input[1].type, "custom_tool_call");
     assert.equal(gatewayRequests[0].body.input[1].name, "apply_patch");
     assert.equal(gatewayRequests[0].body.input[2].type, "custom_tool_call_output");
-    assert.match(gatewayRequests[0].body.input.at(-2).content[0].text, /ROUTER SOURCE CATALOG/);
-    assert.match(gatewayRequests[0].body.input.at(-1).content[0].text, /Return exactly one JSON object/);
+    assert.match(gatewayRequests[0].body.input.at(-1).content[0].text, /ROUTER SOURCE CATALOG/);
+    assert.match(gatewayRequests[0].body.instructions, /Return exactly one JSON object/);
 
     const v2 = await routed([...input, { type: "compaction_trigger" }], { stream: false });
     assert.equal(v2.status, 200);
@@ -7577,7 +7591,7 @@ test("router preserves orphan Codex app outputs as readable history", async () =
       /Codex app tool result: codex_app\.send_message_to_thread/u,
     );
     assert.match(JSON.stringify(gatewayRequests[1].input), /child finished/u);
-    const catalog = gatewayRequests[1].input.at(-2).content[0].text;
+    const catalog = gatewayRequests[1].input.at(-1).content[0].text;
     assert.match(catalog, /"kind":"tool_result"/u);
     assert.match(catalog, /"tool":"send_message_to_thread"/u);
     assert.doesNotMatch(catalog, /"kind":"user_message"/u);
@@ -9157,6 +9171,7 @@ test("routed compaction resolves subagent handoffs before summarizing", async ()
         item_id: "fc_relay",
         arguments: relayArguments,
       },
+      { type: "response.completed", response: { status: "completed", output: [] } },
     ];
     response.writeHead(200, { "Content-Type": "text/event-stream" });
     response.end(
@@ -9769,10 +9784,11 @@ test("RTK shaping is reserved for routed compaction and ordinary turns keep newe
     assert.equal(gatewayBodies[0].input[1].output, value);
     assert.equal(gatewayBodies[0].instructions, "Base instructions.");
     assert.doesNotMatch(gatewayBodies[0].instructions, /Token maxxing pressure|decision packet|Be terse/u);
-    assert.match(gatewayBodies[1].input[1].output, /Tool result shaped by Codex Router RTK-style compaction/u);
-    assert.match(gatewayBodies[1].input[1].output, /same line repeated 109999 more times/u);
-    assert.match(gatewayBodies[1].input[1].output, /ERROR final link failed/u);
-    assert.match(gatewayBodies[1].input[1].output, /Repeat the preceding exec_command call/u);
+    const compactOutput = gatewayBodies[1].input.find(item => item.type === "function_call_output" && item.call_id === "latest").output;
+    assert.match(compactOutput, /Tool result shaped by Codex Router RTK-style compaction/u);
+    assert.match(compactOutput, /same line repeated 109999 more times/u);
+    assert.match(compactOutput, /ERROR final link failed/u);
+    assert.match(compactOutput, /Repeat the preceding exec_command call/u);
     assert.doesNotMatch(gatewayBodies[1].instructions, /Token maxxing pressure|decision packet|Be terse/u);
 
     const events = await waitForUsageEvents(stateDir, 2, router);
@@ -10536,7 +10552,8 @@ test("a subagent effort reaches child turns and leaves parent turns alone", asyn
 // provider sees it -- measured against the real LiteLLM adapter, where the
 // child turn reached the provider at the parent's effort. Drive the authentic
 // client shape so the override has to survive the same precedence.
-test("a subagent effort overrides the effort Codex nested in the reasoning object", async () => {
+for (const model of ["deepseek/deepseek-v4-pro", "grok-oauth/grok-4.7"]) {
+test(`a subagent effort overrides the effort Codex nested in the reasoning object (${model})`, async () => {
   const stateDir = mkdtempSync(path.join(os.tmpdir(), "subagent-effort-nested-"));
   // Written directly rather than through setSubagentEffort: paths.mjs resolves
   // the state directory once per process, so a second in-process import lands
@@ -10548,7 +10565,7 @@ test("a subagent effort overrides the effort Codex nested in the reasoning objec
       mode: "all",
       enabled: [],
       disabled: [],
-      efforts: { "deepseek/deepseek-v4-pro": "max" },
+      efforts: { [model]: "max" },
     })}\n`,
     { mode: 0o600 },
   );
@@ -10560,7 +10577,7 @@ test("a subagent effort overrides the effort Codex nested in the reasoning objec
       return;
     }
     const body = await bodyJson(request);
-    seen.push({ reasoning: body.reasoning, effort: body.reasoning_effort });
+    seen.push({ reasoning: body.reasoning, effort: body.reasoning_effort, bridge: body.extra_body });
     json(response, 200, {
       id: "resp_effort_nested",
       output: [{ type: "message", content: [{ type: "output_text", text: "ok" }] }],
@@ -10585,7 +10602,7 @@ test("a subagent effort overrides the effort Codex nested in the reasoning objec
       method: "POST",
       headers: { "Content-Type": "application/json", ...headers },
       body: JSON.stringify({
-        model: "deepseek/deepseek-v4-pro",
+        model,
         input: "go",
         reasoning: { effort: "low", summary: "auto" },
       }),
@@ -10617,6 +10634,15 @@ test("a subagent effort overrides the effort Codex nested in the reasoning objec
       "the parent turn was re-tuned by a subagent setting",
     );
     assert.equal(seen[1].effort, undefined, "the parent turn grew a flat effort field");
+    if (model.startsWith("grok-oauth/")) {
+      assert.deepEqual(seen[0].bridge.reasoning_effort, { effort: "max", summary: "auto" },
+        "the Chat bridge retained the parent effort before the child override");
+      assert.deepEqual(seen[1].bridge.reasoning_effort, { effort: "low", summary: "auto" },
+        "the Chat bridge changed the parent effort");
+    } else {
+      assert.equal(seen[0].bridge?.reasoning_effort, undefined,
+        "Grok's bridge changed another provider");
+    }
   } finally {
     // See the sibling test above: removing the state directory out from under
     // a router that has been signalled but not awaited is what produced the
@@ -10626,6 +10652,8 @@ test("a subagent effort overrides the effort Codex nested in the reasoning objec
     rmSync(stateDir, { recursive: true, force: true });
   }
 });
+
+}
 
 // #256: spawning a subagent on opencode-go/deepseek-v4-flash made every
 // following parent request 400 with "The `reasoning_content` in the thinking
@@ -12921,7 +12949,7 @@ test("Zen Free Muse bridges custom tools across JSON, history, and errors", asyn
       });
       return;
     }
-    if (inputText.includes("lossy continuation checkpoint")) {
+    if (body.instructions?.includes("lossy continuation checkpoint")) {
       if (
         body.input.some((item) =>
           ["custom_tool_call", "custom_tool_call_output"].includes(item?.type),

@@ -322,11 +322,10 @@ test("non-schema input yields an empty object schema", () => {
   assert.deepEqual(objectRootToolSchema("nonsense"), { type: "object", properties: {} });
 });
 
-// The regression this exists for: xAI answers
-// "[invalid_client_tool_schema] codex_app__automation_update: tool parameter
-// root must be an object type" and fails the entire request, so a Grok session
-// could not complete a single turn while the Codex app toolset was attached.
-test("every Codex app tool reaches xAI with an object root", () => {
+// The proxy rejects nested/ref-rooted alternatives. Flat object alternatives
+// are accepted (live proof in docs/grok-schema-probes.json), and preserve the
+// operation-specific constraints that the old object merger discarded.
+test("every Codex app tool reaches xAI as an object or complete flat object alternatives", () => {
   const appTools = CODEX_APP_TOOLS.flatMap((entry) =>
     entry.type === "namespace" ? entry.tools : [entry],
   );
@@ -345,11 +344,14 @@ test("every Codex app tool reaches xAI with an object root", () => {
     })),
   });
   for (const tool of request.tools.filter((entry) => entry.type === "function")) {
-    assert.ok(
-      hasObjectRoot(tool.parameters),
-      `${tool.name} would be rejected by xAI: root is not an object`,
-    );
+    const alternatives = tool.parameters.oneOf ?? tool.parameters.anyOf;
+    assert.ok(hasObjectRoot(tool.parameters) ||
+      (Array.isArray(alternatives) && alternatives.length > 0 && alternatives.every(hasObjectRoot)),
+    `${tool.name} still contains an unsupported nested/ref-rooted alternative`);
+    assert.equal(tool.strict, true);
   }
+  const automation = request.tools.filter(tool => tool.name?.startsWith("codex_app__automation_update__"));
+  assert.equal(automation.length, 6, "all operation variants remain callable");
 });
 
 test("automation_update keeps its branch fields after flattening", () => {

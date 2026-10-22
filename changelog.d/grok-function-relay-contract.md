@@ -1,0 +1,1 @@
+- Align Grok read/search/directory tool schemas with their argument compiler limits and classify rejected facade arguments without logging argument contents.

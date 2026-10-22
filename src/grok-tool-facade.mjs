@@ -7,10 +7,12 @@ import {
   MAX_STRUCTURED_PATCH_BYTES,
 } from "./grok-structured-patch.mjs";
 import { isGrokOauthAgenticRoute } from "./grok-oauth-routes.mjs";
+import { GROK_PATCH_HOOK_CODEC } from "./grok-patch-hook-transport.mjs";
 
 // The route this facade was first proven on, kept as a fixture for tests.
 // `grokEditFacadeEnabled` is the gate, and it reads the shared list.
 export const GROK_EDIT_FACADE_ROUTE = "grok-oauth/grok-4.6";
+export const REPLACE_LINES_TOOL_NAME = "replace_lines";
 export const SEARCH_REPLACE_TOOL_NAME = "search_replace";
 export const WRITE_TOOL_NAME = "write";
 export const READ_FILE_TOOL_NAME = "read_file";
@@ -18,6 +20,7 @@ export const GREP_TOOL_NAME = "grep";
 export const LIST_DIR_TOOL_NAME = "list_dir";
 export const RUN_TERMINAL_COMMAND_TOOL_NAME = "run_terminal_command";
 export const GROK_FACADE_TOOL_NAMES = [
+  REPLACE_LINES_TOOL_NAME,
   SEARCH_REPLACE_TOOL_NAME,
   WRITE_TOOL_NAME,
   READ_FILE_TOOL_NAME,
@@ -29,6 +32,8 @@ export const DEFAULT_READ_LIMIT = 400;
 export const DEFAULT_HEAD_LIMIT = 10;
 export const MAX_READ_LIMIT = 2000;
 
+const singleLinePattern = "^[^\\u0000\\r\\n]*(?![\\s\\S])";
+const commandPattern = "^[^\\u0000]*(?![\\s\\S])";
 const pathSchema = { type: "string", minLength: 1, maxLength: 65536 };
 const bodySchema = { type: "string", maxLength: MAX_STRUCTURED_PATCH_BYTES };
 const objectSchema = (properties, required) => ({
@@ -44,6 +49,12 @@ export const SEARCH_REPLACE_PARAMETERS = objectSchema({
   new_string: bodySchema,
 }, ["path", "old_string", "new_string"]);
 
+export const REPLACE_LINES_PARAMETERS = objectSchema({
+  path: { ...pathSchema, description: "File path passed to the native client patch tool." },
+  old_string: { ...bodySchema, minLength: 1, description: "Complete logical lines to replace, separated by LF. Include enough unchanged surrounding lines to select the intended location." },
+  new_string: { ...bodySchema, description: "Complete replacement logical lines, including any unchanged surrounding lines from old_string." },
+}, ["path", "old_string", "new_string"]);
+
 export const WRITE_PARAMETERS = objectSchema({
   path: pathSchema,
   contents: bodySchema,
@@ -52,6 +63,20 @@ export const WRITE_PARAMETERS = objectSchema({
 const facadeCodec = {
   version: GROK_STRUCTURED_PATCH_CODEC.version,
   maxArgumentBytes: MAX_STRUCTURED_PATCH_BYTES,
+};
+
+export const REPLACE_LINES_CODEC = {
+  ...facadeCodec,
+  decodeArguments: compileSearchReplaceArguments,
+  parameters: REPLACE_LINES_PARAMETERS,
+  description() {
+    return [
+      "Replace whole logical lines in an existing file through the native client apply_patch tool.",
+      "old_string and new_string contain complete lines, not substrings; include unchanged surrounding lines in both to identify the intended location.",
+      "Uses native patch matching: no unique-occurrence guarantee, and the client may tolerate whitespace differences. Read the current file first and inspect the resulting diff.",
+      "Use LF separators and matching trailing-newline presence. Final-newline normalization belongs to the native client; this interface cannot request a final-newline-only change. For deletion, include unchanged surrounding lines in both strings.",
+    ].join(" ");
+  },
 };
 
 export const SEARCH_REPLACE_CODEC = {
@@ -80,6 +105,7 @@ export const WRITE_CODEC = {
 };
 
 const FACADE_TOOLS = [
+  { name: REPLACE_LINES_TOOL_NAME, codec: REPLACE_LINES_CODEC },
   {
     name: SEARCH_REPLACE_TOOL_NAME,
     codec: SEARCH_REPLACE_CODEC,
@@ -110,17 +136,35 @@ function parseFacadeObject(argumentsText) {
   }
 }
 
-function parseExactObject(argumentsText, required, optional = []) {
+// These are router-owned, flat primitive schemas. Validate the same constraints
+// we publish; never infer missing fields or coerce provider arguments.
+function facadeArgumentResult(argumentsText, schema) {
+  if (typeof argumentsText !== "string" || !jsonArgumentsAreUnambiguous(argumentsText)) {
+    return { code: "ambiguous_or_invalid_json" };
+  }
   const value = parseFacadeObject(argumentsText);
-  if (!value) return undefined;
-  const allowed = new Set([...required, ...optional]);
-  for (const key of Object.keys(value)) {
-    if (!allowed.has(key)) return undefined;
+  if (!value) return { code: "object_required" };
+  if (Object.keys(value).some(key => !Object.hasOwn(schema.properties, key))) return { code: "unexpected_field" };
+  if (schema.required.some(key => !Object.hasOwn(value, key))) return { code: "missing_field" };
+  for (const [key, field] of Object.entries(schema.properties)) {
+    if (!Object.hasOwn(value, key)) continue;
+    const item = value[key];
+    if (field.type === "integer") {
+      if (!Number.isInteger(item)) return { code: "invalid_type" };
+      if (item < field.minimum || (field.maximum !== undefined && item > field.maximum)) return { code: "out_of_range" };
+    } else {
+      if (typeof item !== "string") return { code: "invalid_type" };
+      const length = Array.from(item).length;
+      if (length < field.minLength || length > field.maxLength) return { code: "out_of_range" };
+      if (field.pattern && !new RegExp(field.pattern, "u").test(item)) return { code: "unsupported_character" };
+    }
   }
-  for (const key of required) {
-    if (!Object.hasOwn(value, key)) return undefined;
-  }
-  return value;
+  return { value };
+}
+
+// Only fixed tool identities and fixed codes can enter logs, never keys/values.
+function facadeArgumentErrorCode(name, schema) {
+  return (argumentsText) => `${name}:${facadeArgumentResult(argumentsText, schema).code ?? "unsupported_value"}`;
 }
 
 function terminateUnixPath(filePath) {
@@ -175,7 +219,7 @@ function fileReadCommand(filePath, offset, limit, workdir, platform = process.pl
 }
 
 export function compileReadFileCommand(argumentsText, workdir, platform = process.platform) {
-  const value = parseExactObject(argumentsText, ["target_file"], ["offset", "limit"]);
+  const value = facadeArgumentResult(argumentsText, READ_FILE_PARAMETERS).value;
   if (!value || typeof value.target_file !== "string") return undefined;
   const offset = value.offset === undefined ? 1 : value.offset;
   const limit = value.limit === undefined ? DEFAULT_READ_LIMIT : value.limit;
@@ -185,7 +229,7 @@ export function compileReadFileCommand(argumentsText, workdir, platform = proces
 }
 
 export function compileGrepCommand(argumentsText, workdir, platform = process.platform) {
-  const value = parseExactObject(argumentsText, ["pattern"], ["path", "glob"]);
+  const value = facadeArgumentResult(argumentsText, GREP_PARAMETERS).value;
   if (!value || typeof value.pattern !== "string" || value.pattern.length === 0) return undefined;
   const quote = platform === "win32" ? powershellLiteral : posixSingleQuote;
   const pattern = quote(value.pattern);
@@ -211,24 +255,24 @@ export function compileGrepCommand(argumentsText, workdir, platform = process.pl
 }
 
 const READ_FILE_PARAMETERS = objectSchema({
-  target_file: pathSchema,
-  offset: { type: "integer", minimum: 1 },
+  target_file: { ...pathSchema, pattern: singleLinePattern },
+  offset: { type: "integer", minimum: 1, maximum: Number.MAX_SAFE_INTEGER - MAX_READ_LIMIT },
   limit: { type: "integer", minimum: 1, maximum: MAX_READ_LIMIT },
 }, ["target_file"]);
 
 const GREP_PARAMETERS = objectSchema({
-  pattern: { type: "string", minLength: 1, maxLength: 65536 },
-  path: pathSchema,
-  glob: { type: "string", minLength: 1, maxLength: 1024 },
+  pattern: { type: "string", minLength: 1, maxLength: 65536, pattern: singleLinePattern },
+  path: { ...pathSchema, pattern: singleLinePattern },
+  glob: { type: "string", minLength: 1, maxLength: 1024, pattern: singleLinePattern },
 }, ["pattern"]);
 
 const LIST_DIR_PARAMETERS = objectSchema({
-  target_directory: pathSchema,
+  target_directory: { ...pathSchema, pattern: singleLinePattern },
 }, []);
 
 const RUN_TERMINAL_COMMAND_PARAMETERS = objectSchema({
-  command: { type: "string", minLength: 1, maxLength: MAX_STRUCTURED_PATCH_BYTES },
-  working_directory: pathSchema,
+  command: { type: "string", minLength: 1, maxLength: MAX_STRUCTURED_PATCH_BYTES, pattern: commandPattern },
+  working_directory: { ...pathSchema, pattern: commandPattern },
 }, ["command"]);
 
 let ripgrepCached;
@@ -286,7 +330,7 @@ export function nativeExecRelayTarget(tools, namespaces) {
 export function compileListDirCommand(argumentsText, workdir, platform = process.platform) {
   const value = argumentsText === undefined || argumentsText === ""
     ? {}
-    : parseExactObject(argumentsText, [], ["target_directory"]);
+    : facadeArgumentResult(argumentsText, LIST_DIR_PARAMETERS).value;
   if (!value) return undefined;
   const directory = value.target_directory === undefined ? "." : value.target_directory;
   if (typeof directory !== "string" || !directory) return undefined;
@@ -556,7 +600,7 @@ export function classifyShellCommand(command) {
 }
 
 export function compileRunTerminalCommand(argumentsText, platform = process.platform) {
-  const value = parseExactObject(argumentsText, ["command"], ["working_directory"]);
+  const value = facadeArgumentResult(argumentsText, RUN_TERMINAL_COMMAND_PARAMETERS).value;
   if (!value || typeof value.command !== "string" || !value.command) return undefined;
   if (value.command.includes("\0")) return undefined;
   if (Object.hasOwn(value, "working_directory") && (typeof value.working_directory !== "string" || value.working_directory.length === 0)) {
@@ -565,13 +609,16 @@ export function compileRunTerminalCommand(argumentsText, platform = process.plat
   const workdir = value.working_directory;
   const classified = classifyShellCommand(value.command);
   if (classified.kind === "read_file") {
-    return compileReadFileCommand(JSON.stringify(classified.args), workdir, platform);
+    return compileReadFileCommand(JSON.stringify(classified.args), workdir, platform)
+      ?? withWorkdir({ cmd: value.command }, workdir);
   }
   if (classified.kind === "grep") {
-    return compileGrepCommand(JSON.stringify(classified.args), workdir, platform);
+    return compileGrepCommand(JSON.stringify(classified.args), workdir, platform)
+      ?? withWorkdir({ cmd: value.command }, workdir);
   }
   if (classified.kind === "list_dir") {
-    return compileListDirCommand(JSON.stringify(classified.args), workdir, platform);
+    return compileListDirCommand(JSON.stringify(classified.args), workdir, platform)
+      ?? withWorkdir({ cmd: value.command }, workdir);
   }
   if (classified.kind === "write") {
     return JSON.stringify({ cmd: SHELL_NOT_EDITOR_COMMAND });
@@ -643,7 +690,7 @@ export function encodeGrokFacadeHistory(input, nativeExec, installed) {
   let changed = false;
   const routed = input.map((item) => {
     if (item?.type !== "function_call" || typeof item.name !== "string") return item;
-    if (isNativeExecHistory(item, nativeExec)) {
+    if (isNativeExecHistory(item, nativeExec) && facadeAliasOffered(RUN_TERMINAL_COMMAND_TOOL_NAME, installed)) {
       const encoded = encodeExecCommandHistory(item.arguments);
       if (!encoded || !facadeAliasOffered(encoded.name, installed)) return item;
       changed = true;
@@ -654,7 +701,8 @@ export function encodeGrokFacadeHistory(input, nativeExec, installed) {
       const value = parseFacadeObject(item.arguments);
       if (!value) return item;
       if (Object.hasOwn(value, "old_string") || Object.hasOwn(value, "contents")) {
-        const name = Object.hasOwn(value, "contents") ? WRITE_TOOL_NAME : SEARCH_REPLACE_TOOL_NAME;
+        const name = Object.hasOwn(value, "contents") ? WRITE_TOOL_NAME
+          : facadeAliasOffered(SEARCH_REPLACE_TOOL_NAME, installed) ? SEARCH_REPLACE_TOOL_NAME : REPLACE_LINES_TOOL_NAME;
         if (!facadeAliasOffered(name, installed)) return item;
         changed = true;
         const { name: _name, namespace: _namespace, ...rest } = item;
@@ -705,7 +753,13 @@ export function applyGrokEditFacade(tools, namespaces, route, structuredPatch, o
     aliases.push({
       providerName: tool.name,
       nativeName: "apply_patch",
-      codec: tool.codec,
+      // Exact matching and create-only checks need the original arguments at
+      // the negotiated client hook, before they become an ordinary patch.
+      codec: allowWrite && tool.name !== REPLACE_LINES_TOOL_NAME
+        ? { ...tool.codec, preserveRawArguments: true,
+            decodeArguments: GROK_PATCH_HOOK_CODEC.decodeArguments,
+            encodeHistoryInput: GROK_PATCH_HOOK_CODEC.encodeHistoryInput }
+        : tool.codec,
     });
     extra.push({
       type: "function",
@@ -713,7 +767,7 @@ export function applyGrokEditFacade(tools, namespaces, route, structuredPatch, o
       description: tool.codec.description(),
       parameters: tool.codec.parameters,
     });
-    installed.add(tool.name);
+
   }
   const nativeExec = nativeExecRelayTarget(tools, namespaces);
   const functionRelays = [];
@@ -724,6 +778,7 @@ export function applyGrokEditFacade(tools, namespaces, route, structuredPatch, o
         nativeName: nativeExec.nativeName,
         nativeNamespace: nativeExec.nativeNamespace,
         rewriteArguments: compileReadFileCommand,
+        argumentErrorCode: facadeArgumentErrorCode(READ_FILE_TOOL_NAME, READ_FILE_PARAMETERS),
         maxArgumentBytes: MAX_STRUCTURED_PATCH_BYTES,
       });
       extra.push({
@@ -732,7 +787,7 @@ export function applyGrokEditFacade(tools, namespaces, route, structuredPatch, o
         description: "Read a bounded slice of a local file. Defaults to 400 lines.",
         parameters: READ_FILE_PARAMETERS,
       });
-      installed.add(READ_FILE_TOOL_NAME);
+
     }
     if (!existing.has(GREP_TOOL_NAME) && ripgrepAvailable()) {
       functionRelays.push({
@@ -740,6 +795,7 @@ export function applyGrokEditFacade(tools, namespaces, route, structuredPatch, o
         nativeName: nativeExec.nativeName,
         nativeNamespace: nativeExec.nativeNamespace,
         rewriteArguments: compileGrepCommand,
+        argumentErrorCode: facadeArgumentErrorCode(GREP_TOOL_NAME, GREP_PARAMETERS),
         maxArgumentBytes: MAX_STRUCTURED_PATCH_BYTES,
       });
       extra.push({
@@ -748,7 +804,7 @@ export function applyGrokEditFacade(tools, namespaces, route, structuredPatch, o
         description: "Search local file contents with a regex. Optional path and glob.",
         parameters: GREP_PARAMETERS,
       });
-      installed.add(GREP_TOOL_NAME);
+
     }
     if (!existing.has(LIST_DIR_TOOL_NAME)) {
       functionRelays.push({
@@ -756,6 +812,7 @@ export function applyGrokEditFacade(tools, namespaces, route, structuredPatch, o
         nativeName: nativeExec.nativeName,
         nativeNamespace: nativeExec.nativeNamespace,
         rewriteArguments: compileListDirCommand,
+        argumentErrorCode: facadeArgumentErrorCode(LIST_DIR_TOOL_NAME, LIST_DIR_PARAMETERS),
         maxArgumentBytes: MAX_STRUCTURED_PATCH_BYTES,
       });
       extra.push({
@@ -764,14 +821,15 @@ export function applyGrokEditFacade(tools, namespaces, route, structuredPatch, o
         description: "List a local directory.",
         parameters: LIST_DIR_PARAMETERS,
       });
-      installed.add(LIST_DIR_TOOL_NAME);
+
     }
-    if (!existing.has(RUN_TERMINAL_COMMAND_TOOL_NAME)) {
+    if (options.patchHook === true && !existing.has(RUN_TERMINAL_COMMAND_TOOL_NAME)) {
       functionRelays.push({
         providerName: RUN_TERMINAL_COMMAND_TOOL_NAME,
         nativeName: nativeExec.nativeName,
         nativeNamespace: nativeExec.nativeNamespace,
         rewriteArguments: compileRunTerminalCommand,
+        argumentErrorCode: facadeArgumentErrorCode(RUN_TERMINAL_COMMAND_TOOL_NAME, RUN_TERMINAL_COMMAND_PARAMETERS),
         maxArgumentBytes: MAX_STRUCTURED_PATCH_BYTES,
       });
       extra.push({
@@ -780,15 +838,17 @@ export function applyGrokEditFacade(tools, namespaces, route, structuredPatch, o
         description: "Run a shell command for git, tests, and installs.",
         parameters: RUN_TERMINAL_COMMAND_PARAMETERS,
       });
-      installed.add(RUN_TERMINAL_COMMAND_TOOL_NAME);
+
     }
   }
-  if (aliases.length && !registerCustomToolRelays(namespaces, aliases)) {
-    return tools;
+  const registered = new Set();
+  if (aliases.length && registerCustomToolRelays(namespaces, aliases)) {
+    for (const alias of aliases) registered.add(alias.providerName);
   }
-  if (functionRelays.length && !registerFunctionRelays(namespaces, functionRelays)) {
-    return aliases.length ? [...tools, ...extra.filter((tool) => tool.name === SEARCH_REPLACE_TOOL_NAME || tool.name === WRITE_TOOL_NAME)] : tools;
+  if (functionRelays.length && registerFunctionRelays(namespaces, functionRelays)) {
+    for (const relay of functionRelays) registered.add(relay.providerName);
   }
-  if (extra.length === 0) return hideNativeTools(tools, nativeExec, installed, existing);
-  return hideNativeTools([...tools, ...extra], nativeExec, installed, existing);
+  for (const name of registered) installed.add(name);
+  const result = [...tools, ...extra.filter((tool) => registered.has(tool.name))];
+  return options.patchHook === true ? hideNativeTools(result, nativeExec, installed, existing) : result;
 }

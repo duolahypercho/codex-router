@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import childProcess, { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { once } from "node:events";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
@@ -316,8 +316,27 @@ for (const { depth, ownerSignal } of [
         "fixtures/process-tree-nested-owner.mjs",
         import.meta.url,
       ));
+      // A directly published PID file is observable between open/truncate and
+      // write. Hold that interval open so the readiness contract is exercised
+      // deterministically; an atomic temporary-file rename never exposes it.
+      const preload = path.join(directory, "delay-ready-write.cjs");
+      writeFileSync(preload, [
+        "const fs = require('node:fs')",
+        "const originalWrite = fs.writeFileSync",
+        "fs.writeFileSync = function(file, ...args) {",
+        `  if (file === ${JSON.stringify(pidFile)}) {`,
+        "    fs.closeSync(fs.openSync(file, 'w'))",
+        "    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250)",
+        "  }",
+        "  return originalWrite.call(this, file, ...args)",
+        "}",
+      ].join(";\n"));
       const owner = spawn(process.execPath, [fixture, String(depth), pidFile], {
         stdio: "ignore",
+        env: {
+          ...process.env,
+          NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require=${JSON.stringify(preload)}`,
+        },
       });
       let terminalPid;
       try {

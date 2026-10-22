@@ -1,6 +1,23 @@
 import {
   actualServiceTierFromValue,
 } from "./request-diagnostics.mjs";
+import { estimateInputTokens } from "./response-usage.mjs";
+import { DEFAULT_IMAGE_TOKEN_BOUND } from "./prompt-image-usage.mjs";
+
+// Count the final provider request, after tool alternatives, hosted tools and
+// repair instructions have been added. This is an explicit estimate, separate
+// from xAI's cumulative bill across internal inferences. Never tokenize sealed
+// reasoning as plaintext or treat it as a measured context count.
+export function grokContextFields(request, usage) {
+  const estimate = estimateInputTokens(JSON.stringify(request), {
+    minimumTokens: 0, maxTokensPerImage: DEFAULT_IMAGE_TOKEN_BOUND,
+  });
+  const fields = { grok_context_input_tokens: estimate };
+  for (const [source, target] of [["billed_prompt_tokens", "grok_billed_input_tokens"], ["billed_completion_tokens", "grok_billed_output_tokens"]]) {
+    if (Number.isSafeInteger(usage?.[source]) && usage[source] >= 0) fields[target] = usage[source];
+  }
+  return { provider_specific_fields: fields };
+}
 
 // SSE joins repeated `data:` fields with a line feed before dispatch.
 // Reading only the first field truncates multiline JSON.
@@ -27,27 +44,26 @@ export function parseSseBlockEvent(rawEvent) {
   }
 }
 
-export const DEFAULT_PROGRESS_ONLY_MAX_TEXT = 120;
-export const DEFAULT_PROGRESS_ONLY_MIN_OUTPUT_TOKENS = 400;
 export const REPAIR_FINAL_TOOL = "__codex_router_submit_final";
-// The trigger below cannot tell a stalled turn from a finished one -- a task
-// that ends "Done." is byte-for-byte the same shape as one that stops after
-// "Next I will update the deck.". So the nudge must let the model decline. An
-// imperative "call tools now" makes a finished turn invent a tool call, and
-// `shouldPreferRetryTurn` would then graft that call onto the answer and the
-// client would run it. Offering the no-tool branch first routes the finished
-// case into keep-first instead.
-const PROGRESS_ONLY_NUDGE =
-  "If your previous message already completed the task, restate the final answer " +
-  "and call no tool. Otherwise continue the same task now by calling the tools you need.";
-// After a tool result the model is mid-task. Leading with "if you are done,
-// stop" lets it treat a status sentence as completion. Lead with continue,
-// and still allow a finished request to call nothing.
-const AFTER_TOOL_NUDGE =
+// Decide whether to continue or finish on the first post-tool generation.
+// Multiple independent client actions are allowed; the private final must stand alone.
+const afterToolInstruction = (finalTool) =>
   "The previous tool call finished. Continue the user's task now. " +
-  "You must make exactly one function call: call the next task tool if more work is needed, " +
-  `or call ${REPAIR_FINAL_TOOL} with the complete final answer if the task is fully done. ` +
-  "Do not return prose outside a function call.";
+  "Call the next task tool or tools if more work is needed, " +
+  "or give the complete final answer if the task is fully done. " +
+  (finalTool ? `You may also call ${finalTool} alone with that final answer. ` : "") +
+  "Use the actual tool results to decide what remains; do not repeat completed work unnecessarily.";
+
+export function allowsAutomaticToolChoice(chat) {
+  return chat?.tool_choice === undefined || chat.tool_choice === "auto";
+}
+
+export function privateFinalToolName(chat) {
+  const names = new Set((chat?.tools || []).map((tool) => tool?.function?.name));
+  let name = REPAIR_FINAL_TOOL;
+  for (let suffix = 1; names.has(name); suffix += 1) name = `${REPAIR_FINAL_TOOL}_${suffix}`;
+  return name;
+}
 
 const REPAIR_FINAL_TOOL_DEFINITION = {
   type: "function",
@@ -63,8 +79,8 @@ const REPAIR_FINAL_TOOL_DEFINITION = {
   },
 };
 
-// The last non-system message is a tool result. Language-independent: a
-// short stop after tool output is a mid-task stall, not a caption match.
+// The last non-system message is a tool result. This identifies continuation
+// context, not whether the user's task is semantically complete.
 export function lastClientMessageWasToolResult(chat) {
   const messages = Array.isArray(chat?.messages) ? chat.messages : [];
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -75,61 +91,40 @@ export function lastClientMessageWasToolResult(chat) {
   return false;
 }
 
-export function requestOffersClientTools(chat) {
-  return (
-    Array.isArray(chat?.tools) &&
-    chat.tools.some((tool) => tool?.type === "function" && tool.function?.name)
-  );
+// A completed pre-tool response belongs to the caller, even when it is empty.
+// Only an empty post-tool continuation has an established recovery contract.
+export function isProgressOnlyStop(turn, { afterToolResult = false } = {}) {
+  if (!afterToolResult || turn?.terminalStatus !== "completed" || turn.toolCalls?.length > 0) return false;
+  return !String(turn.contentText ?? "").trim();
 }
 
-// Not a detector for "the model stalled" -- no such signal exists in the turn.
-// This matches the observable shape: short visible text, no client tool call,
-// and enough output tokens that the model clearly reasoned. A finished task
-// answered in one line matches too, which is why the retry has to be safe to
-// lose rather than accurate to fire. See PROGRESS_ONLY_NUDGE.
-//
-// After a tool result, a short no-tool stop is mid-task even when this turn
-// was cheap. The token floor stays for turns that follow a user message, so
-// a one-line verdict like "Done." is not retried.
-export function isProgressOnlyStop(
-  turn,
-  {
-    maxText = DEFAULT_PROGRESS_ONLY_MAX_TEXT,
-    minOutputTokens = DEFAULT_PROGRESS_ONLY_MIN_OUTPUT_TOKENS,
-    afterToolResult = false,
-  } = {},
-) {
-  if (turn?.terminalStatus !== "completed" || turn.toolCalls?.length > 0) return false;
-  // After a tool result, prose alone is never accepted as proof of completion.
-  // It is repaired into either another client tool call or an internal final
-  // answer, regardless of length. This is the invariant that prevents a long
-  // progress update from bypassing the short-text heuristic.
-  if (afterToolResult) return true;
-  const text = typeof turn.contentText === "string" ? turn.contentText : "";
-  if (text.length > maxText) return false;
-  const tokens = Number(turn.usage?.completion_tokens);
-  return Number.isFinite(tokens) && tokens >= minOutputTokens;
-}
-
-// Prefer the retry only when it actually called a tool. A second short
-// status sentence is not an improvement; keep the first answer.
-export function shouldPreferRetryTurn(second) {
-  return second?.terminalStatus === "completed" && Boolean(second.toolCalls?.length);
-}
-
-// A repair turn after a tool result is a protocol decision, not a prose
-// heuristic. The retry must either call a tool or explicitly certify a final
-// answer tool call requested above. Anything else is an invalid repair
-// and must become a visible router error rather than a clean `stop`.
-export function classifyAfterToolRepair(second) {
+// A successful terminal may finish with native text, client tools, or the
+// optional private final. Reject malformed/mixed actions and empty output.
+export function classifyAfterToolRepair(second, { finalTool = REPAIR_FINAL_TOOL, privateFinalOffered = true, clientToolNames } = {}) {
   // An item-level close only finishes that call's arguments. It does not
   // certify the response: failed, incomplete, and truncated attempts can all
   // contain a complete-looking client call or private final-answer call.
   if (second?.terminalStatus !== "completed") return { action: "fail" };
   const calls = Array.isArray(second?.toolCalls) ? second.toolCalls : [];
+  // A completed text response is a native final, not a protocol violation.
+  // Requiring a synthetic tool here can force an otherwise finished model to
+  // invent actions or generate indefinitely while trying to satisfy the choice.
+  if (!calls.length) {
+    const contentText = typeof second.contentText === "string" ? second.contentText.trim() : "";
+    return contentText ? { action: "final", contentText } : { action: "fail" };
+  }
+  const finalCalls = calls.filter((call) => call?.function?.name === finalTool);
+  if (finalCalls.length && !privateFinalOffered) return { action: "fail" };
+  if (!finalCalls.length) {
+    return calls.every((call) => call?.function?.name &&
+      (!clientToolNames || clientToolNames.has(call.function.name)))
+      ? { action: "tools" } : { action: "fail" };
+  }
+  // Prose is still held here. A single valid private final is authoritative:
+  // discard preceding commentary rather than turning a completed answer into
+  // a protocol error. Mixing it with a client action remains forbidden.
   if (calls.length !== 1) return { action: "fail" };
-  const [call] = calls;
-  if (call?.function?.name !== REPAIR_FINAL_TOOL) return { action: "tools" };
+  const [call] = finalCalls;
   let args;
   try {
     args = JSON.parse(call.function.arguments || "{}");
@@ -137,7 +132,7 @@ export function classifyAfterToolRepair(second) {
     return { action: "fail" };
   }
   const finalText = typeof args?.answer === "string" ? args.answer.trim() : "";
-  if (!finalText) return { action: "fail" };
+  if (!finalText || !args || Array.isArray(args) || Object.keys(args).length !== 1) return { action: "fail" };
   return { action: "final", contentText: finalText };
 }
 
@@ -168,7 +163,15 @@ export function toolCallDeltas(turn) {
   );
 }
 
-export function withProgressOnlyNudge(chat, { afterToolResult = false } = {}) {
+export function withProgressOnlyNudge(chat, {
+  afterToolResult = false,
+  finalTool = privateFinalToolName(chat),
+  maxTools = 350,
+  clientToolCount = Array.isArray(chat?.tools) ? chat.tools.length : 0,
+} = {}) {
+  // Explicit caller choices are authoritative, including on a recovery attempt.
+  if (!afterToolResult || !allowsAutomaticToolChoice(chat)) return chat;
+  const offerPrivateFinal = afterToolResult && clientToolCount < maxTools;
   const messages = Array.isArray(chat?.messages) ? chat.messages : [];
   const nudged = {
     ...chat,
@@ -178,57 +181,21 @@ export function withProgressOnlyNudge(chat, { afterToolResult = false } = {}) {
         // Keep the tool result as the last model input. A trailing user message
         // starts a new conversational turn on xAI and can make a forced tool
         // choice complete empty. Developer text is hoisted into `instructions`.
-        role: afterToolResult ? "developer" : "user",
-        content: afterToolResult ? AFTER_TOOL_NUDGE : PROGRESS_ONLY_NUDGE,
+        role: "developer",
+        content: afterToolInstruction(offerPrivateFinal ? finalTool : undefined),
       },
     ],
   };
-  if (!afterToolResult) return nudged;
+  if (!offerPrivateFinal) return nudged;
   const tools = Array.isArray(chat?.tools) ? chat.tools : [];
   return {
     ...nudged,
     tools: [
-      ...tools.filter((tool) => tool?.function?.name !== REPAIR_FINAL_TOOL),
-      REPAIR_FINAL_TOOL_DEFINITION,
+      ...tools,
+      { ...REPAIR_FINAL_TOOL_DEFINITION, function: { ...REPAIR_FINAL_TOOL_DEFINITION.function, name: finalTool } },
     ],
-    tool_choice: "required",
+    tool_choice: "auto",
   };
-}
-
-function markProgressOnlyUsage(usage) {
-  if (!usage) return { retries: 1, progress_only_retried: true };
-  return { ...usage, retries: 1, progress_only_retried: true };
-}
-
-export function mergeMappedUsage(first, second) {
-  if (!first) return markProgressOnlyUsage(second);
-  if (!second) return markProgressOnlyUsage(first);
-  const prompt = (first.prompt_tokens || 0) + (second.prompt_tokens || 0);
-  const completion = (first.completion_tokens || 0) + (second.completion_tokens || 0);
-  const cached =
-    first.prompt_tokens_details?.cached_tokens === undefined &&
-    second.prompt_tokens_details?.cached_tokens === undefined
-      ? undefined
-      : (first.prompt_tokens_details?.cached_tokens || 0) +
-        (second.prompt_tokens_details?.cached_tokens || 0);
-  const reasoning =
-    first.completion_tokens_details?.reasoning_tokens === undefined &&
-    second.completion_tokens_details?.reasoning_tokens === undefined
-      ? undefined
-      : (first.completion_tokens_details?.reasoning_tokens || 0) +
-        (second.completion_tokens_details?.reasoning_tokens || 0);
-  const merged = {
-    prompt_tokens: prompt,
-    completion_tokens: completion,
-    total_tokens: prompt + completion,
-    retries: 1,
-    progress_only_retried: true,
-  };
-  if (cached !== undefined) merged.prompt_tokens_details = { cached_tokens: cached };
-  if (reasoning !== undefined) {
-    merged.completion_tokens_details = { reasoning_tokens: reasoning };
-  }
-  return merged;
 }
 
 const TOOL_ITEM_TYPES = new Set(["function_call", "custom_tool_call"]);
@@ -310,6 +277,18 @@ function pushToolArgumentDelta(state, entry, delta) {
   });
 }
 
+function reconcileToolArguments(state, entry, complete) {
+  const streamed = streamedToolArguments(state, state.toolCalls.indexOf(entry));
+  if (!complete.startsWith(streamed)) {
+    throw Object.assign(new Error("Grok tool argument snapshots disagree with the streamed arguments."), {
+      status: 502,
+      code: "grok_tool_arguments_mismatch",
+    });
+  }
+  entry.function.arguments = complete;
+  pushToolArgumentDelta(state, entry, complete.slice(streamed.length));
+}
+
 function appendToolArgumentDelta(state, itemId, delta) {
   const entry = itemId ? state.toolByItemId.get(itemId) : undefined;
   if (!entry || !delta) return;
@@ -318,16 +297,13 @@ function appendToolArgumentDelta(state, itemId, delta) {
 }
 
 function backfillToolArgumentDeltas(state) {
-  state.toolCalls.forEach((entry, index) => {
+  state.toolCalls.forEach((entry) => {
     const finalArgs = entry.function.arguments || "";
-    const streamed = streamedToolArguments(state, index);
-    if (!finalArgs || streamed === finalArgs) return;
-    const extra = finalArgs.startsWith(streamed) ? finalArgs.slice(streamed.length) : finalArgs;
-    pushToolArgumentDelta(state, entry, extra);
+    reconcileToolArguments(state, entry, finalArgs);
   });
 }
 
-function ensureToolCall(state, item, itemId, { complete = false } = {}) {
+function ensureToolCall(state, item, itemId) {
   if (!item || !TOOL_ITEM_TYPES.has(item.type)) return undefined;
   const key = itemId || item.id || item.call_id;
   let entry = key ? state.toolByItemId.get(key) : undefined;
@@ -346,14 +322,16 @@ function ensureToolCall(state, item, itemId, { complete = false } = {}) {
           index: state.toolCalls.length - 1,
           id: entry.id,
           type: "function",
-          function: { name: entry.function.name, arguments: complete ? args : "" },
+          function: { name: entry.function.name, arguments: args },
         },
       ],
     });
   } else {
     if (item.name) entry.function.name = state.toolNameMapper(item.name);
     const args = toolArguments(item);
-    if (args) entry.function.arguments = args;
+    if (typeof item.arguments === "string" || typeof item.input === "string") {
+      reconcileToolArguments(state, entry, args);
+    }
   }
   return entry;
 }
@@ -402,9 +380,7 @@ export function applyResponsesEvent(state, event) {
     case "response.output_item.done": {
       const item = event.item;
       if (TOOL_ITEM_TYPES.has(item?.type)) {
-        ensureToolCall(state, item, item.id, {
-          complete: event.type === "response.output_item.done",
-        });
+        ensureToolCall(state, item, item.id);
       }
       break;
     }
@@ -419,16 +395,17 @@ export function applyResponsesEvent(state, event) {
       if (typeof complete === "string") {
         const entry = event.item_id ? state.toolByItemId.get(event.item_id) : undefined;
         if (entry) {
-          const extra = complete.startsWith(entry.function.arguments)
-            ? complete.slice(entry.function.arguments.length)
-            : complete;
-          entry.function.arguments = complete;
-          pushToolArgumentDelta(state, entry, extra);
+          reconcileToolArguments(state, entry, complete);
         }
       }
       break;
     }
     case "response.completed": {
+      if (completedStatus(event.response) === "completed") {
+        for (const item of event.response?.output || []) {
+          if (TOOL_ITEM_TYPES.has(item?.type)) ensureToolCall(state, item, item.id);
+        }
+      }
       recordTerminal(state, completedStatus(event.response), event.response);
       break;
     }

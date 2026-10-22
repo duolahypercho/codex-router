@@ -1,0 +1,1 @@
+- **Grok patch history uses a separate, non-callable wire identity.** Native patch transcripts retain their exact inputs and results without teaching the structured edit tool an incompatible argument envelope; current calls retain the client permission and patch validation checks.

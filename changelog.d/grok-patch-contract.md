@@ -1,0 +1,1 @@
+- **Grok structured patch schemas now describe the compiler's line, path, anchor and edit requirements.** Invalid streamed patch arguments retain a bounded compiler error category instead of losing the cause behind a generic relay error; arguments and source text remain private.

@@ -175,3 +175,94 @@ test("pooled keys rotate on 429 and relay success despite invalid reset headers"
     await new Promise((resolve) => upstream.close(resolve));
   }
 });
+
+test("Grok API forwards opt-in Fast and preserves provider-reported tiers in JSON and SSE", async () => {
+  const planned = [];
+  const captured = [];
+  const upstream = http.createServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    const body = JSON.parse(Buffer.concat(chunks));
+    const plan = planned[captured.length];
+    captured.push({ body, authorization: request.headers.authorization });
+    const result = { id: "chatcmpl_grok_tier_fixture", object: body.stream ? "chat.completion.chunk" : "chat.completion",
+      model: body.model, choices: [], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      provider_specific_fields: { fixture: "retained" },
+      ...(plan.reported === undefined ? {} : { service_tier: plan.reported }) };
+    if (body.stream) {
+      response.writeHead(200, { "Content-Type": "text/event-stream", "x-codex-router-grok-service-tier": "priority" });
+      response.write('data: {"choices":[{"index":0,"delta":{"content":"Привет"}}]}\n\n');
+      response.end(`data: ${JSON.stringify(result)}\n\ndata: [DONE]\n\n`);
+    } else {
+      result.choices = [{ index: 0, message: { role: "assistant", content: "Fixture complete." }, finish_reason: "stop" }];
+      const bytes = JSON.stringify(result);
+      response.writeHead(200, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(bytes),
+        "x-codex-router-grok-service-tier": "priority" });
+      response.end(bytes);
+    }
+  });
+  const upstreamPort = await listen(upstream);
+  const forwarderPort = await openPort();
+  const child = spawn(process.execPath, [path.join(repoRoot, "src", "api-forwarder.mjs")], {
+    cwd: repoRoot,
+    env: { ...process.env, MODEL_ROUTER_TARGET: "codex", MODEL_ROUTER_INTERNAL_KEY: internalKey,
+      MODEL_ROUTER_API_PORT: String(forwarderPort), MODEL_ROUTER_QUIET: "1",
+      MODEL_ROUTER_API_KEY_POOL_PATH: path.join(root, "grok-tier-pools.json"),
+      XAI_API_BASE_URL: `http://127.0.0.1:${upstreamPort}/v1`, XAI_API_KEY: "GROK_API_FIXTURE_KEY",
+      OPENCODE_GO_BASE_URL: `http://127.0.0.1:${upstreamPort}/v1`, OPENCODE_GO_API_KEY: "POOL_KEY_TWO" },
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  child.stderr.setEncoding("utf8");
+  let errors = "";
+  child.stderr.on("data", chunk => { errors += chunk; });
+  const base = `http://127.0.0.1:${forwarderPort}`;
+  const send = payload => fetch(`${base}/v1/chat/completions`, { method: "POST",
+    headers: { Authorization: `Bearer ${internalKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ messages: [{ role: "user", content: "Synthetic tier fixture." }], ...payload }) });
+  try {
+    await waitForHealth(base, child, () => errors);
+    for (const model of ["grok-api-grok-4-5", "grok-api-grok-4-7"]) for (const stream of [false, true]) {
+      for (const [requested, reported, expected] of [
+        ["priority", "priority", "priority"], ["priority", "default", "default"],
+        ["priority", undefined, undefined], ["default", "future-tier", "unknown"],
+        [undefined, "default", "default"],
+      ]) {
+        planned.push({ reported });
+        const response = await send({ model, stream, ...(requested ? { service_tier: requested } : {}) });
+        assert.equal(response.status, 200);
+        assert.equal(response.headers.get("x-codex-router-grok-service-tier"), stream ? null : expected ?? null);
+        assert.equal(captured.at(-1).body.model, model === "grok-api-grok-4-5" ? "grok-4.5" : "grok-4.7");
+        assert.equal(captured.at(-1).body.service_tier, requested, "an omitted tier must remain opt-in");
+        assert.equal(captured.at(-1).authorization, "Bearer GROK_API_FIXTURE_KEY");
+        let result;
+        if (stream) {
+          assert.match(response.headers.get("content-type"), /text\/event-stream/);
+          const text = await response.text();
+          assert.match(text, /Привет/);
+          assert.ok(text.endsWith("data: [DONE]\n\n"));
+          result = JSON.parse(text.split("\n\n")[1].slice(5));
+        } else {
+          assert.equal(response.headers.get("content-length"), null, "rewritten JSON must not retain the upstream byte count");
+          result = await response.json();
+        }
+        assert.equal(result.provider_specific_fields.grok_service_tier, expected);
+        assert.equal(result.provider_specific_fields.fixture, "retained");
+        assert.equal(result.service_tier, reported === "future-tier" ? undefined : reported);
+      }
+    }
+    // The compatibility marker belongs only to first-party Grok API traffic.
+    planned.push({ reported: "priority" });
+    const other = await send({ model: "opencode-go-mimo-v2-5", service_tier: "priority" });
+    assert.equal(other.status, 200);
+    assert.equal(other.headers.get("x-codex-router-grok-service-tier"), "priority", "unrelated providers retain their existing header policy");
+    const untouched = await other.json();
+    assert.equal(untouched.service_tier, "priority");
+    assert.deepEqual(untouched.provider_specific_fields, { fixture: "retained" });
+    assert.equal(captured.length, 21, "every local fixture request is single-shot");
+  } finally {
+    child.kill("SIGTERM");
+    if (child.exitCode === null) await new Promise(resolve => child.once("exit", resolve));
+    upstream.closeAllConnections();
+    await new Promise(resolve => upstream.close(resolve));
+  }
+});

@@ -5,10 +5,12 @@ import path from "node:path";
 import { test } from "node:test";
 
 import { privateFileIsProtected } from "../src/file-security.mjs";
-import { classifyRoutedFailure } from "../src/model-failover.mjs";
 
 const stateDir = mkdtempSync(path.join(os.tmpdir(), "auto-review-fallback-test-"));
 process.env.CODEX_ROUTER_STATE_DIR = stateDir;
+// model-failover imports paths.mjs: initialize the fixture before that module
+// captures STATE_DIR, otherwise this test writes into the real installation.
+const { classifyRoutedFailure } = await import("../src/model-failover.mjs");
 
 const {
   AUTO_REVIEW_FALLBACK_PATH,

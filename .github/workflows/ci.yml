@@ -413,6 +413,23 @@ jobs:
             ' "$embedded"
           }
 
+          diagnose_app_launch() {
+            /usr/bin/osascript -l JavaScript -e '
+              ObjC.import("AppKit");
+              const result = [];
+              for (const identifier of ["io.github.codex-router.tray", "io.github.codex-router.control-center"]) {
+                const apps = $.NSRunningApplication.runningApplicationsWithBundleIdentifier(identifier);
+                for (let index = 0; index < apps.count; index += 1) {
+                  const app = apps.objectAtIndex(index);
+                  result.push({ identifier, pid: Number(app.processIdentifier),
+                    finishedLaunching: Boolean(app.isFinishedLaunching),
+                    terminated: Boolean(app.isTerminated), bundlePath: app.bundleURL.path.js });
+                }
+              }
+              JSON.stringify(result);
+            ' >&2 || true
+          }
+
           wait_for_lifecycle() {
             expected_running=$1
             expected_ready=$2
@@ -420,6 +437,7 @@ jobs:
             last_state=
             for _ in {1..120}; do
               if ! last_state=$(query_lifecycle); then
+                diagnose_app_launch
                 cat "$log" >&2 || true
                 return 1
               fi
@@ -444,6 +462,7 @@ jobs:
             done
             printf 'Timed out waiting for Control Center lifecycle %s/%s/%s; last state: %s\n' \
               "$expected_running" "$expected_ready" "$expected_visible" "$last_state" >&2
+            diagnose_app_launch
             cat "$log" >&2 || true
             return 1
           }

@@ -33,6 +33,19 @@ if (cancellationBoundaryControl && !nativeHook) {
 }
 const codexBinary = process.argv.find((arg) => arg.startsWith("--codex="))?.slice("--codex=".length);
 if (codexBinary && !structured) throw new Error("--codex requires --structured or --native-hook");
+const nativeToolPolicy = process.argv.includes("--native-tool-policy");
+if (nativeToolPolicy && (!codexBinary || !structured || nativeHook)) {
+  throw new Error("--native-tool-policy requires --structured --codex and no native hook");
+}
+const nativeScheduler = process.argv.find((arg) => arg.startsWith("--native-scheduler="))?.slice("--native-scheduler=".length);
+if (nativeScheduler !== undefined && (!nativeToolPolicy || !["read", "race", "patch"].includes(nativeScheduler)
+  || process.argv.includes("--native-exec") || process.argv.some((arg) => arg.startsWith("--native-fault=")))) {
+  throw new Error("--native-scheduler=read|race|patch requires --native-tool-policy and no native exec/fault mode");
+}
+const nativeExec = process.argv.includes("--native-exec");
+if (nativeExec && (!codexBinary || !structured || nativeHook || process.argv.some((arg) => arg.startsWith("--native-fault=")))) {
+  throw new Error("--native-exec requires --structured --codex and no native hook/fault mode");
+}
 const nativeFault = process.argv.find((arg) => arg.startsWith("--native-fault="))?.slice("--native-fault=".length);
 if (nativeFault && (!codexBinary || !["disconnect", "duplicate-close", "invalid-arguments"].includes(nativeFault))) {
   throw new Error("--native-fault=disconnect|duplicate-close|invalid-arguments requires --codex");
@@ -54,6 +67,7 @@ if (paddingOption !== undefined && (!nativeHook || !codexBinary || singleNativeC
 }
 const structuredOperations = { operations: [{ op: "add", path: 'café "quotes".txt', lines: ["hello “unicode”"] }] };
 let nativeRecoveryProbe;
+let nativeIngressServer;
 let hookRawWireArguments;
 const nativeInvalidArguments = ' { "operations" : [] } \n' + " ".repeat(errorPadding);
 const hookHeaders = nativeHook && !hookEndpoint ? { [GROK_PATCH_HOOK_HEADER]: GROK_PATCH_HOOK_CAPABILITY } : {};
@@ -65,6 +79,41 @@ if (!python) {
   throw new Error(
     "usage: node scripts/verify-grok-apply-patch-guidance.mjs <venv-python>",
   );
+}
+
+// The locked gateway includes jsonschema. Check compiler/schema parity with an
+// independent validator before starting any servers, on every protocol CI OS.
+if (structured && !nativeHook) {
+  const update = (hunk) => ({ operations: [{ op: "update", path: "x", hunks: [hunk] }] });
+  const added = { kind: "add", text: "new" };
+  const cases = [
+    ["empty anchor", update({ anchor: "", lines: [added] }), false],
+    ["embedded newline", { operations: [{ op: "add", path: "x", lines: ["a\nb"] }] }, false],
+    ["trimmed path", { operations: [{ op: "delete", path: " x" }] }, false],
+    ["no change", update({ lines: [{ kind: "context", text: "unchanged" }] }), false],
+    ["unanchored update", update({ lines: [added] }), true],
+    ["anchored update", update({ anchor: "fn", lines: [added], endOfFile: true }), true],
+    ["empty file", { operations: [{ op: "add", path: "x", lines: [] }] }, true],
+    ["Unicode", { operations: [{ op: "add", path: "🧙.txt", lines: ["Привет", ""] }] }, true],
+  ];
+  for (const [name, value, valid] of cases) {
+    if (valid) assert.doesNotThrow(() => serializeStructuredPatch(value), name);
+    else assert.throws(() => serializeStructuredPatch(value), undefined, name);
+  }
+  const checked = spawnSync(python, ["-c", [
+    "import json,sys,jsonschema",
+    "data=json.load(sys.stdin)",
+    "jsonschema.Draft202012Validator.check_schema(data['schema'])",
+    "validator=jsonschema.Draft202012Validator(data['schema'])",
+    "for name,value,expected in data['cases']:",
+    "    assert validator.is_valid(value) == expected, name",
+  ].join("\n")], {
+    input: JSON.stringify({ schema: GROK_STRUCTURED_PATCH_CODEC.parameters, cases }),
+    encoding: "utf8", timeout: 30_000,
+  });
+  assert.ifError(checked.error);
+  assert.equal(checked.status, 0, checked.stderr);
+  process.stdout.write(`ok ${cases.length} independent structured patch schema/compiler cases\n`);
 }
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -303,6 +352,160 @@ function mockFunctionCall(callId, argumentsText, name = APPLY_PATCH_TOOL_NAME, i
   ]);
 }
 
+// Diagnostic for the installed client's scheduler, not a model-quality test.
+// The race case intentionally asserts the current failure. A future client fix
+// should make this diagnostic fail instead of silently preserving a stale claim.
+function mockNativeScheduler(body, response) {
+  const probe = nativeRecoveryProbe;
+  probe.requests += 1;
+  assert.ok(probe.requests <= 2, "two supplied actions must return without a hidden model retry");
+  assert.equal(probe.ingressParallelPolicy, true, "this diagnostic exercises the current native parallel policy");
+  assert.equal(body.parallel_tool_calls, probe.ingressParallelPolicy);
+  response.writeHead(200, { "Content-Type": "text/event-stream" });
+  if (probe.requests === 1) {
+    const tool = body.tools?.find((item) => nativeScheduler === "patch"
+      ? item.parameters?.properties?.operations : item.name === "exec_command");
+    assert.ok(tool, "the native tool must survive the complete Router path");
+    const events = [];
+    for (const [output_index, name] of ["A", "B"].entries()) {
+      const args = nativeScheduler === "patch"
+        ? { operations: [{ op: "update", path: "fixture.txt", hunks: [{ lines: [
+          { kind: "remove", text: "old" }, { kind: "add", text: name },
+        ] }] }] }
+        : { cmd: `node scheduler-fixture.cjs ${name} ${nativeScheduler}`, yield_time_ms: 10000, max_output_tokens: 1000 };
+      const callId = `call_scheduler_${name}`;
+      const item = { type: "function_call", id: `fc_${callId}`, call_id: callId, name: tool.name };
+      const argumentsText = JSON.stringify(args);
+      events.push(
+        { type: "response.output_item.added", output_index, item },
+        { type: "response.function_call_arguments.delta", output_index, item_id: item.id, delta: argumentsText },
+        { type: "response.output_item.done", output_index, item: { ...item, arguments: argumentsText } },
+      );
+    }
+    events.push({ type: "response.completed", response: { status: "completed", usage: { input_tokens: 12, output_tokens: 9 } } });
+    response.end(sse(events));
+    return;
+  }
+  const outputs = body.input?.filter((item) => item.type === "function_call_output" && ["call_scheduler_A", "call_scheduler_B"].includes(item.call_id));
+  assert.equal(outputs?.length, 2);
+  assert.equal(new Set(outputs.map((item) => item.call_id)).size, 2);
+  const fixture = readFileSync(probe.fixturePath, "utf8");
+  if (nativeScheduler === "patch") {
+    assert.ok(["A\n", "B\n"].includes(fixture), "either patch may win; dispatch is not guaranteed FIFO");
+    assert.equal(outputs.filter((item) => /Success/.test(String(item.output))).length, 1);
+    assert.equal(outputs.filter((item) => /Failed to find expected lines/.test(String(item.output))).length, 1);
+  } else {
+    for (const item of outputs) {
+      assert.match(String(item.output), /Process exited with code 0/);
+      assert.match(String(item.output), /BARRIER_PASSED/);
+    }
+    for (const name of ["A", "B"]) {
+      assert.equal(readFileSync(path.join(path.dirname(probe.fixturePath), `ready.${name}`), "utf8"), "old\n");
+    }
+    assert.equal(fixture, nativeScheduler === "race" ? "old\nB\n" : "old\n");
+  }
+  probe.completed = true;
+  process.stdout.write(`ok native scheduler ${nativeScheduler}: ${JSON.stringify({ parallelToolCalls: body.parallel_tool_calls, fixture, outputs })}\n`);
+  const text = "offline scheduler diagnostic complete";
+  const item = { type: "message", id: "msg_scheduler_final", role: "assistant", status: "completed", content: [{ type: "output_text", text, annotations: [] }] };
+  response.end(sse([
+    { type: "response.created", response: { id: "resp_scheduler_done", status: "in_progress", output: [] } },
+    { type: "response.output_item.added", output_index: 0, item },
+    { type: "response.output_text.delta", item_id: item.id, output_index: 0, content_index: 0, delta: text },
+    { type: "response.output_item.done", output_index: 0, item },
+    { type: "response.completed", response: { id: "resp_scheduler_done", status: "completed", output: [item], usage: { input_tokens: 12, output_tokens: 9 } } },
+  ]));
+}
+
+function mockNativeSerialEdits(body, response) {
+  const probe = nativeRecoveryProbe;
+  probe.requests += 1;
+  assert.ok(probe.requests <= 4, "dependent edits must complete in four model requests");
+  // Observe the installed client's actual wire policy rather than assuming
+  // its catalog capability field controls this request parameter.
+  assert.equal(typeof probe.ingressParallelPolicy, "boolean");
+  assert.equal(body.parallel_tool_calls, probe.ingressParallelPolicy, "native caller policy must survive every translation");
+  const expected = ["old\n", "one\n", "two\n", "three\n"];
+  assert.equal(readFileSync(probe.fixturePath, "utf8"), expected[probe.requests - 1]);
+  if (probe.requests > 1) {
+    const feedback = body.input?.find((item) => item.type === "function_call_output" && item.call_id === `call_serial_${probe.requests - 1}`);
+    assert.match(String(feedback?.output), /Success/, "each native edit must finish before the next request");
+  }
+  response.writeHead(200, { "Content-Type": "text/event-stream" });
+  if (probe.requests <= 3) {
+    const tool = body.tools?.find((item) => item.parameters?.properties?.operations);
+    assert.ok(tool, "native editing tool must reach xAI");
+    const argumentsText = JSON.stringify({ operations: [{ op: "update", path: "fixture.txt", hunks: [{ lines: [
+      { kind: "remove", text: expected[probe.requests - 1].trim() },
+      { kind: "add", text: expected[probe.requests].trim() },
+    ] }] }] });
+    response.end(mockFunctionCall(`call_serial_${probe.requests}`, argumentsText, tool.name));
+  } else {
+    probe.completed = true;
+    const text = "offline serial edits verified";
+    const item = { type: "message", id: "msg_serial_final", role: "assistant", status: "completed", content: [{ type: "output_text", text, annotations: [] }] };
+    response.end(sse([
+      { type: "response.created", response: { id: "resp_serial_done", status: "in_progress", output: [] } },
+      { type: "response.output_item.added", output_index: 0, item },
+      { type: "response.output_text.delta", item_id: item.id, output_index: 0, content_index: 0, delta: text },
+      { type: "response.output_item.done", output_index: 0, item },
+      { type: "response.completed", response: { id: "resp_serial_done", status: "completed", output: [item], usage: { input_tokens: 12, output_tokens: 9 } } },
+    ]));
+  }
+}
+
+function mockNativeExec(body, response) {
+  const probe = nativeRecoveryProbe;
+  probe.requests += 1;
+  assert.ok(probe.requests <= 3, "native exec/poll must finish in three model requests without retries");
+  for (const [name, properties, required] of [
+    ["exec_command", ["cmd", "workdir", "shell", "login", "tty", "yield_time_ms", "max_output_tokens", "sandbox_permissions", "justification", "prefix_rule"], "cmd"],
+    ["write_stdin", ["session_id", "chars", "yield_time_ms", "max_output_tokens"], "session_id"],
+  ]) {
+    const tool = body.tools?.find((item) => item.type === "function" && item.name === name);
+    assert.ok(tool, `native ${name} must reach xAI on every request`);
+    assert.equal(tool.parameters?.type, "object");
+    for (const property of properties) assert.ok(tool.parameters.properties?.[property], `${name}.${property} schema must survive the full bridge`);
+    assert.ok(tool.parameters.required?.includes(required), `${name} must retain its required ${required}`);
+  }
+  if (probe.requests === 1) {
+    const args = { cmd: "node -e \"setTimeout(() => { console.log('OFFLINE_SESSION_COMPLETE'); process.exit(7); }, 3000)\"", tty: true, yield_time_ms: 1, max_output_tokens: 1000 };
+    probe.execArguments = JSON.stringify(args);
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    response.end(mockFunctionCall("call_exec_session", probe.execArguments, "exec_command"));
+    return;
+  }
+  const callId = probe.requests === 2 ? "call_exec_session" : "call_poll_session";
+  const history = body.input?.find((item) => item.type === "function_call" && item.call_id === callId);
+  const feedback = body.input?.find((item) => item.type === "function_call_output" && item.call_id === callId);
+  assert.ok(feedback, `native feedback must retain ${callId}`);
+  assert.equal(history?.name, probe.requests === 2 ? "exec_command" : "write_stdin");
+  assert.deepEqual(JSON.parse(history.arguments), JSON.parse(probe.requests === 2 ? probe.execArguments : probe.pollArguments), "executed arguments must survive native history replay");
+  if (probe.requests === 2) {
+    const session = String(feedback.output).match(/Process running with session ID (\d+)/);
+    assert.ok(session, "native exec must yield an actual running process session");
+    probe.sessionId = Number(session[1]);
+    assert.ok(Number.isSafeInteger(probe.sessionId));
+    probe.pollArguments = JSON.stringify({ session_id: probe.sessionId, chars: "", yield_time_ms: 10_000, max_output_tokens: 1000 });
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    response.end(mockFunctionCall("call_poll_session", probe.pollArguments, "write_stdin"));
+    return;
+  }
+  assert.match(String(feedback.output), /Process exited with code 7|Exit code: 7/, "native poll must preserve the real nonzero exit code");
+  assert.match(String(feedback.output), /OFFLINE_SESSION_COMPLETE/, "native poll must preserve process output");
+  probe.completed = true;
+  const text = "offline process session verified";
+  const item = { type: "message", id: "msg_exec_final", role: "assistant", status: "completed", content: [{ type: "output_text", text, annotations: [] }] };
+  response.writeHead(200, { "Content-Type": "text/event-stream" });
+  response.end(sse([
+    { type: "response.created", response: { id: "resp_exec_final", status: "in_progress", output: [] } },
+    { type: "response.output_item.added", output_index: 0, item },
+    { type: "response.output_text.delta", item_id: item.id, output_index: 0, content_index: 0, delta: text },
+    { type: "response.output_item.done", output_index: 0, item },
+    { type: "response.completed", response: { id: "resp_exec_final", status: "completed", output: [item], usage: { input_tokens: 12, output_tokens: 9 } } },
+  ]));
+}
+
 // Discovery and exact-command trust use the official app-server API. Only the
 // disposable CODEX_HOME is changed; the caller's real trust/config is untouched.
 async function prepareTrustedNativeHook(codexHome, fixtureDir) {
@@ -389,7 +592,7 @@ async function prepareTrustedNativeHook(codexHome, fixtureDir) {
 let mockFailure;
 const mockXai = http.createServer((request, response) => {
   handleMockRequest(request, response).catch((error) => {
-    mockFailure = error;
+    mockFailure ||= error;
     if (!response.headersSent) response.writeHead(500);
     response.end("Offline fixture assertion failed");
   });
@@ -402,6 +605,15 @@ async function handleMockRequest(request, response) {
     authorizationPresent: Boolean(request.headers.authorization),
     body,
   });
+  if (nativeToolPolicy && nativeRecoveryProbe) {
+    if (nativeScheduler) mockNativeScheduler(body, response);
+    else mockNativeSerialEdits(body, response);
+    return;
+  }
+  if (nativeExec && nativeRecoveryProbe) {
+    mockNativeExec(body, response);
+    return;
+  }
   const structuredTool = body.tools?.find((tool) => tool.parameters?.properties?.operations);
   const toolName = structured ? structuredTool?.name : APPLY_PATCH_TOOL_NAME;
   if (nativeRecoveryProbe) {
@@ -485,7 +697,7 @@ async function handleMockRequest(request, response) {
     return;
   }
   const history = (body.input || []).find(
-    (item) => item?.type === "function_call" && item.name === toolName,
+    (item) => item?.type === "function_call" && item.call_id === "call_history",
   );
   const historyArgs = typeof history?.arguments === "string" ? history.arguments : "";
   if (structured && historyArgs.includes("CODEC_CANCEL_WIRE")) {
@@ -706,10 +918,11 @@ cancellation_boundary_callback = CustomLogger()
   }
 
   const unicodeBody = await postTurn(
-    applyPatchRequest({ historyInput: HISTORY_PATCH, historyId: "ctc_history" }),
+    { ...applyPatchRequest({ historyInput: HISTORY_PATCH, historyId: "ctc_history" }), parallel_tool_calls: false },
   );
   assert.equal(capturedGrok.length, 1);
   const grokRequest = capturedGrok[0].body;
+  assert.equal(grokRequest.parallel_tool_calls, false, "explicit no-parallel policy must survive Router and locked LiteLLM");
   const grokTools = grokRequest.tools || [];
   const grokApply = grokTools.filter((tool) => structured
     ? tool.parameters?.properties?.operations
@@ -738,7 +951,10 @@ cancellation_boundary_callback = CustomLogger()
     (item) => item?.type === "function_call" && item.call_id === "call_history",
   );
   assert.ok(historyCall, "history call_id must survive LiteLLM and the Grok forwarder");
-  assert.equal(historyCall.name, grokApply[0].name);
+  if (structured) {
+    assert.notEqual(historyCall.name, grokApply[0].name);
+    assert.equal(grokTools.some((tool) => tool.name === historyCall.name), false);
+  } else assert.equal(historyCall.name, grokApply[0].name);
   assert.deepEqual(JSON.parse(historyCall.arguments), structured ? { input: HISTORY_PATCH } : { content: HISTORY_PATCH });
   const historyResult = (grokRequest.input || []).find(
     (item) => item?.type === "function_call_output" && item.call_id === "call_history",
@@ -898,6 +1114,31 @@ cancellation_boundary_callback = CustomLogger()
       outsideCanaryDirectory = mkdtempSync(path.join(nativeOutsideDir, "grok-hook-permission-"));
       writeFileSync(path.join(outsideCanaryDirectory, "fixture.txt"), "old\n", { mode: 0o600 });
     }
+    if (nativeScheduler && nativeScheduler !== "patch") {
+      // Each process reads before the barrier. B must overwrite after A in the
+      // race case, making lost-update evidence deterministic rather than timed.
+      // Markers are synchronization writes; the read case never edits fixture.txt.
+      writeFileSync(path.join(fixtureDir, "scheduler-fixture.cjs"), String.raw`
+const fs = require("node:fs");
+const [name, mode] = process.argv.slice(2);
+const deadline = Date.now() + 8000;
+const wait = (file) => {
+  while (!fs.existsSync(file)) {
+    if (Date.now() > deadline) { console.error("BARRIER_TIMEOUT:" + file); process.exit(11); }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+  }
+};
+const original = fs.readFileSync("fixture.txt", "utf8");
+fs.writeFileSync("ready." + name, original);
+wait("ready." + (name === "A" ? "B" : "A"));
+if (mode === "race") {
+  if (name === "B") wait("done.A");
+  fs.writeFileSync("fixture.txt", original + name + "\n");
+}
+fs.writeFileSync("done." + name, original);
+console.log("BARRIER_PASSED:" + name);
+`);
+    }
     // Match the Router's catalog conversion. Unknown-model fallback metadata
     // does not advertise native apply_patch and cannot exercise this bridge.
     const bundled = spawnSync(codexBinary, ["debug", "models", "--bundled"], {
@@ -909,19 +1150,41 @@ cancellation_boundary_callback = CustomLogger()
     const template = nativeModels.find((model) => model.apply_patch_tool_type === "freeform");
     assert.ok(template, "bundled metadata must provide the native freeform patch tool");
     const catalogPath = path.join(workspace, "probe-catalog.json");
-    writeFileSync(catalogPath, JSON.stringify({ models: [routedModel(template, MODEL_BY_SLUG.get("grok-oauth/grok-4.6"))] }));
+    const probeModel = routedModel(template, MODEL_BY_SLUG.get("grok-oauth/grok-4.6"));
+    assert.equal(probeModel.supports_parallel_tool_calls, false);
+    assert.equal(Object.hasOwn(probeModel, "tool_mode"), false, "native probe must use routed catalog capabilities");
+    writeFileSync(catalogPath, JSON.stringify({ models: [probeModel] }));
     nativeRecoveryProbe = { requests: 0, contextFailure: false, successFeedback: false, invalidArgumentFeedback: false,
-      ...(nativeHook ? { expectedHistory: new Map(), fixturePath: path.join(fixtureDir, "fixture.txt"),
+      ...(nativeHook || nativeToolPolicy ? { expectedHistory: new Map(), fixturePath: path.join(fixtureDir, "fixture.txt"),
         ...(outsideCanaryDirectory ? { targetPath: path.join(outsideCanaryDirectory, "fixture.txt") } : {}),
       } : {}),
     };
+    let nativeClientBaseUrl = clientBaseUrl(routerPort);
+    if (nativeToolPolicy) {
+      nativeIngressServer = http.createServer(async (request, response) => {
+        const chunks = [];
+        for await (const chunk of request) chunks.push(chunk);
+        const raw = Buffer.concat(chunks);
+        const body = JSON.parse(raw.toString("utf8"));
+        nativeRecoveryProbe.ingressParallelPolicy = body.parallel_tool_calls;
+        const upstream = http.request({ hostname: "127.0.0.1", port: routerPort, path: request.url, method: request.method,
+          headers: { ...request.headers, host: `127.0.0.1:${routerPort}` } }, (incoming) => {
+          response.writeHead(incoming.statusCode, incoming.headers);
+          incoming.pipe(response);
+        });
+        upstream.on("error", (error) => response.destroy(error));
+        upstream.end(raw);
+      });
+      await new Promise((resolve) => nativeIngressServer.listen(0, "127.0.0.1", resolve));
+      nativeClientBaseUrl = clientBaseUrl(nativeIngressServer.address().port);
+    }
     if (nativeHook) await prepareTrustedNativeHook(codexHome, fixtureDir);
     const args = ["exec", "--ephemeral", ...(!nativeHook ? ["--ignore-user-config"] : []), "--skip-git-repo-check", "--sandbox", "workspace-write", "--color", "never", "--json", "--model", "grok-oauth/grok-4.6", "--cd", fixtureDir, "--disable", "plugins", "--disable", "remote_plugin"];
     for (const setting of [
       'model_provider="local-protocol"',
       `model_catalog_json=${JSON.stringify(catalogPath)}`,
       'model_providers.local-protocol.name="Offline structured patch proof"',
-      `model_providers.local-protocol.base_url=${JSON.stringify(clientBaseUrl(routerPort))}`,
+      `model_providers.local-protocol.base_url=${JSON.stringify(nativeClientBaseUrl)}`,
       'model_providers.local-protocol.wire_api="responses"',
       'model_providers.local-protocol.requires_openai_auth=false',
       'model_providers.local-protocol.supports_websockets=false',
@@ -929,8 +1192,10 @@ cancellation_boundary_callback = CustomLogger()
       'model_reasoning_effort="high"',
     ]) args.push("-c", setting);
     if (nativeHook && !hookEndpoint) args.push("-c", `model_providers.local-protocol.http_headers={${JSON.stringify(GROK_PATCH_HOOK_HEADER)}=${JSON.stringify(GROK_PATCH_HOOK_CAPABILITY)}}`);
-    if (hookEndpoint) args.push("-c", 'model_provider="openai"', "-c", `openai_base_url=${JSON.stringify(clientBaseUrl(routerPort))}`);
-    args.push("Offline tool protocol test. Only fixture.txt in this temporary workspace may be edited. Process the supplied tool calls and finish.");
+    if (hookEndpoint) args.push("-c", 'model_provider="openai"', "-c", `openai_base_url=${JSON.stringify(nativeClientBaseUrl)}`);
+    args.push(nativeExec
+      ? "Offline native exec/poll protocol test. Run the supplied temporary process, poll its returned session, preserve its output and exit status, then finish."
+      : "Offline tool protocol test. Only fixture.txt in this temporary workspace may be edited. Process the supplied tool calls and finish.");
     const client = spawnChild(codexBinary, args, nativeProbeEnvironment(codexHome), { cwd: fixtureDir, inheritEnvironment: false });
     let timedOut = false;
     const timer = setTimeout(() => {
@@ -950,7 +1215,20 @@ cancellation_boundary_callback = CustomLogger()
       process.stderr.write(`offline probe state: ${JSON.stringify(nativeRecoveryProbe)}\n`);
       process.stderr.write(`Router: ${routerChild.testOutput()}\nForwarder: ${grokChild.testOutput()}\nLiteLLM: ${litellmChild.testOutput()}\n`);
     }
-    if (singleNativeControl) {
+    if (nativeToolPolicy) {
+      assert.equal(exit, 0, client.testOutput());
+      assert.equal(nativeRecoveryProbe.requests, nativeScheduler ? 2 : 4);
+      assert.equal(nativeRecoveryProbe.completed, true);
+      if (!nativeScheduler) assert.equal(readFileSync(path.join(fixtureDir, "fixture.txt"), "utf8"), "three\n");
+      if (nativeScheduler) process.stdout.write(`ok native scheduler ${nativeScheduler} diagnostic completed in two requests with fake provider credentials\n`);
+      else process.stdout.write(`ok real Codex parallel_tool_calls=${nativeRecoveryProbe.ingressParallelPolicy} survived Router, locked LiteLLM and Grok forwarder; fixture-selected three dependent native edits completed across four model requests with final contents intact (no live requests; does not prove the model chooses serial edits)\n`);
+    } else if (nativeExec) {
+      assert.equal(exit, 0, client.testOutput());
+      assert.equal(nativeRecoveryProbe.requests, 3);
+      assert.equal(nativeRecoveryProbe.completed, true);
+      assert.equal(readFileSync(path.join(fixtureDir, "fixture.txt"), "utf8"), "old\n");
+      process.stdout.write("ok real Codex native exec_command yielded a session; write_stdin preserved output and exit code 7 through Router, locked LiteLLM, Grok forwarder, and mock xAI in three model requests (no live provider requests)\n");
+    } else if (singleNativeControl) {
       assert.equal(exit, 0, client.testOutput());
       assert.equal(nativeRecoveryProbe.requests, 2);
       assert.equal(nativeRecoveryProbe.controlFeedback, true);
@@ -988,6 +1266,8 @@ cancellation_boundary_callback = CustomLogger()
   }
 } finally {
   await Promise.all(children.map((child) => stopChild(child)));
+  nativeIngressServer?.closeAllConnections();
+  if (nativeIngressServer?.listening) await new Promise((resolve) => nativeIngressServer.close(resolve));
   mockXai.closeAllConnections();
   if (mockXai.listening) await new Promise((resolve) => mockXai.close(resolve));
   rmSync(workspace, { recursive: true, force: true });

@@ -1,0 +1,226 @@
+{
+  "date": "2026-10-16",
+  "provider": "grok-oauth",
+  "upstreamModel": "grok-4.7",
+  "endpoint": "official Grok CLI Responses proxy",
+  "syntheticOnly": true,
+  "realToolsExecuted": false,
+  "requests": 6,
+  "requestLimit": 6,
+  "timeoutMsPerRequest": 90000,
+  "settings": {
+    "strict": true,
+    "reasoningEffort": "low",
+    "toolChoice": "required",
+    "store": false
+  },
+  "probes": [
+    {
+      "variant": "allOf",
+      "httpStatus": 200,
+      "durationMs": 2977,
+      "calls": [
+        {
+          "name": "fixture",
+          "arguments": "{}"
+        }
+      ],
+      "terminals": [
+        "response.completed"
+      ],
+      "usage": [
+        {
+          "input_tokens": 1340,
+          "input_tokens_details": {
+            "cached_tokens": 1152
+          },
+          "output_tokens": 124,
+          "output_tokens_details": {
+            "reasoning_tokens": 119
+          },
+          "total_tokens": 1464,
+          "num_sources_used": 0,
+          "num_server_side_tools_used": 0,
+          "cost_in_usd_ticks": 5766400,
+          "context_details": {
+            "input_tokens": 1340,
+            "output_tokens": 127
+          }
+        }
+      ],
+      "error": null
+    },
+    {
+      "variant": "then",
+      "httpStatus": 200,
+      "durationMs": 3334,
+      "calls": [
+        {
+          "name": "fixture",
+          "arguments": "{\"mode\":\"update\",\"id\":2,\"title\":\"Test\"}"
+        }
+      ],
+      "terminals": [
+        "response.completed"
+      ],
+      "usage": [
+        {
+          "input_tokens": 1340,
+          "input_tokens_details": {
+            "cached_tokens": 1152
+          },
+          "output_tokens": 93,
+          "output_tokens_details": {
+            "reasoning_tokens": 72
+          },
+          "total_tokens": 1433,
+          "num_sources_used": 0,
+          "num_server_side_tools_used": 0,
+          "cost_in_usd_ticks": 5134000,
+          "context_details": {
+            "input_tokens": 1340,
+            "output_tokens": 97
+          }
+        }
+      ],
+      "error": null
+    },
+    {
+      "variant": "original",
+      "httpStatus": 200,
+      "durationMs": 3556,
+      "calls": [
+        {
+          "name": "fixture",
+          "arguments": "{\"mode\":\"update\",\"id\":\"2\",\"title\":\"Test\"}"
+        }
+      ],
+      "terminals": [
+        "response.completed"
+      ],
+      "usage": [
+        {
+          "input_tokens": 1340,
+          "input_tokens_details": {
+            "cached_tokens": 1152
+          },
+          "output_tokens": 108,
+          "output_tokens_details": {
+            "reasoning_tokens": 91
+          },
+          "total_tokens": 1448,
+          "num_sources_used": 0,
+          "num_server_side_tools_used": 0,
+          "cost_in_usd_ticks": 5440000,
+          "context_details": {
+            "input_tokens": 1340,
+            "output_tokens": 112
+          }
+        }
+      ],
+      "error": null
+    },
+    {
+      "variant": "actual",
+      "httpStatus": 400,
+      "durationMs": 818,
+      "calls": [],
+      "terminals": [],
+      "usage": [],
+      "error": "{\"code\":\"invalid-argument\",\"error\":\"Failed to start sampling: [invalid_client_tool_schema] fixture: tool parameter root must be an object type (root schema is an anyOf/oneOf union with a non-object branch)\"}"
+    },
+    {
+      "variant": "actual-typed",
+      "httpStatus": 400,
+      "durationMs": 907,
+      "calls": [],
+      "terminals": [],
+      "usage": [],
+      "error": "{\"code\":\"invalid-argument\",\"error\":\"Failed to start sampling: [invalid_client_tool_schema] fixture: tool parameter root must be an object type (root schema is an anyOf/oneOf union with a non-object branch)\"}"
+    },
+    {
+      "variant": "actual-inlined",
+      "httpStatus": 400,
+      "durationMs": 647,
+      "calls": [],
+      "terminals": [],
+      "usage": [],
+      "error": "{\"code\":\"invalid-argument\",\"error\":\"Failed to start sampling: [invalid_client_tool_schema] fixture: tool parameter root must be an object type (root schema is an anyOf/oneOf union with a non-object branch)\"}"
+    }
+  ],
+  "selectedImplementation": "Preserve complete object alternatives. Flatten nested anyOf; flatten nested oneOf only with pairwise disjoint required discriminator domains. Keep original schema when resource/pointer/dialect safety cannot be proved.",
+  "limitations": [
+    "Single allOf wrapper accepted but generated empty arguments; conditional wrapper accepted but produced invalid numeric id. Both rejected as implementation options.",
+    "Simple flat oneOf honored string id under an adversarial numeric request in one sample. This is not a general guarantee for model behavior or repeated runtime errors.",
+    "Unmodified bundled automation, inferred object types, and root-ref inlining each received HTTP400; final exact flat candidate is evaluated in the separate bounded end-to-end campaign.",
+    "Only OAuth was probed and changed. No Grok API route was changed.",
+    "xAI documents oneOf as anyOf and conditionals as best-effort. Preserving a schema does not guarantee enforcement of unsupported provider keywords; the adapted nested oneOf branches are proved disjoint locally."
+  ],
+  "localEquivalence": {
+    "cases": 414,
+    "mismatches": 0,
+    "fixtures": [
+      {
+        "fixture": "actual-automation",
+        "cases": 296,
+        "valid": 10,
+        "mismatches": 0
+      },
+      {
+        "fixture": "oneOf-disjoint",
+        "cases": 20,
+        "valid": 3,
+        "mismatches": 0
+      },
+      {
+        "fixture": "oneOf-overlap",
+        "cases": 20,
+        "valid": 1,
+        "mismatches": 0
+      },
+      {
+        "fixture": "anyOf-disjoint",
+        "cases": 20,
+        "valid": 3,
+        "mismatches": 0
+      },
+      {
+        "fixture": "anyOf-overlap",
+        "cases": 20,
+        "valid": 2,
+        "mismatches": 0
+      },
+      {
+        "fixture": "draft07-ref-siblings",
+        "cases": 16,
+        "valid": 1,
+        "mismatches": 0
+      },
+      {
+        "fixture": "draft04-const",
+        "cases": 16,
+        "valid": 4,
+        "mismatches": 0
+      },
+      {
+        "fixture": "negative-zero",
+        "cases": 3,
+        "valid": 1,
+        "mismatches": 0
+      },
+      {
+        "fixture": "nested-negative-zero",
+        "cases": 3,
+        "valid": 1,
+        "mismatches": 0
+      }
+    ]
+  },
+  "actualAutomationSchemaSha256": "7d052fe12eb9d71a30d96b1a9dea4778d3b401f4e319ce4a1db71d441e60f35e",
+  "sameAutomationSchemaBeforeDraft07ProofHardening": true,
+  "documentation": [
+    "https://docs.x.ai/developers/model-capabilities/text/structured-outputs",
+    "https://docs.x.ai/developers/tools/function-calling",
+    "https://json-schema.org/understanding-json-schema/structuring"
+  ]
+}

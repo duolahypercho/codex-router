@@ -1,3 +1,4 @@
+import { grokToolSchema } from "./grok-tool-schema.mjs";
 import { CODEX_APP_TOOLS, mergeCodexAppTools } from "./codex-app-tools.mjs";
 import { flattenNamespaceTools, NAMESPACE_DELIMITER } from "./namespace-relay.mjs";
 
@@ -262,6 +263,7 @@ export function chatProviderToolSurface(
     // forces an alias there; the unbounded branch has to ask for it.
     return flattenNamespaceTools(providerTools, {
       aliasCollisions: true,
+      ...(providerId === "grok-oauth" ? { schemaAdapter: grokToolSchema } : {}),
       ...(needsBoundedChatToolNames(providerId, upstreamModel)
         ? { maxNameLength: BOUNDED_TOOL_NAME_LENGTH }
         : {}),

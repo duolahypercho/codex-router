@@ -5,7 +5,7 @@ import { isGrokOauthAgenticRoute } from "./grok-oauth-routes.mjs";
 // module does not read files, match context, apply edits, or call a provider.
 export const GROK_STRUCTURED_PATCH_VERSION = 1;
 export function grokStructuredPatchEnabled(route, environment = process.env) {
-  return isGrokOauthAgenticRoute(route) && environment.CODEX_ROUTER_GROK_STRUCTURED_PATCH === "1";
+  return isGrokOauthAgenticRoute(route) && environment.CODEX_ROUTER_GROK_STRUCTURED_PATCH !== "0";
 }
 export const MAX_STRUCTURED_PATCH_BYTES = 1024 * 1024;
 const MAX_OPERATIONS = 128;
@@ -20,6 +20,43 @@ export class StructuredPatchError extends Error {
     this.code = code;
   }
 }
+
+const diagnosticCodes = new Set([
+  "accessor_field",
+  "arguments_empty_json",
+  "arguments_invalid_json",
+  "arguments_ambiguous_json",
+  "operations_empty_json",
+  "operations_invalid_json",
+  "operations_ambiguous_json",
+  "arguments_too_large",
+  "array_bounds",
+  "boolean_required",
+  "crlf_unrepresentable",
+  "duplicate_path",
+  "embedded_line_separator",
+  "embedded_path_separator",
+  "embedded_anchor_separator",
+  "empty_anchor",
+  "empty_old_string",
+  "invalid_unicode",
+  "json_string_required",
+  "line_too_long",
+  "missing_field",
+  "missing_trailing_newline",
+  "no_change",
+  "nonfinal_eof",
+  "nonliteral_path",
+  "object_required",
+  "patch_too_large",
+  "plain_object_required",
+  "sparse_array",
+  "string_required",
+  "trailing_newline_unrepresentable",
+  "unknown_field",
+  "unsupported_line_kind",
+  "unsupported_operation",
+]);
 
 function reject(code) {
   throw new StructuredPatchError(code);
@@ -46,16 +83,16 @@ function array(value, min, max) {
   }
 }
 
-function line(value) {
+function line(value, separatorCode = "embedded_line_separator") {
   if (typeof value !== "string") reject("string_required");
   if (value.length > MAX_LINE_LENGTH) reject("line_too_long");
-  if (/[\r\n\0]/u.test(value)) reject("embedded_line_separator");
+  if (/[\r\n\0]/u.test(value)) reject(separatorCode);
   if (!value.isWellFormed()) reject("invalid_unicode");
   return value;
 }
 
 function path(value) {
-  line(value);
+  line(value, "embedded_path_separator");
   // Native headers trim paths, and Rust's trim also removes Unicode white space
   // (such as U+0085) that JavaScript's leaves. Refuse inputs whose literal path
   // would change under either.
@@ -101,7 +138,7 @@ export function serializeStructuredPatch(value) {
         for (const [index, hunk] of operation.hunks.entries()) {
           object(hunk, ["lines"], ["anchor", "endOfFile"]);
           if (Object.hasOwn(hunk, "anchor")) {
-            line(hunk.anchor);
+            line(hunk.anchor, "embedded_anchor_separator");
             if (!hunk.anchor) reject("empty_anchor");
           }
           if (Object.hasOwn(hunk, "endOfFile") && typeof hunk.endOfFile !== "boolean") {
@@ -148,14 +185,27 @@ function splitLogicalLines(text) {
 function parseArgumentObject(argumentsText) {
   if (typeof argumentsText !== "string") reject("json_string_required");
   if (Buffer.byteLength(argumentsText, "utf8") > MAX_STRUCTURED_PATCH_BYTES) reject("arguments_too_large");
-  if (!jsonArgumentsAreUnambiguous(argumentsText)) reject("ambiguous_or_invalid_json");
-  try {
-    return JSON.parse(argumentsText);
-  } catch {
-    reject("ambiguous_or_invalid_json");
-  }
+  return parsePatchJson(argumentsText, "arguments");
 }
 
+// Only fixed scope/category names leave this boundary. Do not include parser
+// messages, source excerpts, paths, or argument values in relay diagnostics.
+function parsePatchJson(text, scope) {
+  if (text.trim() === "") reject(`${scope}_empty_json`);
+  let value;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    reject(`${scope}_invalid_json`);
+  }
+  // JSON.parse accepts duplicate keys and lossy numbers; these are still
+  // refused even though the syntax is valid.
+  if (!jsonArgumentsAreUnambiguous(text)) reject(`${scope}_ambiguous_json`);
+  return value;
+}
+
+// Whole logical lines serialized to native patch syntax. Matching is performed
+// by the client parser, not an exact-substring or uniqueness check here.
 export function compileSearchReplaceArguments(argumentsText) {
   return serializeStructuredPatch(searchReplaceToOperations(parseArgumentObject(argumentsText)));
 }
@@ -207,12 +257,7 @@ function writeToOperations(value) {
 
 function parseOperationsField(operations) {
   if (typeof operations === "string") {
-    if (!jsonArgumentsAreUnambiguous(operations)) reject("ambiguous_or_invalid_json");
-    try {
-      return JSON.parse(operations);
-    } catch {
-      reject("ambiguous_or_invalid_json");
-    }
+    return parsePatchJson(operations, "operations");
   }
   return operations;
 }
@@ -254,15 +299,25 @@ function normalizeGrokEdit(value) {
   reject("missing_field");
 }
 
-const textSchema = { type: "string", maxLength: MAX_LINE_LENGTH };
-const pathSchema = { ...textSchema, minLength: 1 };
+// Patterns are portable JSON Schema regexes (no Unicode property escapes).
+// A negative lookahead rejects separators anywhere, including a final LF
+// that JavaScript's `$` alone would otherwise allow.
+const textSchema = {
+  type: "string", maxLength: MAX_LINE_LENGTH,
+  pattern: "^(?![\\s\\S]*[\\r\\n\\u0000])",
+};
+const pathWhitespace = "\\u0009-\\u000d\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff";
+const pathSchema = {
+  ...textSchema, minLength: 1,
+  pattern: `${textSchema.pattern}(?![${pathWhitespace}])(?![\\s\\S]*[${pathWhitespace}]$)`,
+};
 const linesSchema = { type: "array", maxItems: MAX_LINES, items: textSchema };
 const objectSchema = (properties, required = Object.keys(properties)) => ({
   type: "object", properties, required, additionalProperties: false,
 });
 
-// Not installed on any route yet. The request/response bridge must first prove
-// history, collisions and streaming safety before this schema can be offered.
+// The bridge serializes this typed provider interface back to the native
+// client tool; file access, matching and permission checks stay client-owned.
 export const GROK_STRUCTURED_PATCH_PARAMETERS = objectSchema({
   operations: {
     type: "array", minItems: 1, maxItems: MAX_OPERATIONS,
@@ -275,10 +330,11 @@ export const GROK_STRUCTURED_PATCH_PARAMETERS = objectSchema({
           hunks: {
             type: "array", minItems: 1, maxItems: MAX_HUNKS,
             items: objectSchema({
-              anchor: textSchema,
-              endOfFile: { type: "boolean" },
+              anchor: { ...textSchema, minLength: 1, description: "Omit when no anchor is needed; otherwise a nonempty literal logical line." },
+              endOfFile: { type: "boolean", description: "May be true only on the last hunk for this path." },
               lines: {
                 type: "array", minItems: 1, maxItems: MAX_LINES,
+                contains: { type: "object", properties: { kind: { enum: ["add", "remove"] } }, required: ["kind"] },
                 items: objectSchema({
                   kind: { type: "string", enum: ["context", "add", "remove"] },
                   text: textSchema,
@@ -294,13 +350,19 @@ export const GROK_STRUCTURED_PATCH_PARAMETERS = objectSchema({
 
 export const GROK_STRUCTURED_PATCH_CODEC = {
   version: GROK_STRUCTURED_PATCH_VERSION,
+  providerName: "structured_v1",
   parameters: GROK_STRUCTURED_PATCH_PARAMETERS,
   maxArgumentBytes: MAX_STRUCTURED_PATCH_BYTES,
   decodeArguments: compileStructuredPatchArguments,
+  // Only compiler-owned categories may enter a relay error; never echo a
+  // provider argument, arbitrary exception message, or unrecognized code.
+  argumentErrorCode(error) {
+    return error instanceof StructuredPatchError && diagnosticCodes.has(error.code) ? error.code : undefined;
+  },
   description(original) {
     return [
-      typeof original === "string" ? original : "Apply a patch to files.",
-      "This provider interface accepts structured operations, not raw patch text. Supply literal logical lines without patch delimiters or line prefixes; use context/add/remove kinds inside update hunks. Codex performs the original patch validation and permission checks. Old calls in history may have an input field containing native patch text; that historical envelope is not accepted for new calls.",
+      "Apply file edits through the native client patch tool. This provider interface accepts structured operations, not raw patch text. Supply literal logical lines without patch delimiters or line prefixes; use context/add/remove kinds inside update hunks. An anchor skips past its matching line; do not repeat that line as context or removal in the hunk. For a simple whole-line replacement omit anchor and supply complete removed and added lines. Codex performs the original patch validation, matching and permission checks. Historical calls use a separate history-only tool identity and cannot be invoked. The provider wire contract is the structured parameters declared for this tool; the client execution reference below describes the native client and its permissions, not an alternative argument format.",
+      typeof original === "string" ? `Client execution reference (verbatim):\n${JSON.stringify(original)}` : undefined,
     ].filter(Boolean).join("\n\n");
   },
 };

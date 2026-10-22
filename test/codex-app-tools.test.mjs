@@ -152,3 +152,28 @@ test("splitFlatCodexAppName parses flattened names only", () => {
   assert.equal(splitFlatCodexAppName("exec_command"), undefined);
   assert.equal(splitFlatCodexAppName("codex_app__"), undefined);
 });
+
+
+test("modern MCP app registration owns its surface without the legacy snapshot", () => {
+  const fn = { type: "function", name: "list_projects", parameters: { type: "object", properties: {} } };
+  const shapes = [
+    { type: "namespace", name: "mcp__codex_app", defer_loading: true, tools: [fn] },
+    { ...fn, namespace: "mcp__codex_app" },
+    { ...fn, name: "mcp__codex_app__list_projects" },
+    { type: "function", function: { ...fn, name: "mcp__codex_app__list_projects" } },
+  ];
+  for (const shape of shapes) {
+    const tools = [{ type: "function", name: "exec_command" }, shape];
+    const before = structuredClone(tools);
+    const result = mergeCodexAppTools(tools);
+    assert.equal(result.merged, false);
+    assert.strictEqual(result.tools, tools);
+    assert.deepEqual(tools, before);
+  }
+});
+
+test("unrelated MCP connectors do not impersonate the app registration", () => {
+  for (const name of ["mcp__codex_apps__notion", "mcp__codex_application", "other"]) {
+    assert.equal(mergeCodexAppTools([{ type: "namespace", name, tools: [] }]).merged, true);
+  }
+});

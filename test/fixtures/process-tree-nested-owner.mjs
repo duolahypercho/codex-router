@@ -1,4 +1,3 @@
-import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -22,10 +21,13 @@ if (depth > 0) {
   });
 } else {
   const terminal = [
-    "const { writeFileSync } = require('node:fs')",
-    `writeFileSync(${JSON.stringify(pidFile)}, String(process.pid))`,
+    "const { writeFileSync, renameSync } = require('node:fs')",
     "process.on('SIGINT', () => {})",
     "process.on('SIGTERM', () => {})",
+    `const readyFile = ${JSON.stringify(pidFile)}`,
+    "const temporary = readyFile + '.' + process.pid + '.tmp'",
+    "writeFileSync(temporary, String(process.pid))",
+    "renameSync(temporary, readyFile)",
     "setInterval(() => {}, 1000)",
   ].join(";");
   await runProcessTree(process.execPath, ["-e", terminal], {

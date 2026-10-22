@@ -53,11 +53,12 @@ function parsed(output) {
   return output.split(/\n\n/).filter(Boolean).map(x => JSON.parse(x.split("\n").find(l => l.startsWith("data: ")).slice(6)));
 }
 
-test("flag is opt-in and applies only to Grok 4.6 OAuth", () => {
-  for (const slug of ["grok-oauth/grok-4.6", "grok-oauth/grok-4.5", "grok-api/grok-4.6", "openai/gpt-6-astra"]) {
-    assert.equal(grokStructuredPatchEnabled({ slug }, {}), false);
-    assert.equal(grokStructuredPatchEnabled({ slug }, { CODEX_ROUTER_GROK_STRUCTURED_PATCH: "1" }), slug === "grok-oauth/grok-4.6");
-    assert.equal(grokStructuredPatchEnabled({ slug }, { CODEX_ROUTER_GROK_STRUCTURED_PATCH: "true" }), false);
+test("typed patches default on for supported OAuth routes; only literal 0 opts out", () => {
+  for (const slug of ["grok-oauth/grok-4.6", "grok-oauth/grok-4.7", "grok-oauth/grok-4.5", "grok-api/grok-4.7", "openai/gpt-6-astra"]) {
+    const supported = ["grok-oauth/grok-4.6", "grok-oauth/grok-4.7"].includes(slug);
+    for (const flag of [undefined, "", "1", "true", "false", "0", " 0"]) {
+      assert.equal(grokStructuredPatchEnabled({ slug }, { CODEX_ROUTER_GROK_STRUCTURED_PATCH: flag }), supported && flag !== "0", `${slug}: ${flag}`);
+    }
   }
 });
 
@@ -185,5 +186,49 @@ test("codec-enabled malformed/oversized framing never uses legacy fail-open", as
     const result = await relay(setup(), [body], type, options);
     assert.ok(result.error);
     assert.equal(result.output, "");
+  }
+});
+
+
+test("invalid argument done reports a safe compiler category without committing an edit", async () => {
+  const line = { kind: "add", text: "PRIVATE_SOURCE_TEXT" };
+  for (const [hunks, code] of [
+    [[{ anchor: "", lines: [line] }], "empty_anchor"],
+    [[{ lines: [{ ...line, text: "PRIVATE_SOURCE_TEXT\n" }] }], "embedded_line_separator"],
+    [[{ lines: [{ ...line, kind: "context" }] }], "no_change"],
+    [[{ endOfFile: true, lines: [line] }, { lines: [line] }], "nonfinal_eof"],
+  ]) {
+    const bridge = setup();
+    const value = JSON.stringify({ operations: [{ op: "update", path: "private-name.txt", hunks }] });
+    const result = await relay(bridge, events(bridge.name, value));
+    assert.equal(result.error?.code, "ERR_NAMESPACE_RELAY_COMMITTED_STREAM");
+    assert.ok(result.error.message.includes(`invalid custom tool arguments done: ${code}`));
+    assert.doesNotMatch(result.error.message, /PRIVATE_SOURCE_TEXT|private-name/);
+    assert.doesNotMatch(result.output, /response.custom_tool_call_input.done|response.output_item.done|PRIVATE_SOURCE_TEXT|private-name/);
+  }
+  const bridge = setup();
+  const valid = JSON.stringify({ operations: [{ op: "update", path: "x", hunks: [{ lines: [line] }] }] });
+  const result = await relay(bridge, events(bridge.name, valid));
+  assert.ifError(result.error);
+  assert.equal(parsed(result.output).filter(x => x.type === "response.custom_tool_call_input.done").length, 1);
+});
+
+
+test("JSON and separator categories survive streaming without exposing or committing invalid edits", async () => {
+  const privateText = "PRIVATE_SOURCE_TEXT";
+  for (const [value, code] of [
+    ["", "arguments_empty_json"],
+    [JSON.stringify({ operations: "" }), "operations_empty_json"],
+    [JSON.stringify({ operations: '[{"op":' }), "operations_invalid_json"],
+    [JSON.stringify({ operations: '[{"op":"delete","op":"add","path":"PRIVATE_SOURCE_TEXT"}]' }), "operations_ambiguous_json"],
+    [JSON.stringify({ operations: [{ op: "delete", path: `${privateText}\n` }] }), "embedded_path_separator"],
+    [JSON.stringify({ operations: [{ op: "update", path: "x", hunks: [{ anchor: `${privateText}\n`, lines: [{ kind: "add", text: "x" }] }] }] }), "embedded_anchor_separator"],
+  ]) {
+    const bridge = setup();
+    const result = await relay(bridge, events(bridge.name, value));
+    assert.equal(result.error?.code, "ERR_NAMESPACE_RELAY_COMMITTED_STREAM");
+    assert.ok(result.error.message.includes(`invalid custom tool arguments done: ${code}`));
+    assert.doesNotMatch(result.error.message, /PRIVATE_SOURCE_TEXT/);
+    assert.doesNotMatch(result.output, /response.custom_tool_call_input.done|response.output_item.done|PRIVATE_SOURCE_TEXT/);
   }
 });

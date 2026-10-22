@@ -1,0 +1,1 @@
+- Preserve Grok initial tool argument prefixes and reconcile final snapshots without duplicate JSON; fail closed on conflicting snapshots and distinguish protocol errors from transport failures.

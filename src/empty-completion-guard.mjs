@@ -278,7 +278,10 @@ function partHasContent(part) {
 
 function itemHasContent(item) {
   if (!item || typeof item !== "object") return false;
-  if (item.type === "function_call" || item.type === "custom_tool_call") return true;
+  // Namespace restoration turns the Chat search relay back into this native
+  // client action before the guard runs. Treating it as empty hides discovery
+  // from the client and repeats the same generation without its tool result.
+  if (["function_call", "custom_tool_call", "tool_search_call"].includes(item.type)) return true;
   if (item.type && item.type !== "message") return false;
   if (Array.isArray(item.content)) return item.content.some(partHasContent);
   return partHasContent(item);

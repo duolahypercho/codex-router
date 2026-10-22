@@ -1,0 +1,1 @@
+- **Grok request timings distinguish a committed HTTP response from the final request result.** Stream failures and cancellation retain their settled status and generation outcome instead of appearing successful solely because response headers were sent with HTTP 200.

@@ -1,0 +1,1 @@
+- Fix skill publication on Node.js 24.22 while preserving exclusive directory claims, no-overwrite copying, and recovery of interrupted installs.

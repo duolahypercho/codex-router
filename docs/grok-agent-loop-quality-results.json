@@ -1,0 +1,2331 @@
+{
+  "validationDependency": {
+    "name": "ajv",
+    "version": "8.20.0",
+    "dialect": "2020-12",
+    "optional": true
+  },
+  "nodeVersion": "v26.7.0",
+  "candidateSourceDiffSha256": "ef1ddb14cbff5b8e47a670488a8a90ebad4762b75ea94009ed664522a2b28fa5",
+  "baseline": "8c5c128867d3b9f1bd359b9e9491d94cd65b90e1",
+  "candidateBase": "8c5c128867d3b9f1bd359b9e9491d94cd65b90e1",
+  "candidateSourceHashes": [
+    {
+      "path": "src/namespace-relay.mjs",
+      "sha256": "91107ab6dce3b36f54c52c862b8992678dd3a963f64485146b54e79e9cd26f73"
+    },
+    {
+      "path": "src/grok-tool-facade.mjs",
+      "sha256": "ba94d5b097e1e5b940ea50873658aa5412b1709f5115bf71c95d4adc8f232e83"
+    },
+    {
+      "path": "src/grok-structured-patch.mjs",
+      "sha256": "5f0b21b5fcbe90ff28809851cc9e3d160517fc14abd062ff52262463e7acf541"
+    },
+    {
+      "path": "src/grok-oauth-forwarder.mjs",
+      "sha256": "4558f38768344bd382305ae5c53f37edcc980464c255df17034171e02d1e5adc"
+    },
+    {
+      "path": "src/grok-oauth-turn.mjs",
+      "sha256": "a554b2b25658e9e755a08b05b84329e4ccff5d9eeef85b5b6f1c63f4f61dd243"
+    },
+    {
+      "path": "src/tool-schema-root.mjs",
+      "sha256": "b6b17b7fa509a58cfacc9071de550def41d276fa22d57191db9658b0fa0d1816"
+    },
+    {
+      "path": "src/chat-tool-surface.mjs",
+      "sha256": "4d2154b743fa9e2957369b68cdad2c91868beb6147148218254a66c8a38e488c"
+    },
+    {
+      "path": "src/codex-app-tools.mjs",
+      "sha256": "03b014ebdd680d8c3b3fac02162b612011acbeff7452dbf2049cd5a67374ddfb"
+    },
+    {
+      "path": "src/grok-tool-schema.mjs",
+      "sha256": "06011f18a3ce0e8cdab2fc7a4d58f820479210018db05e3c4bcaec206650603e"
+    }
+  ],
+  "scope": "Actual per-revision namespace bridge/edit facade and Grok OAuth forwarder, direct Chat adapter, stock client patch executor. LiteLLM and router HTTP listener are outside this experiment.",
+  "model": "grok-4.7",
+  "effort": "medium",
+  "serviceTier": "default (omitted)",
+  "limits": {
+    "taskRuns": 18,
+    "providerGenerations": 114,
+    "generationsPerRun": 12,
+    "clientTurns": 6,
+    "requestMs": 90000,
+    "campaignMs": 1200000
+  },
+  "startedAt": "2026-10-16T09:39:56.868Z",
+  "finishedAt": "2026-10-16T09:49:34.306Z",
+  "plannedRuns": 18,
+  "runs": [
+    {
+      "id": 1,
+      "arm": "baseline",
+      "caseName": "edit_repeated_context",
+      "repeat": 1,
+      "status": "harness_error",
+      "success": false,
+      "elapsedMs": 17362,
+      "providerRequests": 6,
+      "clientTurns": 6,
+      "generatedToolCalls": 6,
+      "invalidCalls": 3,
+      "repeatedInvalidCalls": 1,
+      "patchFailures": 0,
+      "seededInvalidCalls": 0,
+      "verified": false,
+      "finalMessages": 0,
+      "inputTokens": 25427,
+      "outputTokens": 737,
+      "cachedTokens": 21376,
+      "toolNames": [
+        "exec_command",
+        "apply_patch",
+        "exec_command",
+        "exec_command",
+        "exec_command",
+        "exec_command"
+      ],
+      "originalStatus": "client_turn_limit",
+      "qualityEligible": false,
+      "harnessError": "Verifier template accidentally imported benchmark-only modules and could not run.",
+      "descriptivePostRunInspection": {
+        "standardFee": 2,
+        "expressFee": 7,
+        "notCountedAsTaskSuccess": true
+      }
+    },
+    {
+      "id": 2,
+      "arm": "candidate",
+      "caseName": "edit_repeated_context",
+      "repeat": 1,
+      "status": "harness_error",
+      "success": false,
+      "elapsedMs": 17844,
+      "providerRequests": 6,
+      "clientTurns": 6,
+      "generatedToolCalls": 8,
+      "invalidCalls": 5,
+      "repeatedInvalidCalls": 0,
+      "patchFailures": 0,
+      "seededInvalidCalls": 0,
+      "verified": false,
+      "finalMessages": 0,
+      "inputTokens": 32202,
+      "outputTokens": 835,
+      "cachedTokens": 23680,
+      "toolNames": [
+        "exec_command",
+        "apply_patch",
+        "exec_command",
+        "exec_command",
+        "read_file",
+        "read_file",
+        "list_dir",
+        "grep"
+      ],
+      "originalStatus": "client_turn_limit",
+      "qualityEligible": false,
+      "harnessError": "Verifier template accidentally imported benchmark-only modules and could not run.",
+      "descriptivePostRunInspection": {
+        "standardFee": 2,
+        "expressFee": 7,
+        "notCountedAsTaskSuccess": true
+      }
+    },
+    {
+      "id": 3,
+      "arm": "baseline",
+      "caseName": "recover_invalid_union_argument",
+      "repeat": 1,
+      "status": "client_turn_limit",
+      "success": false,
+      "elapsedMs": 52740,
+      "providerRequests": 6,
+      "clientTurns": 6,
+      "generatedToolCalls": 6,
+      "invalidCalls": 5,
+      "repeatedInvalidCalls": 0,
+      "patchFailures": 0,
+      "seededInvalidCalls": 1,
+      "verified": false,
+      "finalMessages": 0,
+      "inputTokens": 35564,
+      "outputTokens": 3261,
+      "cachedTokens": 24448,
+      "toolNames": [
+        "automation_update",
+        "automation_update",
+        "automation_update",
+        "automation_update",
+        "automation_update",
+        "automation_update"
+      ]
+    },
+    {
+      "id": 4,
+      "arm": "candidate",
+      "caseName": "recover_invalid_union_argument",
+      "repeat": 1,
+      "status": "client_turn_limit",
+      "success": false,
+      "elapsedMs": 22765,
+      "providerRequests": 6,
+      "clientTurns": 6,
+      "generatedToolCalls": 6,
+      "invalidCalls": 0,
+      "repeatedInvalidCalls": 0,
+      "patchFailures": 0,
+      "seededInvalidCalls": 1,
+      "verified": true,
+      "finalMessages": 0,
+      "inputTokens": 24819,
+      "outputTokens": 778,
+      "cachedTokens": 17792,
+      "toolNames": [
+        "automation_update",
+        "automation_update",
+        "automation_update",
+        "automation_update",
+        "automation_update",
+        "automation_update"
+      ]
+    },
+    {
+      "id": 5,
+      "arm": "baseline",
+      "caseName": "two_step_then_final",
+      "repeat": 1,
+      "status": "interrupted",
+      "success": false,
+      "qualityEligible": false,
+      "reason": "Campaign stopped to repair verifier; active run telemetry was not checkpointed.",
+      "providerRequests": null,
+      "elapsedMs": null,
+      "invalidCalls": 0,
+      "repeatedInvalidCalls": 0,
+      "patchFailures": 0,
+      "providerRequestsUpperBound": 12
+    },
+    {
+      "id": 6,
+      "arm": "candidate",
+      "caseName": "two_step_then_final",
+      "repeat": 1,
+      "status": "completed",
+      "success": true,
+      "elapsedMs": 5388,
+      "providerRequests": 3,
+      "clientTurns": 3,
+      "generatedToolCalls": 2,
+      "invalidCalls": 0,
+      "repeatedInvalidCalls": 0,
+      "patchFailures": 0,
+      "seededInvalidCalls": 0,
+      "verified": true,
+      "finalMessages": 1,
+      "inputTokens": 10909,
+      "outputTokens": 118,
+      "cachedTokens": 8192,
+      "toolNames": [
+        "get_ticket",
+        "verify_ticket"
+      ],
+      "toolOutcomes": [
+        {
+          "name": "get_ticket",
+          "valid": true
+        },
+        {
+          "name": "verify_ticket",
+          "valid": true
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "arm": "candidate",
+      "caseName": "edit_repeated_context",
+      "repeat": 2,
+      "status": "completed",
+      "success": true,
+      "elapsedMs": 10432,
+      "providerRequests": 4,
+      "clientTurns": 4,
+      "generatedToolCalls": 4,
+      "invalidCalls": 0,
+      "repeatedInvalidCalls": 0,
+      "patchFailures": 0,
+      "seededInvalidCalls": 0,
+      "verified": true,
+      "finalMessages": 1,
+      "inputTokens": 20333,
+      "outputTokens": 352,
+      "cachedTokens": 12544,
+      "toolNames": [
+        "exec_command",
+        "read_file",
+        "apply_patch",
+        "exec_command"
+      ],
+      "toolOutcomes": [
+        {
+          "name": "exec_command",
+          "command": "cat module.mjs",
+          "valid": true
+        },
+        {
+          "name": "read_file",
+          "command": "sed -n '1,400p' 'module.mjs'",
+          "valid": true
+        },
+        {
+          "name": "apply_patch",
+          "valid": true
+        },
+        {
+          "name": "exec_command",
+          "command": "node verify.mjs",
+          "valid": true
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "arm": "baseline",
+      "caseName": "edit_repeated_context",
+      "repeat": 2,
+      "status": "completed",
+      "success": true,
+      "elapsedMs": 11193,
+      "providerRequests": 5,
+      "clientTurns": 4,
+      "generatedToolCalls": 3,
+      "invalidCalls": 0,
+      "repeatedInvalidCalls": 0,
+      "patchFailures": 0,
+      "seededInvalidCalls": 0,
+      "verified": true,
+      "finalMessages": 1,
+      "inputTokens": 19595,
+      "outputTokens": 373,
+      "cachedTokens": 13824,
+      "toolNames": [
+        "exec_command",
+        "apply_patch",
+        "exec_command"
+      ],
+      "toolOutcomes": [
+        {
+          "name": "exec_command",
+          "command": "cat module.mjs",
+          "valid": true
+        },
+        {
+          "name": "apply_patch",
+          "valid": true
+        },
+        {
+          "name": "exec_command",
+          "command": "node verify.mjs",
+          "valid": true
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "arm": "candidate",
+      "caseName": "recover_invalid_union_argument",
+      "repeat": 2,
+      "status": "client_turn_limit",
+      "success": false,
+      "elapsedMs": 15433,
+      "providerRequests": 6,
+      "clientTurns": 6,
+      "generatedToolCalls": 6,
+      "invalidCalls": 0,
+      "repeatedInvalidCalls": 0,
+      "patchFailures": 0,
+      "seededInvalidCalls": 1,
+      "verified": false,
+      "finalMessages": 0,
+      "inputTokens": 24370,
+      "outputTokens": 591,
+      "cachedTokens": 17792,
+      "toolNames": [
+        "automation_update",
+        "automation_update",
+        "automation_update",
+        "automation_update",
+        "automation_update",
+        "automation_update"
+      ],
+      "toolOutcomes": [
+        {
+          "name": "automation_update",
+          "mode": "view",
+          "idType": "string",
+          "valid": true
+        },
+        {
+          "name": "automation_update",
+          "mode": "view",
+          "idType": "string",
+          "valid": true
+        },
+        {
+          "name": "automation_update",
+          "mode": "view",
+          "idType": "string",
+          "valid": true
+        },
+        {
+          "name": "automation_update",
+          "mode": "view",
+          "idType": "string",
+          "valid": true
+        },
+        {
+          "name": "automation_update",
+          "mode": "view",
+          "idType": "string",
+          "valid": true
+        },
+        {
+          "name": "automation_update",
+          "mode": "view",
+          "idType": "string",
+          "valid": true
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "arm": "baseline",
+      "caseName": "recover_invalid_union_argument",
+      "repeat": 2,
+      "status": "client_turn_limit",
+      "success": false,
+      "elapsedMs": 73688,
+      "providerRequests": 6,
+      "clientTurns": 6,
+      "generatedToolCalls": 6,
+      "invalidCalls": 5,
+      "repeatedInvalidCalls": 3,
+      "patchFailures": 0,
+      "seededInvalidCalls": 1,
+      "verified": false,
+      "finalMessages": 0,
+      "inputTokens": 42902,
+      "outputTokens": 4270,
+      "cachedTokens": 28928,
+      "toolNames": [
+        "automation_update",
+        "automation_update",
+        "automation_update",
+        "automation_update",
+        "automation_update",
+        "automation_update"
+      ],
+      "toolOutcomes": [
+        {
+          "name": "automation_update",
+          "mode": "view",
+          "idType": "number",
+          "valid": false,
+          "invalidReason": "schema_validation_failed"
+        },
+        {
+          "name": "automation_update",
+          "mode": "view",
+          "idType": "string",
+          "valid": true
+        },
+        {
+          "name": "automation_update",
+          "mode": "view",
+          "idType": "number",
+          "valid": false,
+          "invalidReason": "schema_validation_failed"
+        },
+        {
+          "name": "automation_update",
+          "mode": "view",
+          "idType": "number",
+          "valid": false,
+          "invalidReason": "schema_validation_failed"
+        },
+        {
+          "name": "automation_update",
+          "mode": "view",
+          "idType": "number",
+          "status": 2,
+          "valid": false,
+          "invalidReason": "schema_validation_failed"
+        },
+        {
+          "name": "automation_update",
+          "mode": "view",
+          "idType": "number",
+          "valid": false,
+          "invalidReason": "schema_validation_failed"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "arm": "candidate",
+      "caseName": "two_step_then_final",
+      "repeat": 2,
+      "status": "http_502",
+      "success": false,
+      "elapsedMs": 20972,
+      "providerRequests": 3,
+      "clientTurns": 3,
+      "generatedToolCalls": 2,
+      "invalidCalls": 0,
+      "repeatedInvalidCalls": 0,
+      "patchFailures": 0,
+      "seededInvalidCalls": 0,
+      "verified": true,
+      "finalMessages": 0,
+      "inputTokens": 10912,
+      "outputTokens": 134,
+      "cachedTokens": 5888,
+      "toolNames": [
+        "get_ticket",
+        "verify_ticket"
+      ],
+      "toolOutcomes": [
+        {
+          "name": "get_ticket",
+          "valid": true
+        },
+        {
+          "name": "verify_ticket",
+          "valid": true
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "arm": "baseline",
+      "caseName": "two_step_then_final",
+      "repeat": 2,
+      "status": "completed",
+      "success": true,
+      "elapsedMs": 25014,
+      "providerRequests": 4,
+      "clientTurns": 3,
+      "generatedToolCalls": 2,
+      "invalidCalls": 0,
+      "repeatedInvalidCalls": 0,
+      "patchFailures": 0,
+      "seededInvalidCalls": 0,
+      "verified": true,
+      "finalMessages": 1,
+      "inputTokens": 14441,
+      "outputTokens": 201,
+      "cachedTokens": 11648,
+      "toolNames": [
+        "get_ticket",
+        "verify_ticket"
+      ],
+      "toolOutcomes": [
+        {
+          "name": "get_ticket",
+          "valid": true
+        },
+        {
+          "name": "verify_ticket",
+          "valid": true
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "arm": "baseline",
+      "caseName": "edit_repeated_context",
+      "repeat": 3,
+      "status": "completed",
+      "success": true,
+      "elapsedMs": 36132,
+      "providerRequests": 5,
+      "clientTurns": 4,
+      "generatedToolCalls": 3,
+      "invalidCalls": 0,
+      "repeatedInvalidCalls": 0,
+      "patchFailures": 0,
+      "seededInvalidCalls": 0,
+      "verified": true,
+      "finalMessages": 1,
+      "inputTokens": 19575,
+      "outputTokens": 307,
+      "cachedTokens": 13568,
+      "toolNames": [
+        "exec_command",
+        "apply_patch",
+        "exec_command"
+      ],
+      "toolOutcomes": [
+        {
+          "name": "exec_command",
+          "command": "cat module.mjs",
+          "valid": true
+        },
+        {
+          "name": "apply_patch",
+          "valid": true
+        },
+        {
+          "name": "exec_command",
+          "command": "node verify.mjs",
+          "valid": true
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "arm": "candidate",
+      "caseName": "edit_repeated_context",
+      "repeat": 3,
+      "status": "completed",
+      "success": true,
+      "elapsedMs": 8183,
+      "providerRequests": 4,
+      "clientTurns": 4,
+      "generatedToolCalls": 4,
+      "invalidCalls": 1,
+      "repeatedInvalidCalls": 0,
+      "patchFailures": 0,
+      "seededInvalidCalls": 0,
+      "verified": true,
+      "finalMessages": 1,
+      "inputTokens": 20149,
+      "outputTokens": 384,
+      "cachedTokens": 12672,
+      "toolNames": [
+        "read_file",
+        "list_dir",
+        "replace_lines",
+        "exec_command"
+      ],
+      "toolOutcomes": [
+        {
+          "name": "read_file",
+          "command": "sed -n '1,400p' 'module.mjs'",
+          "valid": true
+        },
+        {
+          "name": "list_dir",
+          "command": "ls -la '.'",
+          "valid": false,
+          "invalidReason": "unsupported_fixture_command"
+        },
+        {
+          "name": "replace_lines",
+          "valid": true
+        },
+        {
+          "name": "exec_command",
+          "command": "node verify.mjs",
+          "valid": true
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "arm": "baseline",
+      "caseName": "recover_invalid_union_argument",
+      "repeat": 3,
+      "status": "client_turn_limit",
+      "success": false,
+      "elapsedMs": 33128,
+      "providerRequests": 6,
+      "clientTurns": 6,
+      "generatedToolCalls": 6,
+      "invalidCalls": 4,
+      "repeatedInvalidCalls": 3,
+      "patchFailures": 0,
+      "seededInvalidCalls": 1,
+      "verified": false,
+      "finalMessages": 0,
+      "inputTokens": 32599,
+      "outputTokens": 1805,
+      "cachedTokens": 27392,
+      "toolNames": [
+        "automation_update",
+        "automation_update",
+        "automation_update",
+        "automation_update",
+        "automation_update",
+        "automation_update"
+      ],
+      "toolOutcomes": [
+        {
+          "name": "automation_update",
+          "mode": "view",
+          "idType": "number",
+          "valid": false,
+          "invalidReason": "schema_validation_failed"
+        },
+        {
+          "name": "automation_update",
+          "mode": "view",
+          "idType": "string",
+          "valid": true
+        },
+        {
+          "name": "automation_update",
+          "mode": "view",
+          "idType": "number",
+          "valid": false,
+          "invalidReason": "schema_validation_failed"
+        },
+        {
+          "name": "automation_update",
+          "mode": "view",
+          "idType": "number",
+          "valid": false,
+          "invalidReason": "schema_validation_failed"
+        },
+        {
+          "name": "automation_update",
+          "mode": "view",
+          "idType": "number",
+          "valid": false,
+          "invalidReason": "schema_validation_failed"
+        },
+        {
+          "name": "automation_update",
+          "mode": "view",
+          "idType": "string",
+          "valid": true
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "arm": "candidate",
+      "caseName": "recover_invalid_union_argument",
+      "repeat": 3,
+      "status": "client_turn_limit",
+      "success": false,
+      "elapsedMs": 18738,
+      "providerRequests": 6,
+      "clientTurns": 6,
+      "generatedToolCalls": 6,
+      "invalidCalls": 0,
+      "repeatedInvalidCalls": 0,
+      "patchFailures": 0,
+      "seededInvalidCalls": 1,
+      "verified": true,
+      "finalMessages": 0,
+      "inputTokens": 24129,
+      "outputTokens": 526,
+      "cachedTokens": 18304,
+      "toolNames": [
+        "automation_update",
+        "automation_update",
+        "automation_update",
+        "automation_update",
+        "automation_update",
+        "automation_update"
+      ],
+      "toolOutcomes": [
+        {
+          "name": "automation_update",
+          "mode": "view",
+          "idType": "string",
+          "valid": true
+        },
+        {
+          "name": "automation_update",
+          "mode": "view",
+          "idType": "string",
+          "valid": true
+        },
+        {
+          "name": "automation_update",
+          "mode": "view",
+          "idType": "string",
+          "valid": true
+        },
+        {
+          "name": "automation_update",
+          "mode": "view",
+          "idType": "string",
+          "valid": true
+        },
+        {
+          "name": "automation_update",
+          "mode": "update",
+          "idType": "string",
+          "status": "PAUSED",
+          "valid": true
+        },
+        {
+          "name": "automation_update",
+          "mode": "view",
+          "idType": "string",
+          "valid": true
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "arm": "baseline",
+      "caseName": "two_step_then_final",
+      "repeat": 3,
+      "status": "completed",
+      "success": true,
+      "elapsedMs": 8376,
+      "providerRequests": 4,
+      "clientTurns": 3,
+      "generatedToolCalls": 2,
+      "invalidCalls": 0,
+      "repeatedInvalidCalls": 0,
+      "patchFailures": 0,
+      "seededInvalidCalls": 0,
+      "verified": true,
+      "finalMessages": 1,
+      "inputTokens": 14382,
+      "outputTokens": 265,
+      "cachedTokens": 9216,
+      "toolNames": [
+        "get_ticket",
+        "verify_ticket"
+      ],
+      "toolOutcomes": [
+        {
+          "name": "get_ticket",
+          "valid": true
+        },
+        {
+          "name": "verify_ticket",
+          "valid": true
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "arm": "candidate",
+      "caseName": "two_step_then_final",
+      "repeat": 3,
+      "status": "completed",
+      "success": true,
+      "elapsedMs": 5650,
+      "providerRequests": 3,
+      "clientTurns": 3,
+      "generatedToolCalls": 2,
+      "invalidCalls": 0,
+      "repeatedInvalidCalls": 0,
+      "patchFailures": 0,
+      "seededInvalidCalls": 0,
+      "verified": true,
+      "finalMessages": 1,
+      "inputTokens": 10909,
+      "outputTokens": 222,
+      "cachedTokens": 8320,
+      "toolNames": [
+        "get_ticket",
+        "verify_ticket"
+      ],
+      "toolOutcomes": [
+        {
+          "name": "get_ticket",
+          "valid": true
+        },
+        {
+          "name": "verify_ticket",
+          "valid": true
+        }
+      ]
+    }
+  ],
+  "providerRequests": [
+    {
+      "runId": 1,
+      "index": 1,
+      "elapsedMs": 1692,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 3680,
+      "outputTokens": 85,
+      "cachedTokens": 1152
+    },
+    {
+      "runId": 1,
+      "index": 2,
+      "elapsedMs": 1444,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 3846,
+      "outputTokens": 92,
+      "cachedTokens": 3584
+    },
+    {
+      "runId": 1,
+      "index": 3,
+      "elapsedMs": 1035,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 3958,
+      "outputTokens": 21,
+      "cachedTokens": 3840
+    },
+    {
+      "runId": 1,
+      "index": 4,
+      "elapsedMs": 2592,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 4436,
+      "outputTokens": 164,
+      "cachedTokens": 3840
+    },
+    {
+      "runId": 1,
+      "index": 5,
+      "elapsedMs": 3284,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 4638,
+      "outputTokens": 150,
+      "cachedTokens": 4352
+    },
+    {
+      "runId": 1,
+      "index": 6,
+      "elapsedMs": 5395,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 4869,
+      "outputTokens": 225,
+      "cachedTokens": 4608
+    },
+    {
+      "runId": 2,
+      "index": 7,
+      "elapsedMs": 1371,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 4700,
+      "outputTokens": 74,
+      "cachedTokens": 1152
+    },
+    {
+      "runId": 2,
+      "index": 8,
+      "elapsedMs": 2966,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 4988,
+      "outputTokens": 164,
+      "cachedTokens": 1152
+    },
+    {
+      "runId": 2,
+      "index": 9,
+      "elapsedMs": 1560,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 5166,
+      "outputTokens": 21,
+      "cachedTokens": 4864
+    },
+    {
+      "runId": 2,
+      "index": 10,
+      "elapsedMs": 2100,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 5644,
+      "outputTokens": 88,
+      "cachedTokens": 5120
+    },
+    {
+      "runId": 2,
+      "index": 11,
+      "elapsedMs": 1913,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 5770,
+      "outputTokens": 49,
+      "cachedTokens": 5632
+    },
+    {
+      "runId": 2,
+      "index": 12,
+      "elapsedMs": 6838,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 5934,
+      "outputTokens": 439,
+      "cachedTokens": 5760
+    },
+    {
+      "runId": 3,
+      "index": 13,
+      "elapsedMs": 9259,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 4273,
+      "outputTokens": 610,
+      "cachedTokens": 1152
+    },
+    {
+      "runId": 3,
+      "index": 14,
+      "elapsedMs": 15322,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 4903,
+      "outputTokens": 924,
+      "cachedTokens": 4224
+    },
+    {
+      "runId": 3,
+      "index": 15,
+      "elapsedMs": 6429,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 5880,
+      "outputTokens": 398,
+      "cachedTokens": 4864
+    },
+    {
+      "runId": 3,
+      "index": 16,
+      "elapsedMs": 8396,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 6302,
+      "outputTokens": 496,
+      "cachedTokens": 1152
+    },
+    {
+      "runId": 3,
+      "index": 17,
+      "elapsedMs": 7641,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 6830,
+      "outputTokens": 529,
+      "cachedTokens": 6272
+    },
+    {
+      "runId": 3,
+      "index": 18,
+      "elapsedMs": 5556,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 7376,
+      "outputTokens": 304,
+      "cachedTokens": 6784,
+      "errorType": "AbortError"
+    },
+    {
+      "runId": 4,
+      "index": 19,
+      "elapsedMs": 3510,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 3643,
+      "outputTokens": 170,
+      "cachedTokens": 1152
+    },
+    {
+      "runId": 4,
+      "index": 20,
+      "elapsedMs": 2964,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 3863,
+      "outputTokens": 146,
+      "cachedTokens": 3584
+    },
+    {
+      "runId": 4,
+      "index": 21,
+      "elapsedMs": 4291,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 4059,
+      "outputTokens": 53,
+      "cachedTokens": 3840
+    },
+    {
+      "runId": 4,
+      "index": 22,
+      "elapsedMs": 5274,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 4162,
+      "outputTokens": 286,
+      "cachedTokens": 3968
+    },
+    {
+      "runId": 4,
+      "index": 23,
+      "elapsedMs": 2655,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 4498,
+      "outputTokens": 46,
+      "cachedTokens": 4096
+    },
+    {
+      "runId": 4,
+      "index": 24,
+      "elapsedMs": 3000,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 4594,
+      "outputTokens": 77,
+      "cachedTokens": 1152
+    },
+    {
+      "runId": 6,
+      "index": 37,
+      "elapsedMs": 1583,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 3497,
+      "outputTokens": 36,
+      "cachedTokens": 3456,
+      "hasPrivateFinal": false,
+      "toolChoice": null,
+      "emittedFunctionNames": [
+        "get_ticket"
+      ]
+    },
+    {
+      "runId": 6,
+      "index": 38,
+      "elapsedMs": 1928,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 3684,
+      "outputTokens": 34,
+      "cachedTokens": 1152,
+      "hasPrivateFinal": true,
+      "toolChoice": "required",
+      "emittedFunctionNames": [
+        "verify_ticket"
+      ]
+    },
+    {
+      "runId": 6,
+      "index": 39,
+      "elapsedMs": 1742,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 3728,
+      "outputTokens": 48,
+      "cachedTokens": 3584,
+      "hasPrivateFinal": true,
+      "toolChoice": "required",
+      "emittedFunctionNames": [
+        "__codex_router_submit_final"
+      ]
+    },
+    {
+      "runId": 7,
+      "index": 40,
+      "elapsedMs": 1578,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 4700,
+      "outputTokens": 86,
+      "cachedTokens": 1152,
+      "hasPrivateFinal": false,
+      "toolChoice": null,
+      "emittedFunctionNames": [
+        "exec_command",
+        "read_file"
+      ]
+    },
+    {
+      "runId": 7,
+      "index": 41,
+      "elapsedMs": 5026,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 5077,
+      "outputTokens": 170,
+      "cachedTokens": 1152,
+      "hasPrivateFinal": true,
+      "toolChoice": "required",
+      "emittedFunctionNames": [
+        "apply_patch"
+      ]
+    },
+    {
+      "runId": 7,
+      "index": 42,
+      "elapsedMs": 1522,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 5261,
+      "outputTokens": 20,
+      "cachedTokens": 4992,
+      "hasPrivateFinal": true,
+      "toolChoice": "required",
+      "emittedFunctionNames": [
+        "exec_command"
+      ]
+    },
+    {
+      "runId": 7,
+      "index": 43,
+      "elapsedMs": 2053,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 5295,
+      "outputTokens": 76,
+      "cachedTokens": 5248,
+      "hasPrivateFinal": true,
+      "toolChoice": "required",
+      "emittedFunctionNames": [
+        "__codex_router_submit_final"
+      ]
+    },
+    {
+      "runId": 8,
+      "index": 44,
+      "elapsedMs": 1505,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 3680,
+      "outputTokens": 84,
+      "cachedTokens": 1280,
+      "hasPrivateFinal": false,
+      "toolChoice": null,
+      "emittedFunctionNames": [
+        "exec_command"
+      ]
+    },
+    {
+      "runId": 8,
+      "index": 45,
+      "elapsedMs": 1561,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 3845,
+      "outputTokens": 89,
+      "cachedTokens": 3584,
+      "hasPrivateFinal": false,
+      "toolChoice": null,
+      "emittedFunctionNames": [
+        "apply_patch"
+      ]
+    },
+    {
+      "runId": 8,
+      "index": 46,
+      "elapsedMs": 2084,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 3954,
+      "outputTokens": 21,
+      "cachedTokens": 3840,
+      "hasPrivateFinal": false,
+      "toolChoice": null,
+      "emittedFunctionNames": [
+        "exec_command"
+      ]
+    },
+    {
+      "runId": 8,
+      "index": 47,
+      "elapsedMs": 2795,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 3989,
+      "outputTokens": 50,
+      "cachedTokens": 3840,
+      "hasPrivateFinal": false,
+      "toolChoice": null,
+      "emittedFunctionNames": []
+    },
+    {
+      "runId": 8,
+      "index": 48,
+      "elapsedMs": 3021,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 4127,
+      "outputTokens": 129,
+      "cachedTokens": 1280,
+      "hasPrivateFinal": true,
+      "toolChoice": "required",
+      "emittedFunctionNames": [
+        "__codex_router_submit_final"
+      ]
+    },
+    {
+      "runId": 9,
+      "index": 49,
+      "elapsedMs": 3535,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 3643,
+      "outputTokens": 218,
+      "cachedTokens": 1152,
+      "hasPrivateFinal": true,
+      "toolChoice": "required",
+      "emittedFunctionNames": [
+        "automation_update"
+      ]
+    },
+    {
+      "runId": 9,
+      "index": 50,
+      "elapsedMs": 2394,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 3914,
+      "outputTokens": 74,
+      "cachedTokens": 3584,
+      "hasPrivateFinal": true,
+      "toolChoice": "required",
+      "emittedFunctionNames": [
+        "automation_update"
+      ]
+    },
+    {
+      "runId": 9,
+      "index": 51,
+      "elapsedMs": 1874,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 4038,
+      "outputTokens": 35,
+      "cachedTokens": 3840,
+      "hasPrivateFinal": true,
+      "toolChoice": "required",
+      "emittedFunctionNames": [
+        "automation_update"
+      ]
+    },
+    {
+      "runId": 9,
+      "index": 52,
+      "elapsedMs": 2740,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 4123,
+      "outputTokens": 109,
+      "cachedTokens": 3968,
+      "hasPrivateFinal": true,
+      "toolChoice": "required",
+      "emittedFunctionNames": [
+        "automation_update"
+      ]
+    },
+    {
+      "runId": 9,
+      "index": 53,
+      "elapsedMs": 1864,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 4282,
+      "outputTokens": 38,
+      "cachedTokens": 4096,
+      "hasPrivateFinal": true,
+      "toolChoice": "required",
+      "emittedFunctionNames": [
+        "automation_update"
+      ],
+      "errorType": "AbortError"
+    },
+    {
+      "runId": 9,
+      "index": 54,
+      "elapsedMs": 2982,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 4370,
+      "outputTokens": 117,
+      "cachedTokens": 1152,
+      "hasPrivateFinal": true,
+      "toolChoice": "required",
+      "emittedFunctionNames": [
+        "automation_update"
+      ]
+    },
+    {
+      "runId": 10,
+      "index": 55,
+      "elapsedMs": 35240,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 4273,
+      "outputTokens": 2163,
+      "cachedTokens": 1152,
+      "hasPrivateFinal": false,
+      "toolChoice": null,
+      "emittedFunctionNames": [
+        "automation_update"
+      ]
+    },
+    {
+      "runId": 10,
+      "index": 56,
+      "elapsedMs": 19491,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 6456,
+      "outputTokens": 1198,
+      "cachedTokens": 4224,
+      "hasPrivateFinal": false,
+      "toolChoice": null,
+      "emittedFunctionNames": [
+        "automation_update"
+      ]
+    },
+    {
+      "runId": 10,
+      "index": 57,
+      "elapsedMs": 5368,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 7704,
+      "outputTokens": 317,
+      "cachedTokens": 6400,
+      "hasPrivateFinal": false,
+      "toolChoice": null,
+      "emittedFunctionNames": [
+        "automation_update"
+      ]
+    },
+    {
+      "runId": 10,
+      "index": 58,
+      "elapsedMs": 2876,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 8041,
+      "outputTokens": 49,
+      "cachedTokens": 1152,
+      "hasPrivateFinal": false,
+      "toolChoice": null,
+      "emittedFunctionNames": [
+        "automation_update"
+      ]
+    },
+    {
+      "runId": 10,
+      "index": 59,
+      "elapsedMs": 3821,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 8107,
+      "outputTokens": 197,
+      "cachedTokens": 7936,
+      "hasPrivateFinal": false,
+      "toolChoice": null,
+      "emittedFunctionNames": [
+        "automation_update"
+      ]
+    },
+    {
+      "runId": 10,
+      "index": 60,
+      "elapsedMs": 6748,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 8321,
+      "outputTokens": 346,
+      "cachedTokens": 8064,
+      "hasPrivateFinal": false,
+      "toolChoice": null,
+      "emittedFunctionNames": [
+        "automation_update"
+      ]
+    },
+    {
+      "runId": 11,
+      "index": 61,
+      "elapsedMs": 1663,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 3497,
+      "outputTokens": 36,
+      "cachedTokens": 1152,
+      "hasPrivateFinal": false,
+      "toolChoice": null,
+      "emittedFunctionNames": [
+        "get_ticket"
+      ]
+    },
+    {
+      "runId": 11,
+      "index": 62,
+      "elapsedMs": 7768,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 3684,
+      "outputTokens": 37,
+      "cachedTokens": 1152,
+      "hasPrivateFinal": true,
+      "toolChoice": "required",
+      "emittedFunctionNames": [
+        "verify_ticket"
+      ]
+    },
+    {
+      "runId": 11,
+      "index": 63,
+      "elapsedMs": 11477,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 3731,
+      "outputTokens": 61,
+      "cachedTokens": 3584,
+      "hasPrivateFinal": true,
+      "toolChoice": "required",
+      "emittedFunctionNames": [
+        "__codex_router_submit_final"
+      ]
+    },
+    {
+      "runId": 12,
+      "index": 64,
+      "elapsedMs": 7658,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 3497,
+      "outputTokens": 57,
+      "cachedTokens": 3456,
+      "hasPrivateFinal": false,
+      "toolChoice": null,
+      "emittedFunctionNames": [
+        "get_ticket"
+      ]
+    },
+    {
+      "runId": 12,
+      "index": 65,
+      "elapsedMs": 1308,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 3572,
+      "outputTokens": 35,
+      "cachedTokens": 3456,
+      "hasPrivateFinal": false,
+      "toolChoice": null,
+      "emittedFunctionNames": [
+        "verify_ticket"
+      ]
+    },
+    {
+      "runId": 12,
+      "index": 66,
+      "elapsedMs": 1785,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 3617,
+      "outputTokens": 50,
+      "cachedTokens": 3456,
+      "hasPrivateFinal": false,
+      "toolChoice": null,
+      "emittedFunctionNames": []
+    },
+    {
+      "runId": 12,
+      "index": 67,
+      "elapsedMs": 14197,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 3755,
+      "outputTokens": 59,
+      "cachedTokens": 1280,
+      "hasPrivateFinal": true,
+      "toolChoice": "required",
+      "emittedFunctionNames": [
+        "__codex_router_submit_final"
+      ]
+    },
+    {
+      "runId": 13,
+      "index": 68,
+      "elapsedMs": 29362,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 3680,
+      "outputTokens": 84,
+      "cachedTokens": 1152,
+      "hasPrivateFinal": false,
+      "toolChoice": null,
+      "emittedFunctionNames": [
+        "exec_command"
+      ]
+    },
+    {
+      "runId": 13,
+      "index": 69,
+      "elapsedMs": 1511,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 3845,
+      "outputTokens": 83,
+      "cachedTokens": 3584,
+      "hasPrivateFinal": false,
+      "toolChoice": null,
+      "emittedFunctionNames": [
+        "apply_patch"
+      ]
+    },
+    {
+      "runId": 13,
+      "index": 70,
+      "elapsedMs": 918,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 3948,
+      "outputTokens": 20,
+      "cachedTokens": 3840,
+      "hasPrivateFinal": false,
+      "toolChoice": null,
+      "emittedFunctionNames": [
+        "exec_command"
+      ]
+    },
+    {
+      "runId": 13,
+      "index": 71,
+      "elapsedMs": 1711,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 3982,
+      "outputTokens": 50,
+      "cachedTokens": 3840,
+      "hasPrivateFinal": false,
+      "toolChoice": null,
+      "emittedFunctionNames": []
+    },
+    {
+      "runId": 13,
+      "index": 72,
+      "elapsedMs": 2536,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 4120,
+      "outputTokens": 70,
+      "cachedTokens": 1152,
+      "hasPrivateFinal": true,
+      "toolChoice": "required",
+      "emittedFunctionNames": [
+        "__codex_router_submit_final"
+      ]
+    },
+    {
+      "runId": 14,
+      "index": 73,
+      "elapsedMs": 1439,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 4700,
+      "outputTokens": 79,
+      "cachedTokens": 1280,
+      "hasPrivateFinal": false,
+      "toolChoice": null,
+      "emittedFunctionNames": [
+        "read_file",
+        "list_dir"
+      ]
+    },
+    {
+      "runId": 14,
+      "index": 74,
+      "elapsedMs": 2325,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 5027,
+      "outputTokens": 147,
+      "cachedTokens": 1280,
+      "hasPrivateFinal": true,
+      "toolChoice": "required",
+      "emittedFunctionNames": [
+        "replace_lines"
+      ],
+      "errorType": "AbortError"
+    },
+    {
+      "runId": 14,
+      "index": 75,
+      "elapsedMs": 1460,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 5194,
+      "outputTokens": 20,
+      "cachedTokens": 4992,
+      "hasPrivateFinal": true,
+      "toolChoice": "required",
+      "emittedFunctionNames": [
+        "exec_command"
+      ]
+    },
+    {
+      "runId": 14,
+      "index": 76,
+      "elapsedMs": 2853,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 5228,
+      "outputTokens": 138,
+      "cachedTokens": 5120,
+      "hasPrivateFinal": true,
+      "toolChoice": "required",
+      "emittedFunctionNames": [
+        "__codex_router_submit_final"
+      ],
+      "errorType": "AbortError"
+    },
+    {
+      "runId": 15,
+      "index": 77,
+      "elapsedMs": 5444,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 4273,
+      "outputTokens": 360,
+      "cachedTokens": 1152,
+      "hasPrivateFinal": false,
+      "toolChoice": null,
+      "emittedFunctionNames": [
+        "automation_update"
+      ]
+    },
+    {
+      "runId": 15,
+      "index": 78,
+      "elapsedMs": 17366,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 4650,
+      "outputTokens": 955,
+      "cachedTokens": 4224,
+      "hasPrivateFinal": false,
+      "toolChoice": null,
+      "emittedFunctionNames": [
+        "automation_update"
+      ]
+    },
+    {
+      "runId": 15,
+      "index": 79,
+      "elapsedMs": 4148,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 5655,
+      "outputTokens": 248,
+      "cachedTokens": 4608,
+      "hasPrivateFinal": false,
+      "toolChoice": null,
+      "emittedFunctionNames": [
+        "automation_update"
+      ]
+    },
+    {
+      "runId": 15,
+      "index": 80,
+      "elapsedMs": 1333,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 5920,
+      "outputTokens": 33,
+      "cachedTokens": 5632,
+      "hasPrivateFinal": false,
+      "toolChoice": null,
+      "emittedFunctionNames": [
+        "automation_update"
+      ]
+    },
+    {
+      "runId": 15,
+      "index": 81,
+      "elapsedMs": 2841,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 5970,
+      "outputTokens": 144,
+      "cachedTokens": 5888,
+      "hasPrivateFinal": false,
+      "toolChoice": null,
+      "emittedFunctionNames": [
+        "automation_update"
+      ]
+    },
+    {
+      "runId": 15,
+      "index": 82,
+      "elapsedMs": 1941,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 6131,
+      "outputTokens": 65,
+      "cachedTokens": 5888,
+      "hasPrivateFinal": false,
+      "toolChoice": null,
+      "emittedFunctionNames": [
+        "automation_update"
+      ]
+    },
+    {
+      "runId": 16,
+      "index": 83,
+      "elapsedMs": 3563,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 3643,
+      "outputTokens": 154,
+      "cachedTokens": 1152,
+      "hasPrivateFinal": true,
+      "toolChoice": "required",
+      "emittedFunctionNames": [
+        "automation_update"
+      ]
+    },
+    {
+      "runId": 16,
+      "index": 84,
+      "elapsedMs": 2670,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 3847,
+      "outputTokens": 50,
+      "cachedTokens": 1152,
+      "hasPrivateFinal": true,
+      "toolChoice": "required",
+      "emittedFunctionNames": [
+        "automation_update"
+      ]
+    },
+    {
+      "runId": 16,
+      "index": 85,
+      "elapsedMs": 2793,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 3947,
+      "outputTokens": 104,
+      "cachedTokens": 3840,
+      "hasPrivateFinal": true,
+      "toolChoice": "required",
+      "emittedFunctionNames": [
+        "automation_update"
+      ]
+    },
+    {
+      "runId": 16,
+      "index": 86,
+      "elapsedMs": 2260,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 4101,
+      "outputTokens": 77,
+      "cachedTokens": 3840,
+      "hasPrivateFinal": true,
+      "toolChoice": "required",
+      "emittedFunctionNames": [
+        "automation_update"
+      ]
+    },
+    {
+      "runId": 16,
+      "index": 87,
+      "elapsedMs": 5025,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 4228,
+      "outputTokens": 95,
+      "cachedTokens": 4096,
+      "hasPrivateFinal": true,
+      "toolChoice": "required",
+      "emittedFunctionNames": [
+        "automation_update"
+      ]
+    },
+    {
+      "runId": 16,
+      "index": 88,
+      "elapsedMs": 2367,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 4363,
+      "outputTokens": 46,
+      "cachedTokens": 4224,
+      "hasPrivateFinal": true,
+      "toolChoice": "required",
+      "emittedFunctionNames": [
+        "automation_update"
+      ]
+    },
+    {
+      "runId": 17,
+      "index": 89,
+      "elapsedMs": 1177,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 3497,
+      "outputTokens": 36,
+      "cachedTokens": 1152,
+      "hasPrivateFinal": false,
+      "toolChoice": null,
+      "emittedFunctionNames": [
+        "get_ticket"
+      ]
+    },
+    {
+      "runId": 17,
+      "index": 90,
+      "elapsedMs": 3051,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 3551,
+      "outputTokens": 37,
+      "cachedTokens": 3456,
+      "hasPrivateFinal": false,
+      "toolChoice": null,
+      "emittedFunctionNames": [
+        "verify_ticket"
+      ]
+    },
+    {
+      "runId": 17,
+      "index": 91,
+      "elapsedMs": 1522,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 3598,
+      "outputTokens": 58,
+      "cachedTokens": 3456,
+      "hasPrivateFinal": false,
+      "toolChoice": null,
+      "emittedFunctionNames": []
+    },
+    {
+      "runId": 17,
+      "index": 92,
+      "elapsedMs": 2352,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 3736,
+      "outputTokens": 134,
+      "cachedTokens": 1152,
+      "hasPrivateFinal": true,
+      "toolChoice": "required",
+      "emittedFunctionNames": [
+        "__codex_router_submit_final"
+      ]
+    },
+    {
+      "runId": 18,
+      "index": 93,
+      "elapsedMs": 1160,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 3497,
+      "outputTokens": 36,
+      "cachedTokens": 3456,
+      "hasPrivateFinal": false,
+      "toolChoice": null,
+      "emittedFunctionNames": [
+        "get_ticket"
+      ]
+    },
+    {
+      "runId": 18,
+      "index": 94,
+      "elapsedMs": 1504,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 3684,
+      "outputTokens": 34,
+      "cachedTokens": 1280,
+      "hasPrivateFinal": true,
+      "toolChoice": "required",
+      "emittedFunctionNames": [
+        "verify_ticket"
+      ]
+    },
+    {
+      "runId": 18,
+      "index": 95,
+      "elapsedMs": 2822,
+      "httpStatus": 200,
+      "terminal": "response.completed",
+      "inputTokens": 3728,
+      "outputTokens": 152,
+      "cachedTokens": 3584,
+      "hasPrivateFinal": true,
+      "toolChoice": "required",
+      "emittedFunctionNames": [
+        "__codex_router_submit_final"
+      ]
+    }
+  ],
+  "exclusions": [],
+  "limitations": [
+    "Synthetic fixtures; not a general coding ranking.",
+    "Cached tokens are null when provider telemetry omits them.",
+    "Seeded invalid call is input setup and counted separately from generated invalid calls.",
+    "No personal prompts, credentials or raw reasoning are stored.",
+    "A client tool_search sentinel prevents bundled app expansion; fixture tools are eager and the search declaration is omitted upstream."
+  ],
+  "unaccountedProviderRequestsUpperBound": 12,
+  "interruption": {
+    "reason": "Harness verifier import bug",
+    "knownProviderRequestsBeforeStop": 24,
+    "unknownInterruptedRun": 5,
+    "unknownGenerationUpperBound": 12,
+    "rerunCompletedCases": false
+  },
+  "resumedAt": "2026-10-16T09:45:01.591Z",
+  "resumedCandidateSourceHashes": [
+    {
+      "path": "src/namespace-relay.mjs",
+      "sha256": "91107ab6dce3b36f54c52c862b8992678dd3a963f64485146b54e79e9cd26f73"
+    },
+    {
+      "path": "src/grok-tool-facade.mjs",
+      "sha256": "ba94d5b097e1e5b940ea50873658aa5412b1709f5115bf71c95d4adc8f232e83"
+    },
+    {
+      "path": "src/grok-structured-patch.mjs",
+      "sha256": "5f0b21b5fcbe90ff28809851cc9e3d160517fc14abd062ff52262463e7acf541"
+    },
+    {
+      "path": "src/grok-oauth-forwarder.mjs",
+      "sha256": "4558f38768344bd382305ae5c53f37edcc980464c255df17034171e02d1e5adc"
+    },
+    {
+      "path": "src/grok-oauth-turn.mjs",
+      "sha256": "a554b2b25658e9e755a08b05b84329e4ccff5d9eeef85b5b6f1c63f4f61dd243"
+    },
+    {
+      "path": "src/tool-schema-root.mjs",
+      "sha256": "b6b17b7fa509a58cfacc9071de550def41d276fa22d57191db9658b0fa0d1816"
+    },
+    {
+      "path": "src/chat-tool-surface.mjs",
+      "sha256": "4d2154b743fa9e2957369b68cdad2c91868beb6147148218254a66c8a38e488c"
+    },
+    {
+      "path": "src/codex-app-tools.mjs",
+      "sha256": "03b014ebdd680d8c3b3fac02162b612011acbeff7452dbf2049cd5a67374ddfb"
+    },
+    {
+      "path": "src/grok-tool-schema.mjs",
+      "sha256": "0e5bf106b6becb806e9bf6985d1a80bc62cf025703b675b8ba2c26f2283e4434"
+    }
+  ],
+  "providerGenerationCount": 83,
+  "providerBudgetUsedUpperBound": 95,
+  "summary": {
+    "baseline": {
+      "started": 9,
+      "eligible": 7,
+      "succeeded": 4,
+      "failed": 3,
+      "excludedFromQuality": 2,
+      "harnessErrors": 1,
+      "interrupted": 1,
+      "allStartedMetrics": {
+        "knownProviderRequests": 42,
+        "invalidCalls": 17,
+        "repeatedInvalidCalls": 7,
+        "knownElapsedMs": 257633
+      },
+      "eligibleMetrics": {
+        "providerRequests": 36,
+        "invalidCalls": 14,
+        "repeatedInvalidCalls": 6,
+        "elapsedMs": 240271
+      }
+    },
+    "candidate": {
+      "started": 9,
+      "eligible": 8,
+      "succeeded": 4,
+      "failed": 4,
+      "excludedFromQuality": 1,
+      "harnessErrors": 1,
+      "interrupted": 0,
+      "allStartedMetrics": {
+        "knownProviderRequests": 41,
+        "invalidCalls": 6,
+        "repeatedInvalidCalls": 0,
+        "knownElapsedMs": 125405
+      },
+      "eligibleMetrics": {
+        "providerRequests": 35,
+        "invalidCalls": 1,
+        "repeatedInvalidCalls": 0,
+        "elapsedMs": 107561
+      }
+    }
+  },
+  "caseSummary": {
+    "edit_repeated_context": {
+      "baseline": {
+        "eligibleRuns": [
+          8,
+          13
+        ],
+        "succeeded": 2,
+        "failed": 0,
+        "providerRequests": [
+          5,
+          5
+        ],
+        "elapsedMs": [
+          11193,
+          36132
+        ],
+        "invalidCalls": 0,
+        "taskStateVerified": 2
+      },
+      "candidate": {
+        "eligibleRuns": [
+          7,
+          14
+        ],
+        "succeeded": 2,
+        "failed": 0,
+        "providerRequests": [
+          4,
+          4
+        ],
+        "elapsedMs": [
+          10432,
+          8183
+        ],
+        "invalidCalls": 1,
+        "taskStateVerified": 2
+      }
+    },
+    "recover_invalid_union_argument": {
+      "baseline": {
+        "eligibleRuns": [
+          3,
+          10,
+          15
+        ],
+        "succeeded": 0,
+        "failed": 3,
+        "providerRequests": [
+          6,
+          6,
+          6
+        ],
+        "elapsedMs": [
+          52740,
+          73688,
+          33128
+        ],
+        "invalidCalls": 14,
+        "taskStateVerified": 0
+      },
+      "candidate": {
+        "eligibleRuns": [
+          4,
+          9,
+          16
+        ],
+        "succeeded": 0,
+        "failed": 3,
+        "providerRequests": [
+          6,
+          6,
+          6
+        ],
+        "elapsedMs": [
+          22765,
+          15433,
+          18738
+        ],
+        "invalidCalls": 0,
+        "taskStateVerified": 2
+      }
+    },
+    "two_step_then_final": {
+      "baseline": {
+        "eligibleRuns": [
+          12,
+          17
+        ],
+        "succeeded": 2,
+        "failed": 0,
+        "providerRequests": [
+          4,
+          4
+        ],
+        "elapsedMs": [
+          25014,
+          8376
+        ],
+        "invalidCalls": 0,
+        "taskStateVerified": 2
+      },
+      "candidate": {
+        "eligibleRuns": [
+          6,
+          11,
+          18
+        ],
+        "succeeded": 2,
+        "failed": 1,
+        "providerRequests": [
+          3,
+          3,
+          3
+        ],
+        "elapsedMs": [
+          5388,
+          20972,
+          5650
+        ],
+        "invalidCalls": 0,
+        "taskStateVerified": 3
+      }
+    }
+  },
+  "measurementNotes": [
+    "Edit repeat 1 (runs 1,2) invalidated by harness verifier import bug; both original outcomes and provider usage retained. Native file inspection showed the requested fees, but this is not counted as task success.",
+    "Run5 interrupted while stopping the faulty campaign; no per-attempt checkpoint was available. Actual provider count is unknown, so the full12-generation per-run bound is reserved in cumulative quota accounting.",
+    "Runs3,4 are valid recovery-case observations unaffected by verifier bug, retained as client-turn-limit failures.",
+    "Candidate run11 received upstream response.completed with a private final function name, then forwarder returned502. Private final argument shape, accompanying public text length, and downstream error code were not retained; cause is unknown.",
+    "Candidate recovery passed argument validation but still failed to finish in all3 repetitions; schema-valid calls do not establish successful task recovery.",
+    "Measured candidate is the captured source snapshot. Post-campaign fixes require separate verification and are not covered by these live results.",
+    "The final script additionally records private-final argument shape, public text length, and HTTP error codes for future campaigns; those fields are unavailable retroactively.",
+    "Wall times include observed provider/network variation. Compare paired task outcomes and call counts; do not infer a general speedup from this small sample."
+  ],
+  "campaignWallMs": 577438,
+  "liveAcceptancePassed": false,
+  "pairedComparisons": [
+    {
+      "caseName": "edit_repeated_context",
+      "repeat": 1,
+      "baselineRunId": 1,
+      "candidateRunId": 2,
+      "qualityComparable": false,
+      "reason": "At least one arm has a harness error or interruption; excluded from paired quality and latency comparison."
+    },
+    {
+      "caseName": "edit_repeated_context",
+      "repeat": 2,
+      "baselineRunId": 8,
+      "candidateRunId": 7,
+      "qualityComparable": true,
+      "baselineSuccess": true,
+      "candidateSuccess": true,
+      "baselineRequests": 5,
+      "candidateRequests": 4,
+      "baselineElapsedMs": 11193,
+      "candidateElapsedMs": 10432,
+      "latencyComparisonSuccessfulTasksOnly": true
+    },
+    {
+      "caseName": "edit_repeated_context",
+      "repeat": 3,
+      "baselineRunId": 13,
+      "candidateRunId": 14,
+      "qualityComparable": true,
+      "baselineSuccess": true,
+      "candidateSuccess": true,
+      "baselineRequests": 5,
+      "candidateRequests": 4,
+      "baselineElapsedMs": 36132,
+      "candidateElapsedMs": 8183,
+      "latencyComparisonSuccessfulTasksOnly": true
+    },
+    {
+      "caseName": "recover_invalid_union_argument",
+      "repeat": 1,
+      "baselineRunId": 3,
+      "candidateRunId": 4,
+      "qualityComparable": true,
+      "baselineSuccess": false,
+      "candidateSuccess": false,
+      "baselineRequests": 6,
+      "candidateRequests": 6,
+      "baselineElapsedMs": 52740,
+      "candidateElapsedMs": 22765,
+      "latencyComparisonSuccessfulTasksOnly": false
+    },
+    {
+      "caseName": "recover_invalid_union_argument",
+      "repeat": 2,
+      "baselineRunId": 10,
+      "candidateRunId": 9,
+      "qualityComparable": true,
+      "baselineSuccess": false,
+      "candidateSuccess": false,
+      "baselineRequests": 6,
+      "candidateRequests": 6,
+      "baselineElapsedMs": 73688,
+      "candidateElapsedMs": 15433,
+      "latencyComparisonSuccessfulTasksOnly": false
+    },
+    {
+      "caseName": "recover_invalid_union_argument",
+      "repeat": 3,
+      "baselineRunId": 15,
+      "candidateRunId": 16,
+      "qualityComparable": true,
+      "baselineSuccess": false,
+      "candidateSuccess": false,
+      "baselineRequests": 6,
+      "candidateRequests": 6,
+      "baselineElapsedMs": 33128,
+      "candidateElapsedMs": 18738,
+      "latencyComparisonSuccessfulTasksOnly": false
+    },
+    {
+      "caseName": "two_step_then_final",
+      "repeat": 1,
+      "baselineRunId": 5,
+      "candidateRunId": 6,
+      "qualityComparable": false,
+      "reason": "At least one arm has a harness error or interruption; excluded from paired quality and latency comparison."
+    },
+    {
+      "caseName": "two_step_then_final",
+      "repeat": 2,
+      "baselineRunId": 12,
+      "candidateRunId": 11,
+      "qualityComparable": true,
+      "baselineSuccess": true,
+      "candidateSuccess": false,
+      "baselineRequests": 4,
+      "candidateRequests": 3,
+      "baselineElapsedMs": 25014,
+      "candidateElapsedMs": 20972,
+      "latencyComparisonSuccessfulTasksOnly": false
+    },
+    {
+      "caseName": "two_step_then_final",
+      "repeat": 3,
+      "baselineRunId": 17,
+      "candidateRunId": 18,
+      "qualityComparable": true,
+      "baselineSuccess": true,
+      "candidateSuccess": true,
+      "baselineRequests": 4,
+      "candidateRequests": 3,
+      "baselineElapsedMs": 8376,
+      "candidateElapsedMs": 5650,
+      "latencyComparisonSuccessfulTasksOnly": true
+    }
+  ]
+}

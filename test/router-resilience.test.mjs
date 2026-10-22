@@ -122,6 +122,7 @@ function relayEventStream(payload) {
       item_id: "fc_relay",
       arguments: argumentsText,
     },
+    { type: "response.completed", response: { status: "completed", output: [] } },
   ];
   return `${events
     .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
@@ -528,6 +529,51 @@ test("same encrypted payload shares one relay and expiry removes the retained pl
     assert.ok(expired.resources.agentPayloadCache.expirations >= 1);
   } finally {
     releaseGateway();
+    await stopChild(router);
+    await Promise.all([closeServer(native.server), closeServer(gateway.server)]);
+  }
+});
+
+test("conflicting relay snapshots never reach the provider or populate the task cache", async () => {
+  let nativeRequests = 0;
+  let gatewayRequests = 0;
+  const native = await mockServer(async (_request, response) => {
+    nativeRequests += 1;
+    const conflict = { type: "response.output_item.done", item: {
+      type: "function_call", id: "fc_relay", name: "relay_external_agent_payload",
+      arguments: JSON.stringify({ payload: "PRIVATE_REPLACEMENT" }),
+    } };
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    response.end(relayEventStream("PRIVATE_ORIGINAL").replace("event: response.completed",
+      `data: ${JSON.stringify(conflict)}\n\nevent: response.completed`));
+  });
+  const gateway = await mockServer(async (request, response) => {
+    if (request.method !== "GET") gatewayRequests += 1;
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ ok: true, output: [] }));
+  });
+  const routerPort = await openPort();
+  const router = run({
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${native.port}/backend-api/codex`,
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+  });
+  try {
+    await waitFor(`${callerBaseUrl(routerPort, CALLER_KEY)}/models`, router);
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const response = await fetch(`${callerBaseUrl(routerPort, CALLER_KEY)}/responses`, {
+        method: "POST", headers: { Authorization: "Bearer synthetic-native-session",
+          "ChatGPT-Account-Id": "synthetic-account", "Content-Type": "application/json" },
+        body: JSON.stringify(encryptedRelayBody()),
+      });
+      assert.equal(response.status, 502);
+      const body = await response.text();
+      assert.equal(JSON.parse(body).error.code, "ERR_NATIVE_AGENT_RELAY_CONFLICTING_ARGUMENTS");
+      assert.doesNotMatch(body, /PRIVATE_ORIGINAL|PRIVATE_REPLACEMENT/);
+    }
+    assert.equal(nativeRequests, 2, "neither response may enter the successful task cache");
+    assert.equal(gatewayRequests, 0, "ambiguous task bytes must not reach the routed provider");
+  } finally {
     await stopChild(router);
     await Promise.all([closeServer(native.server), closeServer(gateway.server)]);
   }

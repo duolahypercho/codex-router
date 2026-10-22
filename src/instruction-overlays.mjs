@@ -19,13 +19,15 @@ export function grokFileToolsOverlayFor(installed) {
   const names = installed instanceof Set ? installed : new Set();
   const readers = ["read_file", "grep", "list_dir"].filter((name) => names.has(name));
   const hasSearch = names.has("search_replace");
+  const hasLines = names.has("replace_lines");
   const hasWrite = names.has("write");
   const hasRun = names.has("run_terminal_command");
-  if (!hasSearch && !hasWrite && readers.length === 0 && !hasRun) return "";
+  if (!hasSearch && !hasLines && !hasWrite && readers.length === 0 && !hasRun) return "";
   const lines = ["## Workspace files"];
   const lead = [];
   if (readers.length) lead.push(`Read local files with ${englishList(readers)}.`);
-  if (hasSearch) lead.push("Edit existing files with search_replace.");
+  if (hasLines) lead.push("Edit existing files with replace_lines: supply complete old and new lines with enough unchanged surrounding context.");
+  else if (hasSearch) lead.push("Edit existing files with search_replace.");
   if (hasWrite) lead.push("Create files with write.");
   if (lead.length) lines.push(`- ${lead.join(" ")}`);
   if (hasSearch) {

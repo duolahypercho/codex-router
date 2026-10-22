@@ -86,9 +86,9 @@ test("Grok 4.7 carries no subagent or upgrade claim it has not earned", () => {
     assert.equal(model.multiAgentVersion, undefined, slug);
     assert.equal(model.upgradeTo, undefined, slug);
   }
-  // The Fast tier is a grok-oauth/grok-4.6 capability that has not been shown
-  // on 4.7, so the newer route must not inherit it by being in the family.
-  assert.equal(MODEL_BY_SLUG.get("grok-oauth/grok-4.7").serviceTiers, undefined);
+  for (const slug of ["grok-oauth/grok-4.7", "grok-api/grok-4.7"]) {
+    assert.deepEqual(MODEL_BY_SLUG.get(slug).serviceTiers.map(tier => tier.id), ["priority"]);
+  }
 });
 
 test("the agentic grok-oauth workarounds cover 4.7 and stop at the provider edge", () => {

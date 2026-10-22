@@ -951,3 +951,31 @@ test("a terminal event whose data fails to parse is indeterminate, not empty", a
   assert.equal(guard.hasContent(), false);
   assert.equal(Buffer.concat(chunks).toString("utf8"), input);
 });
+
+
+for (const phase of ["added", "done", "completed-only"]) {
+  test(`client tool discovery is actionable at ${phase} and keeps its terminal`, async () => {
+    const item = { type: "tool_search_call", id: "ts_1", call_id: "call_search", execution: "client",
+      arguments: { query: "app projects" }, status: "completed" };
+    const events = [
+      ...(phase === "completed-only" ? [] : [{ type: `response.output_item.${phase}`, output_index: 0, item }]),
+      { type: "response.completed", response: { id: "r_search", status: "completed", output: [item] } },
+    ];
+    const body = events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join("");
+    const guard = new EmptyCompletionGuard("text/event-stream");
+    const chunks = [];
+    await pipeline(Readable.from(Array.from(body, char => Buffer.from(char))), guard,
+      new EmptyCompletionTerminalGuard(guard, "text/event-stream"),
+      new Writable({ write(chunk, _encoding, callback) { chunks.push(Buffer.from(chunk)); callback(); } }));
+    assert.equal(guard.isEmpty(), false);
+    assert.equal(guard.hasContent(), true);
+    assert.equal(Buffer.concat(chunks).toString("utf8"), body);
+  });
+}
+
+test("a search result alone is not an assistant action", async () => {
+  const input = `event: response.completed\ndata: ${JSON.stringify({ type: "response.completed",
+    response: { status: "completed", output: [{ type: "tool_search_output", call_id: "call_search", tools: [] }] },
+  })}\n\n`;
+  assert.equal((await runGuard(input)).empty, true);
+});

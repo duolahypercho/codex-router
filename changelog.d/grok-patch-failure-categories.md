@@ -1,0 +1,1 @@
+- Distinguish empty, malformed, and ambiguous Grok patch JSON at the arguments and encoded-operations boundaries, and identify separator failures in paths, anchors, or file lines without logging their contents. Invalid edits remain rejected.

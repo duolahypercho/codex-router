@@ -2,6 +2,11 @@ import assert from "node:assert/strict";
 import { Readable, Writable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import test from "node:test";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { adaptHookInput } from "../src/grok-patch-hook.mjs";
+import { GROK_PATCH_HOOK_PREFIX } from "../src/grok-patch-hook-transport.mjs";
 import {
   bridgeCustomTools,
   buildNamespaceLookups,
@@ -27,6 +32,8 @@ import {
   GREP_TOOL_NAME,
   LIST_DIR_TOOL_NAME,
   READ_FILE_TOOL_NAME,
+  REPLACE_LINES_TOOL_NAME,
+  REPLACE_LINES_PARAMETERS,
   RUN_TERMINAL_COMMAND_TOOL_NAME,
   SEARCH_REPLACE_PARAMETERS,
   SEARCH_REPLACE_TOOL_NAME,
@@ -159,9 +166,11 @@ test("facade binds only to ordinary function exec_command", () => {
   assert.ok(!names.includes(RUN_TERMINAL_COMMAND_TOOL_NAME));
 });
 
-test("facade is only offered on Grok 4.6 structured-patch turns", () => {
+test("facade is only offered on supported OAuth structured-patch turns", () => {
   assert.equal(grokEditFacadeEnabled({ slug: "grok-oauth/grok-4.6" }, true), true);
   assert.equal(grokEditFacadeEnabled({ slug: "grok-oauth/grok-4.6" }, false), false);
+  assert.equal(grokEditFacadeEnabled({ slug: "grok-oauth/grok-4.7" }, true), true);
+  assert.equal(grokEditFacadeEnabled({ slug: "grok-api/grok-4.7" }, true), false);
   assert.equal(grokEditFacadeEnabled({ slug: "grok-oauth/grok-4.5" }, true), false);
 });
 
@@ -422,14 +431,28 @@ test("legacy apply_patch history and forced native choices keep façade identiti
   assert.deepEqual(JSON.parse(fromWindows[0].arguments), { target_file: "a.txt", offset: 1, limit: 10 });
 });
 
-test("search_replace restores to native apply_patch with a compiled V4A payload", async () => {
+test("hook search_replace retains arguments for the client's exact-match checks", async () => {
   const bridge = setup();
   const events = await relay(bridge, SEARCH_REPLACE_TOOL_NAME, replaceArgs);
   const done = events.find((event) => event.type === "response.output_item.done");
   assert.equal(done.item.type, "custom_tool_call");
   assert.equal(done.item.name, "apply_patch");
-  assert.equal(done.item.input, replacePatch);
+  assert.equal(done.item.input, GROK_PATCH_HOOK_PREFIX + replaceArgs);
   assert.equal(done.item.call_id, "call_edit");
+  const cwd = mkdtempSync(join(tmpdir(), "grok-facade-hook-"));
+  try {
+    writeFileSync(join(cwd, "notes.txt"), "hello\nhello\n");
+    const output = adaptHookInput({ hook_event_name: "PreToolUse",
+      model: "grok-oauth/grok-4.6", tool_name: "apply_patch", cwd,
+      tool_input: { command: done.item.input } }).hookSpecificOutput;
+    assert.equal(output.permissionDecision, "deny");
+    assert.match(output.permissionDecisionReason, /not unique/);
+    const written = await relay(bridge, WRITE_TOOL_NAME, JSON.stringify({ path: "notes.txt", contents: "overwrite\n" }));
+    const writeCall = written.find(event => event.type === "response.output_item.done").item;
+    assert.equal(adaptHookInput({ hook_event_name: "PreToolUse",
+      model: "grok-oauth/grok-4.6", tool_name: "apply_patch", cwd,
+      tool_input: { command: writeCall.input } }).hookSpecificOutput.permissionDecision, "deny");
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
 
 test("read_file restores to native exec_command with a bounded sed command", async () => {
@@ -547,4 +570,164 @@ test("run_terminal_command restores to native exec_command", async () => {
   assert.equal(done.item.type, "function_call");
   assert.equal(done.item.name, "exec_command");
   assert.equal(done.item.arguments, compileRunTerminalCommand(args));
+});
+
+
+test("default facade offers honest whole-line replacement and preserves full native terminal contracts", async () => {
+  const fullExec = { ...execTool, parameters: { ...execParams, properties: {
+    ...execParams.properties, tty: { type: "boolean" }, yield_time_ms: { type: "integer" },
+    max_output_tokens: { type: "integer" }, sandbox_permissions: { enum: ["use_default", "require_escalated"] },
+    justification: { type: "string" }, prefix_rule: { type: "array", items: { type: "string" } },
+    shell: { type: "string" }, login: { type: "boolean" },
+  } } };
+  const shell = { type: "function", name: "shell_command", description: "Native shell contract", parameters: { type: "object", properties: { command: { type: "string" }, timeout_ms: { type: "integer" } } } };
+  for (const slug of ["grok-oauth/grok-4.6", "grok-oauth/grok-4.7"]) {
+    const flattened = flattenNamespaceTools([native, fullExec, shell]);
+    const bridged = bridgeCustomTools(flattened.tools, [], flattened.namespaces, undefined, undefined, { codecs });
+    const installed = new Set();
+    const tools = applyGrokEditFacade(bridged.tools, flattened.namespaces, { slug }, true, { installed });
+    assert.deepEqual(tools.find(t => t.name === "exec_command"), fullExec);
+    assert.deepEqual(tools.find(t => t.name === "shell_command"), shell);
+    assert.ok(!tools.some(t => ["search_replace", "write", "run_terminal_command"].includes(t.name)));
+    const replace = tools.find(t => t.name === REPLACE_LINES_TOOL_NAME);
+    assert.deepEqual(replace.parameters, REPLACE_LINES_PARAMETERS);
+    assert.match(replace.description, /whole logical lines/);
+    assert.match(replace.description, /no unique-occurrence guarantee/);
+    assert.match(replace.description, /whitespace differences/);
+    assert.ok(installed.has(REPLACE_LINES_TOOL_NAME));
+    for (const name of ["exec_command", "shell_command", "apply_patch"]) {
+      const choice = { type: "function", name };
+      assert.deepEqual(rewriteGrokFacadeToolChoice(choice, installed), choice);
+    }
+    const history = [{ type: "function_call", name: "exec_command", call_id: "native", arguments: JSON.stringify({ cmd: "cat a.txt", tty: true, yield_time_ms: 30000, sandbox_permissions: "require_escalated", justification: "test" }) }];
+    assert.strictEqual(encodeGrokFacadeHistory(history, undefined, installed), history);
+    const events = await relay({ namespaces: flattened.namespaces }, REPLACE_LINES_TOOL_NAME, replaceArgs);
+    assert.equal(events.find(e => e.type === "response.output_item.done").item.input, replacePatch);
+  }
+});
+
+test("replacement collision does not add its codec or rewrite history to a foreign tool", async () => {
+  const foreign = { type: "function", name: REPLACE_LINES_TOOL_NAME, parameters: { type: "object", properties: { foreign: { type: "boolean" } } } };
+  const installed = new Set();
+  const bridge = setup(undefined, true, [foreign], { installed });
+  assert.deepEqual(bridge.tools.filter(t => t.name === REPLACE_LINES_TOOL_NAME), [foreign]);
+  assert.equal(installed.has(REPLACE_LINES_TOOL_NAME), false);
+  assert.equal(bridge.lookups.customCodecs.has(REPLACE_LINES_TOOL_NAME), false);
+  const history = [{ type: "function_call", name: "apply_patch", arguments: replaceArgs }];
+  assert.strictEqual(encodeGrokFacadeHistory(history, undefined, installed), history);
+  const events = await relay(bridge, REPLACE_LINES_TOOL_NAME, '{"foreign":true}');
+  assert.equal(events.find(e => e.type === "response.output_item.done").item.name, REPLACE_LINES_TOOL_NAME);
+});
+
+test("facade records only registered aliases and does not invent a native patch tool", () => {
+  const flattened = flattenNamespaceTools([execTool]);
+  const installed = new Set();
+  const tools = applyGrokEditFacade(flattened.tools, flattened.namespaces, { slug: "grok-oauth/grok-4.7" }, true, { installed });
+  assert.equal(tools.some(t => t.name === REPLACE_LINES_TOOL_NAME), false);
+  assert.equal(installed.has(REPLACE_LINES_TOOL_NAME), false);
+  assert.ok(tools.some(t => t.name === READ_FILE_TOOL_NAME));
+});
+
+test("default replacement history uses only installed names and leaves raw patch history intact", () => {
+  const installed = new Set([REPLACE_LINES_TOOL_NAME]);
+  const history = [
+    { type: "function_call", name: "apply_patch", call_id: "replace", arguments: replaceArgs },
+    { type: "function_call_output", call_id: "replace", output: "failed matching context" },
+    { type: "function_call", name: "apply_patch", call_id: "raw", arguments: JSON.stringify({ input: replacePatch }) },
+  ];
+  const encoded = encodeGrokFacadeHistory(history, undefined, installed);
+  assert.deepEqual(encoded[0], { ...history[0], name: REPLACE_LINES_TOOL_NAME });
+  assert.strictEqual(encoded[1], history[1]);
+  assert.strictEqual(encoded[2], history[2]);
+});
+
+test("whole-line replacement serializes atomically across JSON and fragmented SSE", async () => {
+  const bridge = setup(undefined, true, [], {});
+  const call = { type: "function_call", id: "r", call_id: "r", name: REPLACE_LINES_TOOL_NAME, arguments: replaceArgs };
+  for (const contentType of ["application/json", "text/event-stream"]) {
+    const payload = contentType === "application/json" ? JSON.stringify({ output: [call] })
+      : frame("response.output_item.added", { item: { ...call, arguments: "" } })
+        + [...replaceArgs].map(delta => frame("response.function_call_arguments.delta", { item_id: "r", delta })).join("")
+        + frame("response.output_item.done", { item: call })
+        + frame("response.completed", { response: { output: [call] } });
+    const chunks = [];
+    await pipeline(Readable.from(Array.from(Buffer.from(payload), b => Buffer.from([b]))),
+      new NamespaceToolCallTransform(bridge.namespaces, contentType, "grok-oauth/grok-4.7"),
+      new Writable({ write(chunk, _enc, next) { chunks.push(chunk); next(); } }));
+    const output = Buffer.concat(chunks).toString();
+    assert.ok(output.includes(JSON.stringify(replacePatch)));
+    assert.ok(!output.includes('"name":"replace_lines"'));
+  }
+});
+
+test("whole-line replacement rejects malformed payloads before client dispatch", async () => {
+  for (const args of [
+    '{"path":"a","old_string":"x","old_string":"y","new_string":"z"}',
+    JSON.stringify({ path: "a", old_string: "x", new_string: "y", anchor: "x" }),
+    JSON.stringify({ path: "a", old_string: "x\r\n", new_string: "y\r\n" }),
+    JSON.stringify({ path: "a", old_string: "x", new_string: "x" }),
+    JSON.stringify({ path: "a", old_string: "", new_string: "x" }),
+  ]) {
+    const bridge = setup(undefined, true, [], {});
+    await assert.rejects(relay(bridge, REPLACE_LINES_TOOL_NAME, args));
+    const call = { type: "function_call", id: "bad", call_id: "bad", name: REPLACE_LINES_TOOL_NAME, arguments: args };
+    const chunks = [];
+    await assert.rejects(pipeline(Readable.from([JSON.stringify({ output: [call] })]),
+      new NamespaceToolCallTransform(bridge.namespaces, "application/json", "grok-oauth/grok-4.7"),
+      new Writable({ write(chunk, _enc, next) { chunks.push(chunk); next(); } })));
+    assert.equal(Buffer.concat(chunks).toString(), "");
+  }
+});
+
+test("read facade publishes the character and numeric limits its compiler enforces", () => {
+  const bridge = setup();
+  for (const [name, field, value] of [
+    [READ_FILE_TOOL_NAME, "target_file", "a\nb"],
+    [READ_FILE_TOOL_NAME, "target_file", "a\n"],
+    [LIST_DIR_TOOL_NAME, "target_directory", "a\rb"],
+  ]) {
+    const schema = bridge.tools.find(tool => tool.name === name).parameters.properties[field];
+    assert.equal(new RegExp(schema.pattern, "u").test(value), false);
+  }
+  const grep = bridge.tools.find(tool => tool.name === GREP_TOOL_NAME);
+  // grep is deliberately absent on clients without a local rg executable.
+  if (grep) assert.equal(new RegExp(grep.parameters.properties.pattern.pattern, "u").test("a\0b"), false);
+  const offset = bridge.tools.find(tool => tool.name === READ_FILE_TOOL_NAME).parameters.properties.offset;
+  assert.ok(Number.isSafeInteger(offset.maximum + 2000));
+  assert.equal(compileReadFileCommand(JSON.stringify({ target_file: "a", offset: Number.MAX_VALUE })), undefined);
+  assert.equal(compileGrepCommand(JSON.stringify({ pattern: "ok", glob: "x".repeat(1025) })), undefined);
+});
+
+test("function relay failures identify a fixed tool and category without argument values", async () => {
+  const bridge = setup();
+  const cases = [
+    [READ_FILE_TOOL_NAME, '{"target_file":"secret-one","target_file":"secret-two"}', "ambiguous_or_invalid_json"],
+    [READ_FILE_TOOL_NAME, JSON.stringify({ target_file: "private-file", limit: 0 }), "out_of_range"],
+    [READ_FILE_TOOL_NAME, JSON.stringify({ target_file: "private-file", offset: null }), "invalid_type"],
+    [READ_FILE_TOOL_NAME, JSON.stringify({ limit: 10 }), "missing_field"],
+    [LIST_DIR_TOOL_NAME, JSON.stringify({ secret_key: "secret-value" }), "unexpected_field"],
+    [RUN_TERMINAL_COMMAND_TOOL_NAME, JSON.stringify({ command: "private\0command" }), "unsupported_character"],
+  ];
+  for (const [name, args, code] of cases) {
+    await assert.rejects(relay(bridge, name, args), error => {
+      assert.equal(error.code, "ERR_NAMESPACE_RELAY_COMMITTED_STREAM");
+      assert.ok(error.message.includes(code === "ambiguous_or_invalid_json"
+        ? "ambiguous function arguments"
+        : `invalid function relay arguments done: ${name}:${code}`), error.message);
+      assert.doesNotMatch(error.message, /private|secret/);
+      return true;
+    });
+  }
+});
+
+
+test("valid native terminal commands survive narrower read-facade optimization limits", async () => {
+  const command = `rg --line-number --color never --max-count 50 -e 'a' --glob '${"*".repeat(1025)}' -- '.' | head -n 50`;
+  const args = JSON.stringify({ command, working_directory: "repo" });
+  const expected = JSON.stringify({ cmd: command, workdir: "repo" });
+  assert.equal(compileRunTerminalCommand(args), expected);
+  const events = await relay(setup(), RUN_TERMINAL_COMMAND_TOOL_NAME, args);
+  const done = events.find(event => event.type === "response.output_item.done");
+  assert.equal(done.item.arguments, expected);
+  assert.equal(done.item.name, "exec_command");
 });

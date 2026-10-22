@@ -7,6 +7,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -91,6 +92,149 @@ test("install copies every pack skill with its SKILL.md and the marker", () => {
       assert.equal(statSync(skillOwnershipPath(home)).mode & 0o777, 0o600);
     }
     assert.deepEqual(managedSkillNames(home).sort(), [...PACK].sort());
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("exclusive skill publication copies files and nested directories into its claimed root", () => {
+  const home = tempCodexHome();
+  const fakeSource = mkdtempSync(path.join(os.tmpdir(), "codex-skills-source-"));
+  const name = "codex-router";
+  const target = path.join(home, "skills", name);
+  try {
+    mkdirSync(path.join(fakeSource, name, "references", "nested"), { recursive: true });
+    writeFileSync(path.join(fakeSource, name, "SKILL.md"), "# claimed root\n");
+    writeFileSync(path.join(fakeSource, name, "references", "nested", "guide.md"), "nested guide\n");
+    process.env.CODEX_ROUTER_SKILLS_DIR = fakeSource;
+    assert.deepEqual(installSkills(home, { quiet: true }), { installed: 1, skipped: 0, external: 0 });
+    assert.equal(readFileSync(path.join(target, "SKILL.md"), "utf8"), "# claimed root\n");
+    assert.equal(readFileSync(path.join(target, "references", "nested", "guide.md"), "utf8"), "nested guide\n");
+    assert.ok(!existsSync(path.join(target, ".codex-router-publishing")));
+    assert.deepEqual(managedSkillNames(home), [name]);
+  } finally {
+    delete process.env.CODEX_ROUTER_SKILLS_DIR;
+    rmSync(home, { recursive: true, force: true });
+    rmSync(fakeSource, { recursive: true, force: true });
+  }
+});
+
+for (const replacement of ["directory", "symlink"]) {
+  test(`publication preserves a ${replacement} replacing its claimed root`,
+    { skip: replacement === "symlink" && process.platform === "win32" }, () => {
+      const home = tempCodexHome();
+      const fakeSource = mkdtempSync(path.join(os.tmpdir(), "codex-skills-source-"));
+      const name = "codex-router";
+      const target = path.join(home, "skills", name);
+      const movedClaim = path.join(home, "original-claim");
+      const external = path.join(home, "external");
+      try {
+        mkdirSync(path.join(fakeSource, name), { recursive: true });
+        writeFileSync(path.join(fakeSource, name, "SKILL.md"), "# managed\n");
+        process.env.CODEX_ROUTER_SKILLS_DIR = fakeSource;
+        assert.throws(() => installSkills(home, {
+          quiet: true,
+          onPublicationClaimed() {
+            const token = readFileSync(path.join(target, ".codex-router-publishing"));
+            renameSync(target, movedClaim);
+            const destination = replacement === "directory" ? target : external;
+            mkdirSync(destination);
+            writeFileSync(path.join(destination, "external.txt"), "external content\n");
+            // Replaying even the exact claim marker cannot transfer ownership
+            // from the originally created directory to this replacement.
+            writeFileSync(path.join(destination, ".codex-router-publishing"), token);
+            if (replacement === "symlink") symlinkSync(external, target, "dir");
+          },
+        }), /publication directory changed/);
+        assert.equal(readFileSync(path.join(target, "external.txt"), "utf8"), "external content\n");
+        assert.ok(!existsSync(path.join(target, "SKILL.md")), "no managed file reaches the replacement");
+        assert.ok(existsSync(path.join(target, ".codex-router-publishing")), "a replacement marker is not ours to remove");
+        revokeExternalSkills(home, [name], { quiet: true });
+        assert.equal(readFileSync(path.join(target, "external.txt"), "utf8"), "external content\n");
+      } finally {
+        delete process.env.CODEX_ROUTER_SKILLS_DIR;
+        rmSync(home, { recursive: true, force: true });
+        rmSync(fakeSource, { recursive: true, force: true });
+      }
+    });
+}
+
+for (const exitBoundary of ["publication marker removal", "relinquishment creation", "journal removal"]) {
+  for (const refresh of [false, true]) {
+    for (const concurrentContent of ["# concurrent external\n", "# managed\n"]) {
+      test(`a competing publication child with ${concurrentContent === "# managed\n" ? "identical" : "different"} bytes survives ${refresh ? "refresh" : "first install"} recovery after ${exitBoundary}`, () => {
+        const home = tempCodexHome();
+        const fakeSource = mkdtempSync(path.join(os.tmpdir(), "codex-skills-source-"));
+        const name = "codex-router";
+        const target = path.join(home, "skills", name);
+        try {
+          mkdirSync(path.join(fakeSource, name), { recursive: true });
+          writeFileSync(path.join(fakeSource, name, "SKILL.md"), "# managed\n");
+          process.env.CODEX_ROUTER_SKILLS_DIR = fakeSource;
+          if (refresh) installSkills(home, { quiet: true });
+          const child = spawnSync(process.execPath, ["--input-type=module", "--eval", `
+            import fs from "node:fs";
+            import { syncBuiltinESMExports } from "node:module";
+            const write = fs.writeFileSync;
+            fs.writeFileSync = function (file, ...args) {
+              const result = write(file, ...args);
+              if (${JSON.stringify(exitBoundary)} === "relinquishment creation" && String(file).endsWith(".codex-router-publication-relinquished")) process.exit(94);
+              return result;
+            };
+            const unlink = fs.unlinkSync;
+            fs.unlinkSync = function (file) {
+              const result = unlink(file);
+              if (${JSON.stringify(exitBoundary)} === "publication marker removal" && file === ${JSON.stringify(path.join(target, ".codex-router-publishing"))}) process.exit(94);
+              if (${JSON.stringify(exitBoundary)} === "journal removal" && String(file).endsWith(".codex-router-retirement.json")) process.exit(94);
+              return result;
+            };
+            syncBuiltinESMExports();
+            const { installSkills } = await import(${JSON.stringify(SKILLS_MODULE_URL)});
+            installSkills(${JSON.stringify(home)}, {
+              quiet: true,
+              onPublicationClaimed() {
+                fs.writeFileSync(${JSON.stringify(path.join(target, "SKILL.md"))}, ${JSON.stringify(concurrentContent)});
+              },
+            });
+          `], { encoding: "utf8", env: { ...process.env, CODEX_ROUTER_SKILLS_DIR: fakeSource } });
+          assert.equal(child.status, 94, child.stderr);
+          assert.ok(readdirSync(path.join(home, "skills")).some((entry) => entry.startsWith(".codex-router-retire-")),
+            "hard exit leaves the actual transaction journal for recovery");
+          assert.equal(readFileSync(path.join(target, "SKILL.md"), "utf8"), concurrentContent);
+          if (exitBoundary !== "relinquishment creation") {
+            assert.ok(!existsSync(path.join(target, ".codex-router-publishing")), "conflicted publication relinquishes its cleanup claim");
+          }
+          revokeExternalSkills(home, [name], { quiet: true });
+          assert.equal(readFileSync(path.join(target, "SKILL.md"), "utf8"), concurrentContent);
+          assert.deepEqual(managedSkillNames(home), [], "previous ownership cannot claim a conflicted new generation");
+          assert.deepEqual(installSkills(home, { quiet: true }), { installed: 0, skipped: 1, external: 0 });
+          uninstallSkills(home, { quiet: true });
+          assert.equal(readFileSync(path.join(target, "SKILL.md"), "utf8"), concurrentContent);
+        } finally {
+          delete process.env.CODEX_ROUTER_SKILLS_DIR;
+          rmSync(home, { recursive: true, force: true });
+          rmSync(fakeSource, { recursive: true, force: true });
+        }
+      });
+    }
+  }
+}
+
+test("publication preserves a competing extra file detected by the final digest", () => {
+  const home = tempCodexHome();
+  let target;
+  try {
+    assert.throws(() => installSkills(home, {
+      quiet: true,
+      onPublicationClaimed({ target: claimed }) {
+        target = claimed;
+        writeFileSync(path.join(claimed, "external.txt"), "concurrent extra content\n");
+      },
+    }), (error) => error.code === "ERR_SKILL_PUBLICATION_CHANGED");
+    revokeExternalSkills(home, [path.basename(target)], { quiet: true });
+    assert.equal(readFileSync(path.join(target, "external.txt"), "utf8"), "concurrent extra content\n");
+    uninstallSkills(home, { quiet: true });
+    assert.equal(readFileSync(path.join(target, "external.txt"), "utf8"), "concurrent extra content\n");
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

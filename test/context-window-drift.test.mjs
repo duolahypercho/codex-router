@@ -10,7 +10,7 @@ import {
 
 const MODELS = [
   { slug: "qwen-plan/qwen3.8-max", contextWindow: 262_144, autoCompact: 235_000 },
-  { slug: "grok-oauth/grok-4.5", contextWindow: 500_000, autoCompact: 440_000 },
+  { slug: "other/model", contextWindow: 500_000, autoCompact: 440_000 },
   { slug: "openai/gpt-5.6-sol", contextWindow: 1_000_000, autoCompact: 900_000 },
 ];
 
@@ -36,10 +36,10 @@ test("a provider accepting more than the declared window is reported as drift", 
 test("drift is ordered worst-first so the most understated entry leads", () => {
   const drift = contextWindowDrift(MODELS, [
     event("qwen-plan/qwen3.8-max", 277_174),
-    event("grok-oauth/grok-4.5", 2_033_426),
+    event("other/model", 2_033_426),
   ]);
   assert.deepEqual(drift.map((entry) => entry.slug), [
-    "grok-oauth/grok-4.5",
+    "other/model",
     "qwen-plan/qwen3.8-max",
   ]);
   assert.equal(drift[0].ratio, 4.07);
@@ -114,10 +114,10 @@ test("a provider reporting an impossible count is treated as a metering bug", ()
 test("evidence is keyed per routed slug, not per upstream model", () => {
   const ceilings = observedCeilings([
     event("qwen-plan/qwen3.8-max", 277_174),
-    event("grok-oauth/grok-4.5", 120_000),
+    event("other/model", 120_000),
   ]);
   assert.equal(ceilings.get("qwen-plan/qwen3.8-max"), 277_174);
-  assert.equal(ceilings.get("grok-oauth/grok-4.5"), 120_000);
+  assert.equal(ceilings.get("other/model"), 120_000);
   assert.equal(ceilings.size, 2);
 });
 
@@ -139,4 +139,13 @@ test("the summary names the worst offenders and counts the rest", () => {
   const summary = describeContextWindowDrift(drift);
   assert.match(summary, /p\/model-4 declares 1000 but accepted 1500/);
   assert.match(summary, /and 2 more$/);
+});
+
+// Even a single successful Grok turn may bill the prompt many times internally.
+test("historical Grok billing cannot inflate a declared context window", () => {
+  for (const extra of [{}, { billedInputTokens: 800000, progressOnlyRetried: true }]) {
+    assert.equal(acceptedInputTokens(event("grok-oauth/grok-4.7", 572089, extra)), undefined);
+    assert.equal(acceptedInputTokens(event("alias", 572089, { ...extra, provider: "grok-oauth" })), undefined);
+  }
+  assert.equal(observedCeilings([event("grok-oauth/grok-4.7", 572089)]).size, 0);
 });

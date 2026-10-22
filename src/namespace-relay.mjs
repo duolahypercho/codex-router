@@ -60,6 +60,8 @@ const SPAWN_AGENT_MODELS = new WeakMap();
 const TOOL_SEARCH_RELAYS = new WeakMap();
 const CUSTOM_TOOL_RELAYS = new WeakMap();
 const CUSTOM_TOOL_CODECS = new WeakMap();
+// Legacy argument envelopes remain evidence in history, never executable tools.
+const HISTORICAL_CUSTOM_TOOLS = new WeakMap();
 const FUNCTION_RELAYS = new WeakMap();
 // Flattened custom definitions retain the exact native identity beside the
 // object. A literal plain name containing `__` must never acquire a namespace.
@@ -72,6 +74,7 @@ const PLAIN_TOOL_NAMES = new WeakMap();
 // the moment stored history proves the model already called it: a search may
 // have aged out of the transcript while its call survived.
 const DEFERRED_DEFINITIONS = new WeakMap();
+const TOOL_SCHEMA_ADAPTERS = new WeakMap();
 // A provider-facing function reference can retain the same spelling as a
 // bridged custom/tool-search relay while a later-discovered ordinary function
 // with that native name receives an alias. Object identity is the only honest
@@ -382,8 +385,14 @@ export function bridgeCustomTools(
   const nativeToProvider = new Map();
   const providerToNative = new Map();
   const providerCodecs = new Map();
+  const historicalNames = new Map();
+  const historicalOnly = new Set();
   for (const [identity, { native, wireName }] of nativeTools) {
-    const availableName = availableCustomToolName(wireName, visibleNames);
+    const codec = native.namespace === undefined ? codecs?.get(native.name) : undefined;
+    const availableName = availableCustomToolName(
+      codec?.providerName ? `${wireName}_${codec.providerName}` : wireName,
+      visibleNames,
+    );
     const providerName = Number.isInteger(maxNameLength)
       ? reserveSpecialProviderName(
           namespaces,
@@ -393,7 +402,17 @@ export function bridgeCustomTools(
       : availableName;
     visibleNames.add(providerName);
     nativeToProvider.set(identity, providerName);
-    providerToNative.set(providerName, native.namespace === undefined ? native.name : native);
+    const declared = tools?.some((tool) => tool?.type === "custom" && keyOf(tool) === identity);
+    if (!codec?.providerName || declared) {
+      providerToNative.set(providerName, native.namespace === undefined ? native.name : native);
+    }
+    if (codec?.providerName) {
+      const candidate = availableCustomToolName(`${wireName}_history_v1`, visibleNames);
+      const historicalName = reserveSpecialProviderName(namespaces, `custom-history:${identity}`, candidate);
+      visibleNames.add(historicalName);
+      historicalNames.set(identity, historicalName);
+      historicalOnly.add(historicalName);
+    }
     // History/forced choice alone never grants a codec-backed tool. It must
     // be a plain native custom tool declared in this exact client request.
     if (
@@ -404,6 +423,7 @@ export function bridgeCustomTools(
   }
   CUSTOM_TOOL_RELAYS.set(namespaces, providerToNative);
   CUSTOM_TOOL_CODECS.set(namespaces, providerCodecs);
+  HISTORICAL_CUSTOM_TOOLS.set(namespaces, historicalOnly);
 
   let changedTools = false;
   const routedTools = Array.isArray(tools)
@@ -486,7 +506,9 @@ export function bridgeCustomTools(
       const routedCall = withoutIncompatibleFunctionItemId({
         ...rest,
         type: "function_call",
-        name: providerName,
+        name: historicalArguments === undefined
+          ? historicalNames.get(keyOf(item)) ?? providerName
+          : providerName,
         arguments: historicalArguments ?? JSON.stringify({ [CUSTOM_TOOL_INPUT_PROPERTY]: customInput }),
       });
       SPECIAL_FUNCTION_REFERENCES.add(routedCall);
@@ -554,6 +576,7 @@ export function registerFunctionRelays(namespaces, relays) {
         ? { nativeNamespace: relay.nativeNamespace }
         : {}),
       rewriteArguments: relay.rewriteArguments,
+      ...(typeof relay.argumentErrorCode === "function" ? { argumentErrorCode: relay.argumentErrorCode } : {}),
       maxArgumentBytes: Number.isInteger(relay.maxArgumentBytes) && relay.maxArgumentBytes > 0
         ? relay.maxArgumentBytes
         : 256 * 1024,
@@ -986,7 +1009,7 @@ export function jsonArgumentsAreUnambiguous(value, { allowEmpty = false } = {}) 
 // copy.
 export function repairToolSchemaRoot(
   tool,
-  { nonRecursive = false, inlineForeignRefs: inlineRefs = false, declareTypes = false } = {},
+  { nonRecursive = false, inlineForeignRefs: inlineRefs = false, declareTypes = false, schemaAdapter = providerToolSchema } = {},
 ) {
   // Moonshot alone rejects a `$ref` that does not point into `#/$defs/` or one
   // that carries sibling keywords, so only the route that asks for it pays the
@@ -994,7 +1017,7 @@ export function repairToolSchemaRoot(
   // The normalizer returns a clean schema by identity, so an ordinary toolset
   // is not copied.
   const relaySchema = (schema) => {
-    const repaired = providerToolSchema(schema);
+    const repaired = schemaAdapter(schema);
     const inlined = inlineRefs ? inlineForeignRefs(repaired) : repaired;
     // After inlining, so a type is declared on the branches a `$ref` brought in
     // rather than only on the reference that pointed at them.
@@ -1020,6 +1043,7 @@ export function repairToolSchemaRoot(
       const repaired = repairToolSchemaRoot(child, {
         nonRecursive,
         inlineForeignRefs: inlineRefs,
+        schemaAdapter,
       });
       if (repaired !== child) changed = true;
       return repaired;
@@ -1219,10 +1243,10 @@ export function stripUnissuedEncryptedReasoningInclude(include) {
   return next.length > 0 ? next : undefined;
 }
 
-function flattenNamespaceChild(namespace, fn, providerName) {
+function flattenNamespaceChild(namespace, fn, providerName, schemaAdapter = providerToolSchema) {
   const clientSchema = fn.parameters ?? fn.inputSchema;
   const parameters =
-    clientSchema === undefined ? undefined : providerToolSchema(clientSchema);
+    clientSchema === undefined ? undefined : schemaAdapter(clientSchema);
   // `defer_loading` is a Codex/Responses registration flag, not a provider one.
   // A search-discovered definition still carries it, and a tool the provider
   // can call must not describe itself as one it cannot see.
@@ -1263,11 +1287,12 @@ const APP_CONNECTOR_NAMESPACE_PREFIX = "mcp__codex_apps__";
 // never found, so a stale entry costs nothing.
 export function flattenNamespaceTools(
   tools,
-  { bridgeToolSearch = true, maxNameLength, aliasCollisions = false } = {},
+  { bridgeToolSearch = true, maxNameLength, aliasCollisions = false, schemaAdapter = providerToolSchema } = {},
 ) {
   if (!Array.isArray(tools)) return { tools, flattened: false, namespaces: new Map() };
   const flattened = [];
   const namespaces = new Map();
+  TOOL_SCHEMA_ADAPTERS.set(namespaces, schemaAdapter);
   const plainToolNames = new Set();
   PLAIN_TOOL_NAMES.set(namespaces, plainToolNames);
   initializeNameAliases(namespaces, tools, maxNameLength, aliasCollisions);
@@ -1325,7 +1350,7 @@ export function flattenNamespaceTools(
       changed = true;
       if (bridgeToolSearch && tool.execution === "client" && !toolSearchRelay) {
         const parameters =
-          tool.parameters === undefined ? undefined : providerToolSchema(tool.parameters);
+          tool.parameters === undefined ? undefined : schemaAdapter(tool.parameters);
         const description = providerToolSearchDescription(tool.description, toolSearchName);
         flattened.push({
           type: "function",
@@ -1379,13 +1404,13 @@ export function flattenNamespaceTools(
           changed = true;
           names.add(fn.name);
           deferredDefinitions.set(providerName, {
-            tool: flattenNamespaceChild(tool.name, fn, providerName),
+            tool: flattenNamespaceChild(tool.name, fn, providerName, schemaAdapter),
             namespace: tool.name,
             name: fn.name,
           });
           continue;
         }
-        flattened.push(flattenNamespaceChild(tool.name, fn, providerName));
+        flattened.push(flattenNamespaceChild(tool.name, fn, providerName, schemaAdapter));
         names.add(fn.name);
       }
       if (names.size > 0) {
@@ -1402,7 +1427,7 @@ export function flattenNamespaceTools(
     // the flattened children left every client-declared tool to fail on the
     // provider that objects. `providerToolSchema` returns anything it does not
     // recognize unchanged, so a tool with an ordinary root is not copied.
-    let repaired = repairToolSchemaRoot(tool);
+    let repaired = repairToolSchemaRoot(tool, { schemaAdapter });
     const name = tool?.type === "function" ? providerFunctionName(repaired) : undefined;
     if (typeof name === "string" && name) {
       const providerName = providerNameForNative(namespaces, undefined, name);
@@ -1572,6 +1597,7 @@ function validToolSearchHistoryArguments(value) {
 
 function discoveredProviderTools(toolSpecs, namespaces) {
   if (!Array.isArray(toolSpecs)) return [];
+  const schemaAdapter = TOOL_SCHEMA_ADAPTERS.get(namespaces) || providerToolSchema;
   const discovered = [];
   for (const tool of toolSpecs) {
     if (tool?.type === "namespace" && typeof tool.name === "string" && Array.isArray(tool.tools)) {
@@ -1582,6 +1608,7 @@ function discoveredProviderTools(toolSpecs, namespaces) {
             tool.name,
             fn,
             providerNameForNative(namespaces, tool.name, fn.name),
+            schemaAdapter,
           ),
           native: { namespace: tool.name, name: fn.name },
           nativeName: fn.name,
@@ -1593,7 +1620,7 @@ function discoveredProviderTools(toolSpecs, namespaces) {
     if (tool?.type !== "function" || !providerFunctionName(tool)) continue;
     const nativeName = providerFunctionName(tool);
     const providerName = providerNameForNative(namespaces, undefined, nativeName);
-    let providerTool = repairToolSchemaRoot(tool);
+    let providerTool = repairToolSchemaRoot(tool, { schemaAdapter });
     if (providerName !== nativeName) {
       providerTool = withProviderFunctionName(providerTool, providerName);
     }
@@ -1714,6 +1741,7 @@ function providerOwnedToolNames(namespaces) {
     ...(nameRelay?.providerToNative.keys() || []),
     ...(nameRelay?.plainProviderNames || []),
     ...(CUSTOM_TOOL_RELAYS.get(namespaces)?.keys() || []),
+    ...(HISTORICAL_CUSTOM_TOOLS.get(namespaces) || []),
     ...(FUNCTION_RELAYS.get(namespaces)?.keys() || []),
   ]);
   const toolSearch = TOOL_SEARCH_RELAYS.get(namespaces);
@@ -1978,6 +2006,11 @@ export function flattenToolSearchHistory(
   // a matching model-visible name cannot be attributed to a discovery.
   for (const name of CUSTOM_TOOL_RELAYS.get(namespaces)?.keys() || []) {
     const identity = `special:custom:${name}`;
+    identityOwners.set(identity, CURRENT_DEFINITION);
+    addOwner(providerOwners, name, identity);
+  }
+  for (const name of HISTORICAL_CUSTOM_TOOLS.get(namespaces) || []) {
+    const identity = `special:history:${name}`;
     identityOwners.set(identity, CURRENT_DEFINITION);
     addOwner(providerOwners, name, identity);
   }
@@ -2373,6 +2406,7 @@ function flattenToolChoiceReference(reference, namespaces) {
       PLAIN_TOOL_NAMES.get(namespaces)?.has(name) ||
       NAME_ALIASES.get(namespaces)?.plainProviderNames.has(name) ||
       CUSTOM_TOOL_RELAYS.get(namespaces)?.has(name) ||
+      HISTORICAL_CUSTOM_TOOLS.get(namespaces)?.has(name) ||
       TOOL_SEARCH_RELAYS.get(namespaces)?.providerName === name;
     if (!providerName && alreadyProviderVisible) return reference;
     providerName ||= exactPlainProviderName || providerNameForWire(namespaces, name);
@@ -2488,6 +2522,7 @@ export function buildNamespaceLookups(namespaces) {
     toolSearch: TOOL_SEARCH_RELAYS.get(namespaces),
     customTools,
     customCodecs: CUSTOM_TOOL_CODECS.get(namespaces),
+    historicalCustomTools: HISTORICAL_CUSTOM_TOOLS.get(namespaces),
     functionRelays: FUNCTION_RELAYS.get(namespaces),
   };
 }
@@ -2599,6 +2634,7 @@ function customToolInput(
   allowPlaceholder = false,
   property = CUSTOM_TOOL_INPUT_PROPERTY,
   codec,
+  diagnostic,
 ) {
   if (allowPlaceholder && (value === undefined || value === "")) return "";
   const argumentsText = codec?.preserveRawArguments === true ? value : coerceFunctionCallArguments(value);
@@ -2606,7 +2642,8 @@ function customToolInput(
   if (codec) {
     try {
       return codec.decodeArguments(argumentsText);
-    } catch {
+    } catch (error) {
+      if (diagnostic) diagnostic.code = codec.argumentErrorCode?.(error);
       return undefined;
     }
   }
@@ -2723,6 +2760,9 @@ function rewriteNamespaceFunctionCallItem(
   { allowIncompleteToolSearch = false, effortForModel } = {},
 ) {
   if (!item || item.type !== "function_call") return undefined;
+  if (lookups.historicalCustomTools?.has(item.name)) {
+    throw new NamespaceRelayCommittedStreamError("historical tool identity is not callable");
+  }
   if (!rawCodecItem(item, lookups) && !jsonArgumentsAreUnambiguous(item.arguments, { allowEmpty: true })) return undefined;
   const exactPlainProviderIdentity =
     lookups.identityAliases &&
@@ -2851,6 +2891,15 @@ export function rewriteNamespaceResponsePayload(payload, lookups, sessionModel, 
   effortForModel,
 } = {}) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
+  // Reject the provider-only history identity in every response shape, even
+  // when a forged namespace or custom-call type tries to bypass restoration.
+  for (const item of [payload.item, ...(Array.isArray(payload.output) ? payload.output : []),
+    ...(Array.isArray(payload.response?.output) ? payload.response.output : [])]) {
+    if (["function_call", "custom_tool_call"].includes(item?.type) &&
+        lookups.historicalCustomTools?.has(item.name)) {
+      throw new NamespaceRelayCommittedStreamError("historical tool identity is not callable");
+    }
+  }
   let rewritten =
     rewriteNamespaceFunctionCall(payload, lookups, sessionModel, { effortForModel }) || payload;
   let changed = rewritten !== payload;
@@ -3097,7 +3146,8 @@ export class NamespaceToolCallTransform extends Transform {
     // must not run the namespace rewrites (they exist for routed providers)
     // or re-serialize model-authored events it did not change.
     this.#injectOnly = Boolean(options.injectOnly);
-    this.#requiresCodec = !this.#injectOnly && this.#lookups.customCodecs?.size > 0;
+    this.#requiresCodec = !this.#injectOnly &&
+      (this.#lookups.customCodecs?.size > 0 || this.#lookups.historicalCustomTools?.size > 0);
     this.#maxJsonCaptureBytes =
       Number.isInteger(options.maxJsonCaptureBytes) && options.maxJsonCaptureBytes > 0
         ? options.maxJsonCaptureBytes
@@ -4432,7 +4482,9 @@ export class NamespaceToolCallTransform extends Transform {
           if (matched.state.kind === "function_codec") {
             const rewrittenArguments = matched.state.functionRelay?.rewriteArguments(event.arguments);
             if (typeof rewrittenArguments !== "string") {
-              return this.#unsafeSseFrame(frame, "invalid function relay arguments done");
+              const code = matched.state.functionRelay?.argumentErrorCode?.(event.arguments);
+              const diagnostic = typeof code === "string" && /^[a-z_]{1,32}:[a-z_]{1,48}$/.test(code) ? `: ${code}` : "";
+              return this.#unsafeSseFrame(frame, `invalid function relay arguments done${diagnostic}`);
             }
             const codecReason = this.#validateCodecSource(matched.state, event.arguments);
             if (codecReason) return this.#unsafeSseFrame(frame, codecReason);
@@ -4449,11 +4501,12 @@ export class NamespaceToolCallTransform extends Transform {
             matched.state.sourceType === "custom_tool_call"
               ? LITELLM_CUSTOM_TOOL_INPUT_PROPERTY
               : CUSTOM_TOOL_INPUT_PROPERTY;
+          const diagnostic = {};
           const input = matched.state.sourceType === "custom_tool_call" && !matched.state.codec
             ? litellmCustomToolInput(event.arguments)
-            : customToolInput(event.arguments, false, argumentProperty, matched.state.codec);
+            : customToolInput(event.arguments, false, argumentProperty, matched.state.codec, diagnostic);
           if (input === undefined) {
-            return this.#unsafeSseFrame(frame, "invalid custom tool arguments done");
+            return this.#unsafeSseFrame(frame, `invalid custom tool arguments done${diagnostic.code ? `: ${diagnostic.code}` : ""}`);
           }
           const codecReason = this.#validateCodecSource(matched.state, event.arguments);
           if (codecReason) return this.#unsafeSseFrame(frame, codecReason);

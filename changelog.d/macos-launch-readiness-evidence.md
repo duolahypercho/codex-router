@@ -1,0 +1,1 @@
+- Fix a race in nested process shutdown tests and report native Control Center launch stages when macOS lifecycle verification fails.

@@ -12,6 +12,7 @@
       "description": "Grok 4.5 through the separately billed xAI API with agentic coding, tools, and a 500k context window.",
       "priority": 8,
       "defaultEffort": "high",
+      "serviceTiers": [{ "id": "priority", "name": "Fast", "description": "Use priority processing when available." }],
       "reasoningLevels": [
         {
           "effort": "low",

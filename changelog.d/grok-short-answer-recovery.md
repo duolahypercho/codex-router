@@ -1,0 +1,1 @@
+- **Grok OAuth no longer repeats completed short answers based on reasoning-token counts.** Remove the optional pre-tool recovery and its conversation-prefix buffer while retaining bounded empty post-tool recovery. Safe request timings identify explicitly marked Codex composer predictions and distinguish handler failures from committed HTTP status.

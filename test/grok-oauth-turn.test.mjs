@@ -10,12 +10,9 @@ import {
   finalizeTurn,
   isProgressOnlyStop,
   lastClientMessageWasToolResult,
-  mergeMappedUsage,
   parseSseBlockEvent,
-  requestOffersClientTools,
   REPAIR_FINAL_TOOL,
   selectedRetryUsage,
-  shouldPreferRetryTurn,
   sseDataFromBlock,
   toolCallDeltas,
   withProgressOnlyNudge,
@@ -86,6 +83,71 @@ test("finalizeTurn backfills streamed arguments when added is followed by done w
     .join("");
   assert.equal(turn.toolCalls[0].function.arguments, '{"cmd":"dir"}');
   assert.equal(streamedArgs, '{"cmd":"dir"}');
+});
+
+const argumentCall = (argumentsText) => ({
+  type: "function_call", id: "fc_arguments", call_id: "call_arguments",
+  name: "apply_patch", arguments: argumentsText,
+});
+const argumentStream = turn => turn.deltas.flatMap(delta => delta.tool_calls || [])
+  .map(call => call.function?.arguments || "").join("");
+
+test("nonempty added arguments and later suffixes reach Chat exactly once", () => {
+  const complete = '{"contents":"final\\n","path":"f"}';
+  const turn = collectResponsesEvents([
+    { type: "response.output_item.added", item: argumentCall(complete.slice(0, 12)) },
+    { type: "response.function_call_arguments.delta", item_id: "fc_arguments", delta: complete.slice(12, 18) },
+    { type: "response.function_call_arguments.done", item_id: "fc_arguments", arguments: complete },
+    { type: "response.output_item.done", item: argumentCall(complete) },
+    { type: "response.completed", response: { status: "completed", output: [argumentCall(complete)] } },
+  ]);
+  assert.equal(argumentStream(turn), complete);
+  assert.equal(turn.toolCalls[0].function.arguments, complete);
+});
+
+test("done and terminal snapshots append only the unstreamed argument suffix", () => {
+  const complete = '{"contents":"final\\n","path":"f"}';
+  for (const stage of ["arguments", "item", "terminal"]) {
+    const snapshot = stage === "arguments"
+      ? { type: "response.function_call_arguments.done", item_id: "fc_arguments", arguments: complete }
+      : stage === "item" ? { type: "response.output_item.done", item: argumentCall(complete) }
+        : { type: "response.completed", response: { output: [argumentCall(complete)] } };
+    const turn = collectResponsesEvents([
+      { type: "response.output_item.added", item: argumentCall("") },
+      { type: "response.function_call_arguments.delta", item_id: "fc_arguments", delta: complete.slice(0, 12) },
+      snapshot, { type: "response.completed" },
+    ]);
+    assert.equal(argumentStream(turn), complete, stage);
+    assert.equal(turn.toolCalls[0].function.arguments, complete, stage);
+  }
+});
+
+test("contradictory argument snapshots fail closed without appending replacement JSON", () => {
+  const complete = '{"contents":"final\\n","path":"f"}';
+  const prefix = '{"contents":"PRIVATE_DRAFT';
+  for (const event of [
+    { type: "response.function_call_arguments.done", item_id: "fc_arguments", arguments: complete },
+    { type: "response.output_item.done", item: argumentCall(complete) },
+    { type: "response.completed", response: { output: [argumentCall(complete)] } },
+  ]) {
+    const state = createTurnState();
+    applyResponsesEvent(state, { type: "response.output_item.added", item: argumentCall("") });
+    applyResponsesEvent(state, { type: "response.function_call_arguments.delta", item_id: "fc_arguments", delta: prefix });
+    assert.throws(() => applyResponsesEvent(state, event), error => {
+      assert.equal(error.code, "grok_tool_arguments_mismatch");
+      assert.equal(error.status, 502);
+      assert.doesNotMatch(error.message, /PRIVATE_DRAFT|contents|final/);
+      return true;
+    });
+    assert.equal(argumentStream(state), prefix);
+    assert.equal(state.toolCalls[0].function.arguments, prefix);
+  }
+});
+
+test("a completed snapshot can supply an otherwise absent tool call", () => {
+  const turn = collectResponsesEvents([{ type: "response.completed", response: { output: [argumentCall("{}")] } }]);
+  assert.equal(argumentStream(turn), "{}");
+  assert.equal(turn.finishReason, "tool_calls");
 });
 
 test("collectResponsesEvents maps custom_tool_call onto a function tool call", () => {
@@ -196,38 +258,29 @@ test("parseSseBlockEvent skips malformed JSON and leaves handlers to throw", () 
   });
 });
 
-test("isProgressOnlyStop requires short text, no tools, and enough output tokens", () => {
-  const progress = {
-    terminalStatus: "completed",
-    contentText: "Still thinking about it.",
-    toolCalls: [],
-    usage: { completion_tokens: 1660 },
-  };
-  assert.equal(isProgressOnlyStop(progress), true);
-  assert.equal(isProgressOnlyStop({ ...progress, toolCalls: [{ id: "c1" }] }), false);
-  assert.equal(
-    isProgressOnlyStop({ ...progress, contentText: "x".repeat(121) }),
-    false,
-  );
-  assert.equal(
-    isProgressOnlyStop({ ...progress, usage: { completion_tokens: 12 } }),
-    false,
-  );
+test("pre-tool completion never triggers recovery regardless of text or token count", () => {
+  for (const contentText of ["", " ", "Done.", "Still thinking about it.", "x".repeat(200)]) {
+    for (const completion_tokens of [0, 400, 1660, 100000]) {
+      assert.equal(isProgressOnlyStop({ terminalStatus: "completed", contentText,
+        toolCalls: [], usage: { completion_tokens } }), false);
+    }
+  }
 });
 
-test("isProgressOnlyStop retries a cheap stop after a tool result", () => {
+test("isProgressOnlyStop repairs only an empty completed response after a tool result", () => {
   const stop = {
     terminalStatus: "completed",
     contentText: "The figures are ready.",
     toolCalls: [],
     usage: { completion_tokens: 95 },
   };
-  assert.equal(isProgressOnlyStop(stop, { afterToolResult: true }), true);
+  assert.equal(isProgressOnlyStop(stop, { afterToolResult: true }), false);
+  assert.equal(isProgressOnlyStop({ ...stop, contentText: " \n" }, { afterToolResult: true }), true);
   assert.equal(isProgressOnlyStop(stop), false);
   assert.equal(isProgressOnlyStop({ ...stop, toolCalls: [{ id: "c1" }] }, { afterToolResult: true }), false);
 });
 
-test("isProgressOnlyStop requires certification for long prose after a tool result", () => {
+test("isProgressOnlyStop accepts native long prose after a tool result", () => {
   assert.equal(
     isProgressOnlyStop(
       {
@@ -238,7 +291,7 @@ test("isProgressOnlyStop requires certification for long prose after a tool resu
       },
       { afterToolResult: true },
     ),
-    true,
+    false,
   );
 });
 
@@ -262,41 +315,9 @@ test("lastClientMessageWasToolResult ignores system and user tails", () => {
   );
 });
 
-test("requestOffersClientTools ignores hosted-only or empty tool lists", () => {
-  assert.equal(requestOffersClientTools({}), false);
-  assert.equal(requestOffersClientTools({ tools: [] }), false);
-  assert.equal(
-    requestOffersClientTools({ tools: [{ type: "web_search" }] }),
-    false,
-  );
-  assert.equal(
-    requestOffersClientTools({
-      tools: [{ type: "function", function: { name: "exec_command" } }],
-    }),
-    true,
-  );
-});
-
-test("shouldPreferRetryTurn keeps the first answer when the retry also has no tools", () => {
-  assert.equal(shouldPreferRetryTurn({ terminalStatus: "completed", toolCalls: [] }), false);
-  assert.equal(shouldPreferRetryTurn({ terminalStatus: "completed", toolCalls: [{ id: "c1" }] }), true);
-});
-
-test("withProgressOnlyNudge appends a user message so the instructions prefix stays put", () => {
-  const nudged = withProgressOnlyNudge({
-    model: "grok-4.6",
-    messages: [
-      { role: "system", content: "You are Codex." },
-      { role: "user", content: "update the deck" },
-    ],
-  });
-  assert.equal(nudged.messages[0].role, "system");
-  assert.equal(nudged.messages.at(-1).role, "user");
-  // The no-tool branch comes first so a finished turn can decline rather than
-  // invent a call the client would run.
-  assert.match(nudged.messages.at(-1).content, /^If your previous message already completed/);
-  assert.match(nudged.messages.at(-1).content, /call no tool/);
-  assert.match(nudged.messages.at(-1).content, /Otherwise continue the same task now/);
+test("recovery instructions are not added before a tool result", () => {
+  const chat = { messages: [{ role: "user", content: "Done?" }] };
+  assert.equal(withProgressOnlyNudge(chat), chat);
 });
 
 test("withProgressOnlyNudge leads with continue after a tool result", () => {
@@ -306,14 +327,14 @@ test("withProgressOnlyNudge leads with continue after a tool result", () => {
   );
   assert.equal(nudged.messages.at(-1).role, "developer");
   assert.match(nudged.messages.at(-1).content, /^The previous tool call finished/);
-  assert.match(nudged.messages.at(-1).content, /call the next task tool/);
+  assert.match(nudged.messages.at(-1).content, /Call the next task tool/);
   assert.match(nudged.messages.at(-1).content, new RegExp(REPAIR_FINAL_TOOL));
-  assert.equal(nudged.tool_choice, "required");
+  assert.equal(nudged.tool_choice, "auto");
   assert.equal(nudged.tools.at(-1).function.name, REPAIR_FINAL_TOOL);
   assert.doesNotMatch(nudged.messages.at(-1).content, /^If your previous message already completed/);
 });
 
-test("classifyAfterToolRepair accepts only tools or a certified non-empty final answer", () => {
+test("classifyAfterToolRepair accepts tools, native text and an optional private final", () => {
   assert.deepEqual(
     classifyAfterToolRepair({
       terminalStatus: "completed",
@@ -332,8 +353,11 @@ test("classifyAfterToolRepair accepts only tools or a certified non-empty final 
     { action: "final", contentText: "Done." },
   );
   assert.deepEqual(classifyAfterToolRepair({ terminalStatus: "completed", toolCalls: [], contentText: "Still working." }), {
-    action: "fail",
+    action: "final", contentText: "Still working.",
   });
+  for (const contentText of [undefined, "", " \n\t"]) {
+    assert.deepEqual(classifyAfterToolRepair({ terminalStatus: "completed", toolCalls: [], contentText }), { action: "fail" });
+  }
   assert.deepEqual(
     classifyAfterToolRepair({
       terminalStatus: "completed",
@@ -349,6 +373,38 @@ test("classifyAfterToolRepair accepts only tools or a certified non-empty final 
   }), {
     action: "fail",
   });
+});
+
+test("post-tool nudge offers its private final only within the explicit client tool capacity", () => {
+  for (const maxTools of [348, 350]) {
+    for (const clientToolCount of [maxTools - 1, maxTools]) {
+      const tools = Array.from({ length: clientToolCount }, (_, index) => ({
+        type: "function", function: { name: `fixture_${index}` },
+      }));
+      const nudged = withProgressOnlyNudge({ tools, messages: [{ role: "tool", content: "done" }] }, {
+        afterToolResult: true, maxTools, clientToolCount,
+      });
+      const offered = clientToolCount < maxTools;
+      assert.equal(nudged.tools.length, offered ? clientToolCount + 1 : clientToolCount);
+      assert.equal(nudged.messages.at(-1).content.includes(REPAIR_FINAL_TOOL), offered);
+      assert.deepEqual(classifyAfterToolRepair({ terminalStatus: "completed", toolCalls: [{
+        function: { name: REPAIR_FINAL_TOOL, arguments: '{"answer":"Done."}' },
+      }] }, { privateFinalOffered: offered, clientToolNames: new Set(tools.map(tool => tool.function.name)) }),
+      offered ? { action: "final", contentText: "Done." } : { action: "fail" });
+    }
+  }
+});
+
+test("native final text still requires a successful terminal", () => {
+  for (const terminalStatus of ["completed", "failed", "incomplete", "missing"]) {
+    const turn = collectResponsesEvents([
+      { type: "response.output_text.delta", delta: "Native final answer." },
+      ...(terminalStatus === "missing" ? [] : [{ type: `response.${terminalStatus}` }]),
+    ]);
+    assert.deepEqual(classifyAfterToolRepair(turn), terminalStatus === "completed"
+      ? { action: "final", contentText: "Native final answer." }
+      : { action: "fail" });
+  }
 });
 
 test("only response.completed certifies a tool call or private final answer", () => {
@@ -370,7 +426,6 @@ test("only response.completed certifies a tool call or private final answer", ()
       assert.deepEqual(classifyAfterToolRepair(turn), terminalStatus === "completed"
         ? name === REPAIR_FINAL_TOOL ? { action: "final", contentText: "Done." } : { action: "tools" }
         : { action: "fail" });
-      assert.equal(shouldPreferRetryTurn(turn), terminalStatus === "completed");
     }
   }
 });
@@ -462,53 +517,6 @@ test("selectedRetryUsage keeps selected tokens without labeling billed usage as 
   );
   assert.equal("service_tier" in usage, false);
   assert.equal("billed_service_tier" in usage, false);
-});
-
-test("mergeMappedUsage omits actual service_tier from aggregated retry billing", () => {
-  const merged = mergeMappedUsage(
-    { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12, service_tier: "default" },
-    { prompt_tokens: 11, completion_tokens: 3, total_tokens: 14, service_tier: "priority" },
-  );
-  assert.equal("service_tier" in merged, false);
-  assert.equal(merged.retries, 1);
-});
-
-
-test("mergeMappedUsage adds both attempts and marks retries", () => {
-  const merged = mergeMappedUsage(
-    {
-      prompt_tokens: 100,
-      completion_tokens: 1660,
-      total_tokens: 1760,
-      prompt_tokens_details: { cached_tokens: 80 },
-      completion_tokens_details: { reasoning_tokens: 1600 },
-    },
-    {
-      prompt_tokens: 110,
-      completion_tokens: 40,
-      total_tokens: 150,
-      prompt_tokens_details: { cached_tokens: 80 },
-      completion_tokens_details: { reasoning_tokens: 10 },
-    },
-  );
-  assert.equal(merged.prompt_tokens, 210);
-  assert.equal(merged.completion_tokens, 1700);
-  assert.equal(merged.total_tokens, 1910);
-  assert.equal(merged.prompt_tokens_details.cached_tokens, 160);
-  assert.equal(merged.completion_tokens_details.reasoning_tokens, 1610);
-  assert.equal(merged.retries, 1);
-  assert.equal(merged.progress_only_retried, true);
-});
-
-test("mergeMappedUsage still marks retries when one attempt reported no usage", () => {
-  const onlySecond = mergeMappedUsage(undefined, {
-    prompt_tokens: 10,
-    completion_tokens: 4,
-    total_tokens: 14,
-  });
-  assert.equal(onlySecond.prompt_tokens, 10);
-  assert.equal(onlySecond.retries, 1);
-  assert.equal(onlySecond.progress_only_retried, true);
 });
 
 test("a completed terminal seals the attempt against late tool, text, and reasoning frames", () => {

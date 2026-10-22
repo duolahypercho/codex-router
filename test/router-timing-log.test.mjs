@@ -8,6 +8,8 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { callerBaseUrl } from "../src/caller-auth.mjs";
+import { GROK_TIMING_HEADER } from "../src/grok-request-timing.mjs";
+import { EXACT_ROUTE_PROBE_HEADER } from "../src/exact-route-probe.mjs";
 import { openPort } from "./port-pool.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -290,6 +292,141 @@ test("timing covers non-2xx, thrown fetch, and mid-stream failures", async () =>
     assert.equal((await health.json()).activity.state, "error");
   } finally {
     await stopChild(router);
+    await closeServer(gateway.server);
+  }
+});
+
+test("Grok compaction shares reasoning, correlation and measured stages, including failure, skip and cancellation", async () => {
+  let mode = "success";
+  const requests = [];
+  let received;
+  const gateway = await mockServer(async (request, response) => {
+    if (request.method === "GET") return response.end('{}');
+    let raw = "";
+    for await (const chunk of request) raw += chunk;
+    requests.push(JSON.parse(raw));
+    received?.();
+    if (mode === "cancel") return;
+    if (mode === "failure") {
+      response.writeHead(400, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ error: { message: "synthetic compaction rejection" } }));
+      return;
+    }
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ object: "response", status: "completed", output: [
+      { type: "message", role: "assistant", content: [{ type: "output_text", text: "synthetic summary" }] },
+    ], provider_specific_fields: { grok_service_tier: "priority" }, usage: { input_tokens: 150, output_tokens: 5, total_tokens: 155 } }));
+  });
+  const routerPort = await openPort();
+  const router = run(routerEnv(gateway.port, routerPort));
+  const base = callerBaseUrl(routerPort, CALLER_KEY);
+  const timings = () => router.testErrors().split("\n").filter(line => line.startsWith("[grok-timing] "))
+    .map(line => JSON.parse(line.slice("[grok-timing] ".length)));
+  const usage = () => {
+    const file = path.join(router.stateDir, "usage-events.jsonl");
+    if (!existsSync(file)) return [];
+    const text = readFileSync(file, "utf8");
+    return text.slice(0, text.lastIndexOf("\n")).split("\n").filter(Boolean).map(JSON.parse);
+  };
+  async function recorded(count) {
+    const deadline = Date.now() + 5000;
+    while ((timings().length < count || usage().length < count) && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    assert.equal(timings().length, count, router.testErrors());
+    assert.equal(usage().length, count);
+    return { timing: timings().at(-1), row: usage().at(-1) };
+  }
+  function compact({ v2 = true, stream = false, content = "short history", ...extra } = {}, signal) {
+    return fetch(`${base}/responses${v2 ? "" : "/compact"}`, {
+      method: "POST", headers: { "Content-Type": "application/json", [EXACT_ROUTE_PROBE_HEADER]: "1" }, signal,
+      body: JSON.stringify({ model: "grok-oauth/grok-4.7", stream,
+        service_tier: "priority", instructions: "EXECUTION_ONLY_TOP: keep coding until implementation is complete.",
+        tools: [{ type: "function", name: "write_stdin", parameters: { type: "object", properties: { session_id: { type: "integer" } } } }],
+        input: [{ type: "message", role: "developer", content: "EXECUTION_ONLY_DEVELOPER: keep editing files." },
+          { type: "message", role: "user", content }, ...(v2 ? [{ type: "compaction_trigger" }] : [])],
+        extra_headers: { [GROK_TIMING_HEADER]: "forged" }, ...extra }),
+    });
+  }
+  try {
+    await waitFor(`${base}/models`, router);
+    let count = 0;
+    for (const options of [
+      { v2: false, reasoning: { effort: "medium", summary: "detailed" } },
+      { reasoning_effort: "high" },
+      { stream: true },
+    ]) {
+      const response = await compact(options);
+      const body = await response.text();
+      assert.equal(response.status, 200, body);
+      const { timing, row } = await recorded(++count);
+      const sent = requests.at(-1);
+      assert.equal(timing.requestId, row.requestId);
+      assert.equal(sent.extra_headers[GROK_TIMING_HEADER], row.requestId);
+      assert.deepEqual(sent.extra_body?.reasoning_effort, options.reasoning ?? options.reasoning_effort);
+      assert.deepEqual(sent.tools, [], "a summary never dispatches client tools");
+      assert.equal(sent.tool_choice, "none", "a summary also forbids ambient hosted tools");
+      assert.match(sent.instructions, /lossy continuation checkpoint/);
+      assert.doesNotMatch(sent.instructions, /EXECUTION_ONLY/);
+      assert.equal(sent.input.some(item => ["system", "developer"].includes(item.role)), false);
+      assert.match(JSON.stringify(sent.input), /EXECUTION_ONLY_TOP/);
+      assert.match(JSON.stringify(sent.input), /EXECUTION_ONLY_DEVELOPER/);
+      assert.equal(sent.extra_body.service_tier, "priority");
+      assert.equal(timing.requestedServiceTier, "priority");
+      assert.equal(row.requestedServiceTier, "priority");
+      assert.equal(row.serviceTier, "priority", "actual compaction tier comes from provider metadata");
+      assert.equal(timing.requestKind, "compaction");
+      assert.equal(row.requestKind, "compaction");
+      assert.equal(row.providerToolCount, 0);
+      assert.equal(row.generationOutcome, "completed");
+      assert.equal(row.httpStatus, 200);
+      assert.equal(timing.toolSurfaces.client.known.write_stdin.count, 1);
+      assert.equal(timing.toolSurfaces.gateway.count, 0);
+      assert.ok(timing.preparedMs >= timing.parsedMs);
+      assert.ok(timing.firstGatewayDispatchMs >= timing.preparedMs);
+      assert.ok(timing.firstGatewayHeadersMs >= timing.firstGatewayDispatchMs);
+      assert.ok(timing.terminalMs >= timing.firstGatewayHeadersMs);
+      assert.equal(timing.terminal, "completed");
+      assert.doesNotMatch(JSON.stringify({ timing, row }), /short history|synthetic summary|forged/);
+    }
+    mode = "failure";
+    const failed = await compact({ stream: true });
+    await failed.text();
+    const failure = await recorded(++count);
+    assert.equal(failure.row.generationOutcome, "failed");
+    assert.equal(failure.row.httpStatus, failed.status);
+    assert.equal(failure.timing.terminal, "failed");
+    assert.ok(failure.timing.terminalMs >= failure.timing.firstGatewayHeadersMs);
+    assert.equal((await (await fetch(`http://127.0.0.1:${routerPort}/health`)).json()).activity.state, "error");
+
+    // A skip has no provider work. It must not fabricate dispatch/headers.
+    const requestsBefore = requests.length;
+    const skipped = await compact({ content: "history ".repeat(5000) });
+    assert.equal(skipped.status, 200, await skipped.text());
+    const skip = await recorded(++count);
+    assert.equal(requests.length, requestsBefore);
+    assert.equal(skip.timing.requestKind, "compaction");
+    assert.equal(skip.timing.terminal, "completed");
+    assert.equal(skip.timing.firstGatewayDispatchMs, undefined);
+    assert.equal(skip.row.generationOutcome, "completed");
+
+    mode = "cancel";
+    const controller = new AbortController();
+    const dispatched = new Promise(resolve => { received = resolve; });
+    const pending = compact({}, controller.signal);
+    const cancelled = assert.rejects(pending, { name: "AbortError" });
+    await dispatched;
+    controller.abort();
+    await cancelled;
+    const cancel = await recorded(++count);
+    assert.equal(cancel.row.generationOutcome, "canceled");
+    assert.equal(cancel.timing.outcome, "connection_closed");
+    assert.equal(cancel.timing.terminal, undefined);
+    assert.equal(cancel.timing.firstGatewayHeadersMs, undefined);
+    assert.ok(Number.isInteger(cancel.timing.firstGatewayDispatchMs));
+  } finally {
+    await stopChild(router);
+    gateway.server.closeAllConnections();
     await closeServer(gateway.server);
   }
 });

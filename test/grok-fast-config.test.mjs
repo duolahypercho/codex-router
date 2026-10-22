@@ -116,7 +116,7 @@ test("writeLiteLlmConfig publishes the repository callback privately beside gene
   });
 });
 
-test("rendered catalog keeps Fast opt-in on grok-oauth/grok-4.6 and leaves Grok 4.5 unchanged", () => {
+test("rendered catalog keeps Fast opt-in on every first-party Grok preset", () => {
   const nativeTemplate = {
     slug: "gpt-5.5",
     display_name: "GPT-5.5",
@@ -126,13 +126,13 @@ test("rendered catalog keeps Fast opt-in on grok-oauth/grok-4.6 and leaves Grok 
     base_instructions: "You are Codex.",
     default_service_tier: "priority",
   };
-  const grok46 = routedModel(nativeTemplate, MODEL_BY_SLUG.get("grok-oauth/grok-4.6"));
-  assert.deepEqual(grok46.service_tiers, [{ id: "priority", name: "Fast", description: "Use priority processing when available." }]);
-  assert.equal(grok46.default_service_tier, null);
-
-  const grok45 = routedModel(nativeTemplate, MODEL_BY_SLUG.get("grok-oauth/grok-4.5"));
-  assert.deepEqual(grok45.service_tiers, []);
-  assert.equal(grok45.default_service_tier, null);
+  const grokRoutes = [...MODEL_BY_SLUG.values()].filter(model => ["grok-oauth", "grok-api"].includes(model.provider));
+  assert.equal(grokRoutes.length, 5);
+  for (const route of grokRoutes) {
+    const model = routedModel(nativeTemplate, route);
+    assert.deepEqual(model.service_tiers, [{ id: "priority", name: "Fast", description: "Use priority processing when available." }], route.slug);
+    assert.equal(model.default_service_tier, null, route.slug);
+  }
 });
 
 // Compaction reaches the Grok deployment without streaming, where LiteLLM
