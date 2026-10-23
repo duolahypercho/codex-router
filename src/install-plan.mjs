@@ -41,6 +41,9 @@ export const PYTHON_REQUIREMENTS = [
   "fastapi==0.139.2",
   "multidict==6.9.1",
   "urllib3==2.8.0",
+  // Keep the CA bundle floor explicit so lock regeneration cannot retain an
+  // older transitive version.
+  "certifi==2026.10.19",
 ];
 
 // Pinning only the gateway requirements left their transitive tree floating:

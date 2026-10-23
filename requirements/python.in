@@ -7,3 +7,4 @@ litellm[proxy]==1.96.2
 fastapi==0.139.2
 multidict==6.9.1
 urllib3==2.8.0
+certifi==2026.10.19

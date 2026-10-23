@@ -224,12 +224,47 @@ test("distribution lookup normalizes names and ignores extras", () => {
 // have to agree on is that they both install that lock with hash checking.
 // test/python-lock.test.mjs covers the lock's own agreement with these pins.
 test("both installers install the Python tree from the hashed lock", () => {
-  assert.equal(PYTHON_REQUIREMENTS.length, 4);
+  assert.equal(PYTHON_REQUIREMENTS.length, 5);
+  assert.ok(PYTHON_REQUIREMENTS.includes("certifi==2026.10.19"));
   assert.deepEqual(installerRequirementDrift(), []);
 });
 
-test("a matching stamp cannot accept downgraded transitive security floors", () => {
-  for (const [name, version] of Object.entries({ multidict: "6.7.1", urllib3: "2.7.0" })) {
+test("a direct Python pin change invalidates a matching dependency stamp", () => {
+  const certifiIndex = PYTHON_REQUIREMENTS.findIndex((requirement) =>
+    requirement.startsWith("certifi=="),
+  );
+  assert.notEqual(certifiIndex, -1);
+  const original = PYTHON_REQUIREMENTS[certifiIndex];
+  const root = checkout();
+  try {
+    installVenv(root);
+    recordStep("python-deps", { root });
+    rmSync(path.join(sitePackages(root), "certifi-2026.10.19.dist-info"), {
+      recursive: true,
+      force: true,
+    });
+    mkdirSync(path.join(sitePackages(root), "certifi-2026.10.20.dist-info"));
+    PYTHON_REQUIREMENTS[certifiIndex] = "certifi==2026.10.20";
+    assert.equal(
+      stepStatus("python-deps", {
+        root,
+        platform: TEST_PLATFORM,
+        runtimeProblem: healthyRuntime,
+      }),
+      "run",
+    );
+  } finally {
+    PYTHON_REQUIREMENTS[certifiIndex] = original;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a matching stamp cannot accept downgraded pinned security floors", () => {
+  for (const [name, version] of Object.entries({
+    certifi: "2026.7.22",
+    multidict: "6.7.1",
+    urllib3: "2.7.0",
+  })) {
     const root = checkout();
     try {
       installVenv(root, { ...PINNED_VERSIONS, [name]: version });

@@ -1,0 +1,1 @@
+- **The Python install plan pins certifi 2026.10.19.** The generated hash lock and Homebrew formula use this direct pin.
