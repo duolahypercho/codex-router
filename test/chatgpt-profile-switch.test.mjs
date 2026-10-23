@@ -45,6 +45,13 @@ function writeFileSync(target, contents, options) {
   }
 }
 
+function workspaceAuth(userId, email) {
+  return JSON.stringify({ tokens: {
+    account_id: "shared-workspace", access_token: `token-${userId}`,
+    id_token: `header.${Buffer.from(JSON.stringify({ email, "https://api.openai.com/auth": { chatgpt_user_id: userId } })).toString("base64url")}.signature`,
+  } });
+}
+
 function runModuleChild(source) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ["--input-type=module", "-e", source], {
@@ -61,6 +68,121 @@ function runModuleChild(source) {
     });
   });
 }
+
+test("distinct users in one workspace recover, switch, and keep usage separate", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "codex-shared-workspace-"));
+  const homesDir = path.join(root, "accounts");
+  const primaryHome = path.join(root, "primary");
+  const filePath = path.join(root, "pool.json");
+  const switchPath = path.join(root, "switch.json");
+  mkdirSync(primaryHome);
+  const first = createChatGPTSubscriptionAccount({ filePath, homesDir });
+  const second = createChatGPTSubscriptionAccount({ filePath, homesDir });
+  const firstAuth = workspaceAuth("first-user", "first@example.com");
+  const secondAuth = workspaceAuth("second-user", "second@example.com");
+  const firstPath = chatGPTSubscriptionAccountAuthPath(first.id, { homesDir });
+  const secondPath = chatGPTSubscriptionAccountAuthPath(second.id, { homesDir });
+  writeFileSync(path.join(primaryHome, "auth.json"), firstAuth, { mode: 0o600 });
+  writeFileSync(firstPath, firstAuth, { mode: 0o600 });
+  const pool = readChatGPTAccountPoolState(filePath);
+  pool.accounts[first.id].identity = { accountId: "shared-workspace" };
+  pool.policy.selectedAccountId = first.id;
+  writeChatGPTAccountPoolState(pool, filePath);
+  writeFileSync(switchPath, JSON.stringify({ version: 1, active: first.id, desired: first.id, pending: false, phase: "idle" }), { mode: 0o600 });
+  createChatGPTLoginLease(second.id, 4242, { homesDir, identity: () => "departed-owner", now: 1_000, phase: "running" });
+  writeFileSync(secondPath, secondAuth, { mode: 0o600 });
+  const options = { filePath, homesDir, primaryHome, switchPath, refreshCatalog: false,
+    platform: "darwin", processList: "", loginLeaseIdentity: () => "replacement-owner", now: 2_000 };
+  assert.deepEqual(await recoverCompletedChatGPTProfileLogins(options), { recovered: [second.id], failures: [] });
+  const ensured = await ensureChatGPTProfileAccounts(options);
+  assert.equal(ensured.currentAccountId, first.id);
+  assert.equal(Object.keys(ensured.state.accounts).length, 2);
+  assert.equal(ensured.state.accounts[first.id].identity.userId, "first-user");
+  assert.equal(ensured.state.accounts[second.id].identity.userId, "second-user");
+  await selectChatGPTProfileAccount(second.id, options);
+  assert.equal(readFileSync(path.join(primaryHome, "auth.json"), "utf8"), secondAuth);
+  assert.equal(selectedChatGPTUsageProfile(options).home, primaryHome);
+  writeFileSync(path.join(primaryHome, "auth.json"), firstAuth, { mode: 0o600 });
+  assert.equal(selectedChatGPTUsageProfile(options).home, path.dirname(secondPath));
+  writeFileSync(path.join(primaryHome, "auth.json"), secondAuth, { mode: 0o600 });
+  await selectChatGPTProfileAccount(first.id, options);
+  assert.equal(readFileSync(path.join(primaryHome, "auth.json"), "utf8"), firstAuth);
+  assert.equal(readFileSync(firstPath, "utf8"), firstAuth);
+  assert.equal(readFileSync(secondPath, "utf8"), secondAuth);
+
+  const duplicate = createChatGPTSubscriptionAccount({ filePath, homesDir });
+  createChatGPTLoginLease(duplicate.id, 4242, { homesDir, identity: () => "departed-owner", now: 1_000, phase: "running" });
+  writeFileSync(chatGPTSubscriptionAccountAuthPath(duplicate.id, { homesDir }), workspaceAuth("second-user", "changed@example.com"), { mode: 0o600 });
+  assert.deepEqual(await recoverCompletedChatGPTProfileLogins(options), { recovered: [], failures: [{ accountId: duplicate.id, code: "identity-conflict" }] });
+  assert.equal(await discardCompletedChatGPTProfileLogin(duplicate.id, options), true);
+  await removeChatGPTProfileAccount(duplicate.id, options);
+  assert.equal(Object.keys(readChatGPTAccountPoolState(filePath).accounts).length, 2);
+
+  writeFileSync(secondPath, firstAuth, { mode: 0o600 });
+  const selected = readChatGPTAccountPoolState(filePath);
+  selected.policy.selectedAccountId = second.id;
+  writeChatGPTAccountPoolState(selected, filePath);
+  assert.equal(selectedChatGPTUsageProfile(options).home, undefined);
+  await assert.rejects(ensureChatGPTProfileAccounts(options), /identity/);
+});
+
+test("legacy workspace-only identity is not rebound to a user without matching evidence", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "codex-shared-workspace-legacy-"));
+  const homesDir = path.join(root, "accounts");
+  const primaryHome = path.join(root, "primary");
+  const filePath = path.join(root, "pool.json");
+  const switchPath = path.join(root, "switch.json");
+  mkdirSync(primaryHome);
+  const account = createChatGPTSubscriptionAccount({ filePath, homesDir });
+  writeFileSync(chatGPTSubscriptionAccountAuthPath(account.id, { homesDir }), JSON.stringify({
+    tokens: { account_id: "shared-workspace", access_token: "legacy-token" },
+  }), { mode: 0o600 });
+  const state = readChatGPTAccountPoolState(filePath);
+  state.accounts[account.id].identity = { accountId: "shared-workspace" };
+  writeChatGPTAccountPoolState(state, filePath);
+  writeFileSync(path.join(primaryHome, "auth.json"), workspaceAuth("other-user", "other@example.com"), { mode: 0o600 });
+  const before = readFileSync(filePath, "utf8");
+  await assert.rejects(ensureChatGPTProfileAccounts({ filePath, homesDir, primaryHome, switchPath }), /user identity is unavailable/);
+  assert.equal(readFileSync(filePath, "utf8"), before);
+  assert.equal(existsSync(switchPath), false);
+});
+
+test("installed recovery distinguishes users sharing a workspace with old and new journals", async () => {
+  for (const userBinding of [false, true]) {
+    const root = mkdtempSync(path.join(os.tmpdir(), "codex-shared-workspace-journal-"));
+    const homesDir = path.join(root, "accounts");
+    const primaryHome = path.join(root, "primary");
+    const filePath = path.join(root, "pool.json");
+    const switchPath = path.join(root, "switch.json");
+    const transactionDir = path.join(root, "chatgpt-profile", "switch-transaction");
+    mkdirSync(primaryHome);
+    mkdirSync(transactionDir, { recursive: true, mode: 0o700 });
+    const first = createChatGPTSubscriptionAccount({ filePath, homesDir });
+    const second = createChatGPTSubscriptionAccount({ filePath, homesDir });
+    const firstAuth = workspaceAuth("first-user", "first@example.com");
+    const secondAuth = workspaceAuth("second-user", "second@example.com");
+    writeFileSync(path.join(primaryHome, "auth.json"), firstAuth, { mode: 0o600 });
+    writeFileSync(chatGPTSubscriptionAccountAuthPath(first.id, { homesDir }), firstAuth, { mode: 0o600 });
+    writeFileSync(chatGPTSubscriptionAccountAuthPath(second.id, { homesDir }), secondAuth, { mode: 0o600 });
+    writeFileSync(path.join(transactionDir, "primary-auth.json"), firstAuth, { mode: 0o600 });
+    writeFileSync(path.join(transactionDir, "manifest.json"), JSON.stringify({
+      version: 2, active: first.id, target: second.id,
+      activeAccountId: "shared-workspace", targetAccountId: "shared-workspace",
+      ...(userBinding ? { activeUserId: "first-user", targetUserId: "second-user" } : {}),
+      catalogsEnabled: false,
+    }), { mode: 0o600 });
+    writeFileSync(switchPath, JSON.stringify({
+      version: 1, active: second.id, desired: second.id, phase: "installed", pending: false,
+    }), { mode: 0o600 });
+    const result = await reconcileChatGPTProfileSwitchIfReady({
+      filePath, homesDir, primaryHome, switchPath, refreshCatalog: false, platform: "darwin", processList: "",
+    });
+    assert.equal(result.active, second.id);
+    assert.equal(result.pending, false);
+    assert.equal(readFileSync(path.join(primaryHome, "auth.json"), "utf8"), secondAuth);
+    assert.equal(existsSync(transactionDir), false);
+  }
+});
 
 test("settled account discovery leaves state bytes, mtimes, and absent files unchanged", async () => {
   const emptyRoot = mkdtempSync(path.join(os.tmpdir(), "codex-profile-empty-read-"));

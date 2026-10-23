@@ -813,6 +813,9 @@ async function printAccountUsage() {
   } = await import("./chatgpt-profile-switch.mjs");
   await ensureChatGPTProfileAccounts();
   const profile = selectedChatGPTUsageProfile();
+  if (!profile.home && profile.selection !== "auto" && profile.selection !== "primary") {
+    throw new Error("The selected ChatGPT login profile is unavailable. Refresh the saved accounts before reading usage.");
+  }
   const usage = profile.home
     ? await readCodexAccountUsage({ codexHome: profile.home })
     : await readCodexAccountUsage();

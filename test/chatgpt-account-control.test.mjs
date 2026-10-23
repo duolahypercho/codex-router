@@ -80,6 +80,27 @@ test("account selection persists without replacing another saved login", () => {
   );
 });
 
+test("an unavailable explicit account never falls back to primary usage", () => {
+  const isolated = mkdtempSync(path.join(os.tmpdir(), "codex-account-usage-unavailable-"));
+  try {
+    mkdirSync(path.join(isolated, "chatgpt-accounts", "acct_paused_12345678"), { recursive: true, mode: 0o700 });
+    writeFileSync(path.join(isolated, "chatgpt-account-pool.json"), JSON.stringify({
+      version: 1,
+      policy: { enabled: true, mode: "switch", selectedAccountId: "acct_paused_12345678" },
+      accounts: { acct_paused_12345678: {
+        id: "acct_paused_12345678", state: "paused", paused: true, priority: 50,
+        health: { state: "healthy" }, turns: 0, requests: 0,
+      } }, sessions: {},
+    }), { mode: 0o600 });
+    assert.throws(() => execFileSync(process.execPath, [path.join(root, "src/control.mjs"), "account"], {
+      env: { ...env, CODEX_HOME: isolated, MODEL_ROUTER_STATE_DIR: isolated },
+      encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+    }), (error) => /selected ChatGPT login profile is unavailable/.test(String(error.stderr)));
+  } finally {
+    rmSync(isolated, { recursive: true, force: true });
+  }
+});
+
 test("no-discovery account reads never import account modules or create pool state", () => {
   const isolated = mkdtempSync(path.join(os.tmpdir(), "codex-account-no-discovery-"));
   const loader = path.join(isolated, "import-audit-loader.mjs");

@@ -1,0 +1,1 @@
+- Fix ChatGPT account discovery and login recovery for different users sharing one workspace, preserving user identity through profile switching and usage selection and refusing model catalog publication after a session change.

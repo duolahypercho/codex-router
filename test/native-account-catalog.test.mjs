@@ -238,6 +238,29 @@ test("an account switch during the request cannot overwrite the new account cach
     assert.equal(readFileSync(cachePath, "utf8"), contents);
   }));
 
+test("a same-workspace login switch during the request cannot overwrite the new user's cache", () =>
+  withCache(async (cachePath) => {
+    const contents = JSON.stringify(fixtureCache([{ slug: "gpt-before-switch" }]));
+    writeFileSync(cachePath, contents);
+    let reads = 0;
+    const result = await refreshNativeAccountCatalog({
+      cachePath,
+      force: true,
+      version: "0.153.2",
+      discoveryOff: () => false,
+      lock: noLock,
+      headersProvider: async () => ({
+        authorization: `Bearer ${reads++ === 0 ? ACCESS : "different-user-token"}`,
+        "chatgpt-account-id": ACCOUNT,
+      }),
+      fetchImpl: async () => new Response(JSON.stringify({
+        models: [{ slug: "gpt-from-old-user" }],
+      }), { status: 200 }),
+    });
+    assert.equal(result.status, "failed");
+    assert.equal(readFileSync(cachePath, "utf8"), contents);
+  }));
+
 test("a version-mismatched cache is never restamped, account switch or not", () =>
   withCache(async (cachePath) => {
     // The router no longer carries a restamp path at all: a client_version

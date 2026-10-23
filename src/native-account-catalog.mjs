@@ -42,13 +42,14 @@ function safeEtag(value) {
 }
 
 function sameAccountSession(before, after) {
-  if (!after?.authorization) return false;
+  if (!before?.authorization || !after?.authorization
+    || !secretEqual(before.authorization, after.authorization)) return false;
   const beforeAccount = before?.["chatgpt-account-id"];
   const afterAccount = after?.["chatgpt-account-id"];
   if (beforeAccount || afterAccount) {
     return Boolean(beforeAccount && beforeAccount === afterAccount);
   }
-  return secretEqual(before.authorization, after.authorization);
+  return true;
 }
 
 export function readModelsCache(cachePath = MODELS_CACHE_PATH) {
