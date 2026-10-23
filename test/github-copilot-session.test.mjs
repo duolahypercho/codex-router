@@ -1,14 +1,31 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import test, { after } from "node:test";
 
-import {
+const stateRoot = mkdtempSync(path.join(os.tmpdir(), "copilot-session-test-"));
+const savedState = process.env.MODEL_ROUTER_STATE_DIR;
+process.env.MODEL_ROUTER_STATE_DIR = stateRoot;
+after(() => {
+  rmSync(stateRoot, { recursive: true, force: true });
+  if (savedState === undefined) delete process.env.MODEL_ROUTER_STATE_DIR;
+  else process.env.MODEL_ROUTER_STATE_DIR = savedState;
+});
+
+const {
   assertGitHubCopilotCredential,
   copilotApiBaseUrl,
   ensureFreshGitHubCopilotSession,
   githubCopilotCredentialProblem,
   githubCopilotRequestHeaders,
   resetGitHubCopilotSessionForTests,
-} from "../src/github-copilot-session.mjs";
+  resolveGitHubCopilotConfiguration,
+} = await import("../src/github-copilot-session.mjs");
+
+function configuration(host, env = {}) {
+  return resolveGitHubCopilotConfiguration({ settings: { host }, env });
+}
 
 test("Copilot validates once and reuses fresh account routing", async () => {
   resetGitHubCopilotSessionForTests();
@@ -140,4 +157,94 @@ test("Copilot request headers classify user, agent, and vision turns", () => {
   }, "TEST_COPILOT_TOKEN");
   assert.equal(agent["X-Initiator"], "agent");
   assert.equal(agent["Copilot-Vision-Request"], "true");
+});
+
+test("Copilot configuration binds account and inference overrides to the selected tenant", () => {
+  const selected = configuration("octocorp.ghe.com");
+  assert.equal(selected.userUrl, "https://api.octocorp.ghe.com/copilot_internal/user");
+  assert.equal(selected.dashboardUrl, "https://octocorp.ghe.com/settings/copilot");
+  assert.equal(Object.isFrozen(selected), true);
+  for (const userUrl of ["https://api.github.com/copilot_internal/user", "https://api.othercorp.ghe.com/copilot_internal/user", "http://api.octocorp.ghe.com/copilot_internal/user", "https://user@api.octocorp.ghe.com/copilot_internal/user", "https://api.octocorp.ghe.com:8443/copilot_internal/user", "https://api.octocorp.ghe.com/copilot_internal/user?x=1"]) {
+    assert.throws(() => configuration("octocorp.ghe.com", { GITHUB_COPILOT_USER_URL: userUrl }), /must match the selected/);
+  }
+  for (const baseUrl of ["https://api.individual.githubcopilot.com", "https://copilot-api.othercorp.ghe.com", "http://127.0.0.1:1234", "https://api.octocorp.ghe.com"]) {
+    assert.throws(() => configuration("octocorp.ghe.com", { GITHUB_COPILOT_BASE_URL: baseUrl }), /must use a Copilot endpoint/);
+  }
+  const overridden = configuration("octocorp.ghe.com", { GITHUB_COPILOT_BASE_URL: "https://copilot-api.octocorp.ghe.com/" });
+  assert.equal(overridden.baseUrlOverride, "https://copilot-api.octocorp.ghe.com");
+  assert.notEqual(overridden.identity, selected.identity);
+  const local = configuration("octocorp.ghe.com", {
+    GITHUB_COPILOT_USER_URL: "http://127.0.0.1:1234/user",
+    GITHUB_COPILOT_BASE_URL: "http://127.0.0.1:1234",
+  });
+  assert.equal(local.baseUrlOverride, "http://127.0.0.1:1234");
+  assert.notEqual(local.identity, selected.identity);
+  // The existing public foreground override remains supported.
+  assert.equal(configuration("github.com", { GITHUB_COPILOT_BASE_URL: "http://127.0.0.1:1234" }).baseUrlOverride, "http://127.0.0.1:1234");
+});
+
+test("Copilot enterprise inference requires a same-tenant API or proxy endpoint", () => {
+  const selected = configuration("octocorp.ghe.com");
+  for (const host of ["copilot-api.octocorp.ghe.com", "copilot-proxy.octocorp.ghe.com"]) {
+    assert.equal(copilotApiBaseUrl({ endpoints: { api: `https://${host}/` } }, undefined, selected), `https://${host}`);
+  }
+  assert.throws(() => copilotApiBaseUrl({ endpoints: {} }, undefined, selected), /no Copilot inference endpoint/);
+  for (const endpoint of ["https://api.individual.githubcopilot.com", "https://copilot-api.othercorp.ghe.com", "https://copilot-api.octocorp.ghe.com.example", "https://api.octocorp.ghe.com", "http://copilot-api.octocorp.ghe.com", "https://user@copilot-api.octocorp.ghe.com", "https://copilot-api.octocorp.ghe.com:8443", "https://copilot-api.octocorp.ghe.com/?x=1", "https://copilot-api.octocorp.ghe.com/#x"]) {
+    assert.throws(() => copilotApiBaseUrl({ endpoints: { api: endpoint } }, undefined, selected), /invalid Copilot inference endpoint/);
+  }
+});
+
+test("Copilot sessions and pending requests are isolated by host and force refresh keeps its snapshot", async () => {
+  resetGitHubCopilotSessionForTests();
+  const firstConfiguration = configuration("octocorp.ghe.com");
+  const otherConfiguration = configuration("othercorp.ghe.com");
+  const calls = [];
+  let releaseFirst;
+  const waitFirst = new Promise((resolve) => { releaseFirst = resolve; });
+  const fetchImpl = async (url, options) => {
+    calls.push(String(url));
+    assert.equal(options.redirect, "error");
+    const host = url.hostname.slice(4);
+    if (host === "octocorp.ghe.com" && calls.length === 1) await waitFirst;
+    return new Response(JSON.stringify({ endpoints: { api: `https://copilot-api.${host}` } }));
+  };
+  const token = "github_pat_TEST_SAME_TOKEN";
+  const first = ensureFreshGitHubCopilotSession(token, { configuration: firstConfiguration, fetchImpl, now: 1000 });
+  const other = await ensureFreshGitHubCopilotSession(token, { configuration: otherConfiguration, fetchImpl, now: 1000 });
+  assert.equal(other.baseUrl, "https://copilot-api.othercorp.ghe.com");
+  releaseFirst();
+  assert.equal((await first).baseUrl, "https://copilot-api.octocorp.ghe.com");
+  const refreshed = await ensureFreshGitHubCopilotSession(token, { configuration: otherConfiguration, fetchImpl, force: true, now: 2000 });
+  const cached = await ensureFreshGitHubCopilotSession(token, { configuration: otherConfiguration, fetchImpl, now: 2001 });
+  assert.equal(refreshed, cached);
+  assert.deepEqual(calls, [firstConfiguration.userUrl, otherConfiguration.userUrl, otherConfiguration.userUrl]);
+});
+
+test("Copilot invalid saved host settings stop account networking", async () => {
+  const file = path.join(stateRoot, "github-copilot-settings.json");
+  writeFileSync(file, "{");
+  let calls = 0;
+  try {
+    await assert.rejects(ensureFreshGitHubCopilotSession("github_pat_TEST_SOURCE", {
+      fetchImpl: async () => { calls += 1; throw new Error("must not fetch"); },
+    }), /settings are invalid or unreadable/);
+    assert.equal(calls, 0);
+  } finally {
+    rmSync(file);
+  }
+});
+
+test("Copilot settled session cache misses on a different host without forced refresh", async () => {
+  resetGitHubCopilotSessionForTests();
+  const calls = [];
+  const fetchImpl = async (url) => {
+    calls.push(String(url));
+    return new Response(JSON.stringify({ endpoints: { api: `https://copilot-api.${url.hostname.slice(4)}` } }));
+  };
+  const token = "github_pat_TEST_SAME_TOKEN";
+  const first = await ensureFreshGitHubCopilotSession(token, { configuration: configuration("octocorp.ghe.com"), fetchImpl, now: 1000 });
+  const other = await ensureFreshGitHubCopilotSession(token, { configuration: configuration("othercorp.ghe.com"), fetchImpl, now: 1001 });
+  assert.equal(first.baseUrl, "https://copilot-api.octocorp.ghe.com");
+  assert.equal(other.baseUrl, "https://copilot-api.othercorp.ghe.com");
+  assert.equal(calls.length, 2);
 });
