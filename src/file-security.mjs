@@ -101,6 +101,11 @@ function windowsPowerShellEnvironment(paths) {
       "ProgramFiles(x86)",
       "ProgramW6432",
       "USERPROFILE",
+      // Windows PowerShell caches module discovery below LOCALAPPDATA. Losing
+      // these public runtime paths redirects its cache into the working tree
+      // instead of the caller's real or isolated profile.
+      "APPDATA",
+      "LOCALAPPDATA",
     ]
       .map((name) => name.toLowerCase()),
   );

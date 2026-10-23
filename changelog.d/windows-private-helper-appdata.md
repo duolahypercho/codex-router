@@ -1,0 +1,1 @@
+- Preserve AppData runtime directories when launching Windows private-file helpers so PowerShell module caches stay in the selected profile. Provider credentials remain excluded, and synchronous and asynchronous writes retain owner-only ACL checks.
