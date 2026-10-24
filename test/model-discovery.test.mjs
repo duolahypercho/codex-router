@@ -9,15 +9,23 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 // Discovery compares fixtures with the checked-in registry. Keep a developer's
-// locally curated models out of both this process and the child processes below
-// before model-registry.mjs resolves the overlay path at import time.
+// locally curated models and compatibility-layer policy out of this process
+// and its children before model-registry.mjs resolves state at import time.
 const stateRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-model-discovery-test-"));
-const originalUserModels = process.env.MODEL_ROUTER_USER_MODELS;
-process.env.MODEL_ROUTER_USER_MODELS = path.join(stateRoot, "user-models.json");
+const fixtureEnvironment = {
+  MODEL_ROUTER_USER_MODELS: path.join(stateRoot, "user-models.json"),
+  MODEL_ROUTER_STATE_DIR: stateRoot,
+  CODEX_ROUTER_STATE_DIR: stateRoot,
+};
+const originalEnvironment = Object.fromEntries(Object.keys(fixtureEnvironment)
+  .map(name => [name, process.env[name]]));
+Object.assign(process.env, fixtureEnvironment);
 after(() => {
   rmSync(stateRoot, { recursive: true, force: true });
-  if (originalUserModels === undefined) delete process.env.MODEL_ROUTER_USER_MODELS;
-  else process.env.MODEL_ROUTER_USER_MODELS = originalUserModels;
+  for (const [name, value] of Object.entries(originalEnvironment)) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
 });
 
 const { MODELS, PROVIDERS } = await import("../src/model-registry.mjs");

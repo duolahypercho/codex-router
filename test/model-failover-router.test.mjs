@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -2225,11 +2225,33 @@ function compactSuccessJson() {
 }
 
 async function oversizedWindowsExcept(keepSlugs = []) {
-  const { LISTED_MODELS } = await import("../src/model-registry.mjs");
-  const keep = new Set(keepSlugs);
-  return LISTED_MODELS.filter(
-    (model) => !keep.has(model.slug) && Number(model.contextWindow) >= 434983,
-  ).map((model) => model.slug);
+  // Match the child's pristine registry, rather than the operator's possibly
+  // filtered registry (for example, with the compatibility layer disabled).
+  const directory = mkdtempSync(path.join(os.tmpdir(), "failover-catalog-"));
+  try {
+    const output = execFileSync(process.execPath, ["--input-type=module", "-e", `
+      import { LISTED_MODELS } from "./src/model-registry.mjs";
+      const keep = new Set(JSON.parse(process.argv[1]));
+      process.stdout.write(JSON.stringify(LISTED_MODELS.filter(model =>
+        !keep.has(model.slug) && Number(model.contextWindow) >= 434983,
+      ).map(model => model.slug)));
+    `, JSON.stringify(keepSlugs)], {
+      cwd: root,
+      env: {
+        ...process.env,
+        HOME: directory, USERPROFILE: directory,
+        APPDATA: path.join(directory, "appdata"), LOCALAPPDATA: path.join(directory, "localappdata"),
+        CODEX_HOME: path.join(directory, "codex"),
+        MODEL_ROUTER_STATE_DIR: directory, CODEX_ROUTER_STATE_DIR: directory,
+        MODEL_ROUTER_USER_MODELS: path.join(directory, "user-models.json"),
+        MODEL_ROUTER_GENERIC_PROVIDERS: path.join(directory, "generic-providers.json"),
+      },
+      encoding: "utf8", timeout: 30_000, windowsHide: true,
+    });
+    return JSON.parse(output);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 }
 
 test("compact overflow hops to a larger same-family window without cooldown", async () => {
