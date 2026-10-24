@@ -534,25 +534,38 @@ ChatGPT OAuth provider in the router.
 Responses API, streaming, and tool calls. The catalog is plan- and
 policy-specific, so this provider ships no hard-coded models: store a
 fine-grained GitHub PAT with the **Copilot Requests** permission, then curate
-from the live catalog. This initial integration targets GitHub.com; GitHub
-Enterprise Cloud data-residency hosts are not yet configured by the router.
+from the live catalog. The default account host is `github.com`. The router also
+supports GitHub Enterprise Cloud data-residency hosts with one valid tenant
+label, such as `octocorp.ghe.com`. Arbitrary GitHub Enterprise Server account
+hosts are not supported.
+
+For a data-residency tenant, select its host before you store the token:
 
 ```sh
+./bin/control github-copilot host set octocorp.ghe.com
 ./bin/model-router codex provider-key github-copilot set
 ./bin/curate-models github-copilot
 ```
 
+For GitHub.com, omit the host command. Use
+`./bin/control github-copilot host status` to read the stored selection. Use
+`./bin/control github-copilot host clear` to restore the GitHub.com default.
+One host applies to all credentials in the `github-copilot` provider. After a
+host change, curate the models again and reload the client. Start a new
+conversation so its requests use the selected tenant.
+
 The hidden prompt stores the GitHub token in protected router state. For a
 foreground process, `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, and `GITHUB_TOKEN` are
 checked in that order. Classic `ghp_` tokens are not supported by Copilot;
-create a fine-grained `github_pat_` token
-at [GitHub personal access tokens](https://github.com/settings/personal-access-tokens/new).
+create a fine-grained `github_pat_` token on the selected host. For GitHub.com,
+use [GitHub personal access tokens](https://github.com/settings/personal-access-tokens/new).
 The router deliberately does not read or copy the official Copilot CLI's
 credential store.
 
 At request time the GitHub credential is validated through the Copilot account
 endpoint, which also selects the account's inference host. That host is accepted
-only when it is GitHub-owned. The tray reads the account's AI-credit or legacy
+only when it is GitHub-owned and, for enterprise accounts, belongs to the
+selected tenant. The tray reads the account's AI-credit or legacy
 request quota when GitHub exposes a per-user meter; organization-managed plans
 that expose no per-seat quota fall back to router-observed traffic.
 

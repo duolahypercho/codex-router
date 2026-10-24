@@ -1,7 +1,19 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import test, { after } from "node:test";
 
-import {
+const stateRoot = mkdtempSync(path.join(os.tmpdir(), "copilot-account-usage-test-"));
+const savedState = process.env.MODEL_ROUTER_STATE_DIR;
+process.env.MODEL_ROUTER_STATE_DIR = stateRoot;
+after(() => {
+  rmSync(stateRoot, { recursive: true, force: true });
+  if (savedState === undefined) delete process.env.MODEL_ROUTER_STATE_DIR;
+  else process.env.MODEL_ROUTER_STATE_DIR = savedState;
+});
+
+const {
   chutesBalanceMetrics,
   chutesSubscriptionMetrics,
   commandCodeCreditsMetrics,
@@ -17,7 +29,8 @@ import {
   providerAccountUsageSnapshot,
   stepFunBalanceMetrics,
   veniceBalanceMetrics,
-} from "../src/provider-account-usage.mjs";
+} = await import("../src/provider-account-usage.mjs");
+const { setGitHubCopilotHost, clearGitHubCopilotHost } = await import("../src/github-copilot-state.mjs");
 
 test("Venice reports every pool that can fund a request", () => {
   assert.deepEqual(veniceBalanceMetrics({
@@ -234,6 +247,38 @@ test("GitHub Copilot usage reads the account quota without exposing the token", 
     assert.doesNotMatch(JSON.stringify(snapshot), /TEST_COPILOT_USAGE_TOKEN/);
   } finally {
     delete process.env.COPILOT_GITHUB_TOKEN;
+  }
+});
+
+test("GitHub Copilot enterprise usage stays on the selected account host", async () => {
+  const savedToken = process.env.COPILOT_GITHUB_TOKEN;
+  process.env.COPILOT_GITHUB_TOKEN = "github_pat_TEST_ENTERPRISE_USAGE_TOKEN";
+  setGitHubCopilotHost("octocorp.ghe.com");
+  try {
+    const snapshot = await providerAccountUsageSnapshot({
+      providerIds: ["github-copilot"],
+      fetchImpl: async (url, options) => {
+        assert.equal(url, "https://api.octocorp.ghe.com/copilot_internal/user");
+        assert.equal(options.redirect, "error");
+        assert.equal(options.headers.Authorization, "Bearer github_pat_TEST_ENTERPRISE_USAGE_TOKEN");
+        return new Response(JSON.stringify({ copilot_plan: "enterprise", quota_snapshots: {} }));
+      },
+    });
+    assert.equal(snapshot["github-copilot"].status, "local-only");
+    assert.equal(snapshot["github-copilot"].dashboardUrl, "https://octocorp.ghe.com/settings/copilot");
+    assert.doesNotMatch(JSON.stringify(snapshot), /TEST_ENTERPRISE_USAGE_TOKEN/);
+    writeFileSync(path.join(stateRoot, "github-copilot-settings.json"), "{");
+    let calls = 0;
+    const invalid = await providerAccountUsageSnapshot({
+      providerIds: ["github-copilot"],
+      fetchImpl: async () => { calls += 1; throw new Error("must not fetch"); },
+    });
+    assert.equal(invalid["github-copilot"].status, "unavailable");
+    assert.equal(calls, 0);
+  } finally {
+    clearGitHubCopilotHost();
+    if (savedToken === undefined) delete process.env.COPILOT_GITHUB_TOKEN;
+    else process.env.COPILOT_GITHUB_TOKEN = savedToken;
   }
 });
 

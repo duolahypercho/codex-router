@@ -468,6 +468,9 @@ test(
       );
       git(upstream, "config", "user.email", "test@example.invalid");
       git(upstream, "config", "user.name", "codex-router test");
+      // The immediate local clone must not race with a background repack.
+      git(upstream, "config", "gc.auto", "0");
+      git(upstream, "config", "maintenance.auto", "false");
       cpSync(path.join(root, "src"), path.join(upstream, "src"), { recursive: true });
       cpSync(path.join(root, "config"), path.join(upstream, "config"), { recursive: true });
       copyFileSync(path.join(root, "package.json"), path.join(upstream, "package.json"));
