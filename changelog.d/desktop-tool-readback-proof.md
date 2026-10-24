@@ -1,0 +1,1 @@
+- **Recognize archive readback proofs inside Desktop tool wrappers.** Decode bounded nested JSON envelopes while preserving signature, expiry and conversation/permission scope checks and full-text fallback.

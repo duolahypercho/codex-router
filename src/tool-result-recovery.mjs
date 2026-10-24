@@ -68,20 +68,40 @@ function readbackProof(key, scope, now) {
 // A shell declaration does not establish filesystem access: a Codex restricted
 // token may be unable to read owner-private files. Accept only a signed proof
 // returned by a successful reader call in this conversation/permission context.
+function* readbackTexts(value, depth = 0) {
+  if (depth > 8) return;
+  if (typeof value === "string") {
+    yield value;
+    // Desktop batched tools wrap exec output in JSON strings. Decode only
+    // bounded, complete JSON envelopes; signatures and scope are still
+    // checked below. Large/unknown formats simply keep the original text.
+    if (value.length <= 64 * 1024 && Buffer.byteLength(value, "utf8") <= 64 * 1024) {
+      try { yield* readbackTexts(JSON.parse(value), depth + 1); } catch { /* plain text */ }
+    }
+  } else if (Array.isArray(value)) {
+    for (const item of value.slice(0, 64)) yield* readbackTexts(item, depth + 1);
+  } else if (value && typeof value === "object") {
+    for (const key of ["text", "output", "content", "value"]) {
+      if (Object.hasOwn(value, key)) yield* readbackTexts(value[key], depth + 1);
+    }
+  }
+}
+
 export function hasVerifiedToolResultReadback(input, scope, { directory, now = Date.now() } = {}) {
   try {
     const key = readRegular(path.join(storeRoot(directory), ".retention-key"), 128).text;
-    for (const item of input) {
+    for (let index = input.length - 1; index >= 0; index -= 1) {
+      const item = input[index];
       if (!["function_call_output", "custom_tool_call_output"].includes(item?.type)) continue;
-      const text = typeof item.output === "string" ? item.output
-        : Array.isArray(item.output) ? item.output.map(part => part?.text || "").join("") : "";
-      for (const match of (text || "").matchAll(/"readbackProof"\s*:\s*"([A-Za-z0-9_-]{1,512})\.([A-Za-z0-9_-]{43})"/gu)) {
-        const expected = Buffer.from(signProof(key, match[1]));
-        const signature = Buffer.from(match[2]);
-        if (signature.length !== expected.length || !timingSafeEqual(signature, expected)) continue;
-        const proof = JSON.parse(Buffer.from(match[1], "base64url").toString("utf8"));
-        if (proof.scope === sha256(String(scope)) && Number.isSafeInteger(proof.expiresAt) &&
-            proof.expiresAt > now && proof.expiresAt <= now + PROOF_TTL_MS) return true;
+      for (const text of readbackTexts(item.output)) {
+        for (const match of text.matchAll(/"readbackProof"\s*:\s*"([A-Za-z0-9_-]{1,512})\.([A-Za-z0-9_-]{43})"/gu)) {
+          const expected = Buffer.from(signProof(key, match[1]));
+          const signature = Buffer.from(match[2]);
+          if (signature.length !== expected.length || !timingSafeEqual(signature, expected)) continue;
+          const proof = JSON.parse(Buffer.from(match[1], "base64url").toString("utf8"));
+          if (proof.scope === sha256(String(scope)) && Number.isSafeInteger(proof.expiresAt) &&
+              proof.expiresAt > now && proof.expiresAt <= now + PROOF_TTL_MS) return true;
+        }
       }
     }
   } catch { /* Missing/inaccessible proof is no permission to omit text. */ }

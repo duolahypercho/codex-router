@@ -28,6 +28,71 @@ async function fixture(t) {
   return { directory, scope: "thread-a", callId: "old", ttlMs: 10000 };
 }
 
+test("Desktop JSON wrappers preserve readback signature, expiry and scope checks", async t => {
+  const options = { ...await fixture(t), now: Date.now() };
+  const saved = await retainToolResult(full, options);
+  const proof = readRetainedToolResult(saved.handle, {...options,limit:1});
+  const wrap = text => JSON.stringify({chunk_id:"real-wrapper",exit_code:0,output:text});
+  const nested = [
+    {type:"input_text",text:"Script completed\nOutput:\n"},
+    {type:"input_text",text:wrap(JSON.stringify(proof))},
+  ];
+  const item = {type:"custom_tool_call_output",call_id:"readback",output:nested};
+  assert.equal(hasVerifiedToolResultReadback([item],options.scope,options),true);
+  const batch = {type:"custom_tool_call_output",call_id:"batch",output:[{type:"input_text",text:JSON.stringify({status:"fulfilled",value:JSON.parse(wrap(JSON.stringify(proof)))})}]};
+  assert.equal(hasVerifiedToolResultReadback([batch],options.scope,options),true);
+  assert.equal(hasVerifiedToolResultReadback([item],"different-context",options),false);
+  const forged = structuredClone(item);forged.output[1].text=forged.output[1].text.replace(proof.readbackProof,proof.readbackProof.slice(0,-1)+(proof.readbackProof.endsWith("A")?"B":"A"));
+  assert.equal(hasVerifiedToolResultReadback([forged],options.scope,options),false);
+  assert.equal(hasVerifiedToolResultReadback([item],options.scope,{...options,now:Date.now()+31*60_000}),false);
+});
+
+test("Desktop readback decoding bounds JSON bytes, depth and container fields", async t => {
+  const options = { ...await fixture(t), now: Date.now() };
+  const saved = await retainToolResult(full, options);
+  const proof = JSON.stringify(readRetainedToolResult(saved.handle, { ...options, limit: 1 }));
+  const verified = output => hasVerifiedToolResultReadback([
+    { type: "custom_tool_call_output", call_id: "reader", output },
+  ], options.scope, options);
+  const nested = depth => {
+    let output = proof;
+    for (let index = 0; index < depth; index += 1) output = { output };
+    return output;
+  };
+  assert.equal(verified(nested(8)), true);
+  assert.equal(verified(nested(9)), false);
+  assert.equal(verified([...Array(63).fill("no proof"), proof]), true);
+  assert.equal(verified([...Array(64).fill("no proof"), proof]), false);
+  assert.equal(verified(JSON.stringify({ unrelated: proof })), false);
+  assert.equal(verified(JSON.stringify({ output: proof }).slice(0, -1)), false);
+  assert.equal(verified(JSON.stringify({ output: proof, padding: "x".repeat(64 * 1024) })), false);
+  const unicodeEnvelope = JSON.stringify({ output: proof, padding: "界".repeat(24_000) });
+  assert.ok(unicodeEnvelope.length < 64 * 1024);
+  assert.ok(Buffer.byteLength(unicodeEnvelope, "utf8") > 64 * 1024);
+  assert.equal(verified(unicodeEnvelope), false, "the documented limit is UTF-8 bytes");
+});
+
+test("aging accepts a Desktop-wrapped receipt only after verified local readback", async t => {
+  const options = { ...await fixture(t), now: Date.now() };
+  const input = history();
+  const retain = (text, info) => retainToolResult(text, { ...options, ...info });
+  const pending = await ageToolResultsWithRecovery(input, { tools, frontier: 0, retain });
+  assert.equal(pending.stats.toolResultsAged, 0);
+  assert.ok(pending.input[1].output.startsWith(full));
+  const savedFile = readdirSync(options.directory).find(name => name.endsWith(".result"));
+  const proof = readRetainedToolResult(savedFile.slice(0, -7), { ...options, limit: 1 });
+  input.push({ type: "custom_tool_call_output", call_id: "reader", output: [
+    { type: "input_text", text: JSON.stringify({ exit_code: 0, output: JSON.stringify(proof) }) },
+  ] });
+  const result = await ageToolResultsWithRecovery(input, { tools, frontier: 0, retain });
+  assert.equal(result.stats.toolResultsAged, 1);
+  assert.equal(input[1].output, full, "the original history remains intact");
+  assert.equal(result.input[0], input[0], "call arguments are unchanged");
+  assert.match(result.input[1].output, /tool-result-read.mjs/u);
+  assert.ok(result.input[1].output.length < full.length, "the middle is omitted after proof verification");
+  assert.match(result.input[1].output, /hidden-evidence-2937/u, "the end excerpt is retained");
+});
+
 test("a real committed snapshot survives restart and reads exact Unicode/CRLF bytes in pages", async t => {
   const options = await fixture(t);
   const saved = await retainToolResult(full, options);
