@@ -249,6 +249,7 @@ async function refreshNativeAccountCatalogUnlocked({
     const responseEtag = safeEtag(response.headers.get("etag"));
     if (
       safeCurrent
+      && current.catalog.client_version === clientVersion
       && fingerprint === current.fingerprint
       && (!responseEtag || responseEtag === etag)
     ) {

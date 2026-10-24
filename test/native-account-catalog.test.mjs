@@ -16,6 +16,24 @@ const headersProvider = async () => ({
 });
 const noLock = (operation) => operation();
 
+test("an installed-client version change persists its metadata even when models are identical", () =>
+  withCache(async (cachePath) => {
+    const models = [{ slug: "gpt-stable" }];
+    const now = Date.parse("2026-09-06T00:00:00.000Z");
+    writeFileSync(cachePath, JSON.stringify(fixtureCache(models, { client_version: "0.152.0" })));
+    const result = await refreshNativeAccountCatalog({
+      cachePath, version: "0.153.2", now, headersProvider, discoveryOff: () => false, lock: noLock,
+      fetchImpl: async () => new Response(JSON.stringify({ models }), { status: 200 }),
+    });
+    assert.equal(result.status, "revalidated");
+    assert.equal(JSON.parse(readFileSync(cachePath, "utf8")).client_version, "0.153.2");
+    const next = await refreshNativeAccountCatalog({
+      cachePath, version: "0.153.2", now: now + 1, discoveryOff: () => false, lock: noLock,
+      fetchImpl() { assert.fail("the refreshed same-client cache must not fetch again"); },
+    });
+    assert.equal(next.status, "fresh");
+  }));
+
 function fixtureCache(models, overrides = {}) {
   return {
     fetched_at: "2026-08-01T00:00:00.000Z",

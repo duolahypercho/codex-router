@@ -1,0 +1,1 @@
+- Persist the current Codex client version after a successful native model-catalog refresh even when the model list is unchanged, so later checks can reuse the refreshed cache instead of repeatedly treating it as stale.
