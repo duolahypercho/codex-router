@@ -231,3 +231,69 @@ test("the foreground supervisor boots past the Windows service-process record", 
     rmSync(rootDir, { recursive: true, force: true });
   }
 });
+
+test("a gateway spawn error cleans up forwarders that are already listening", { timeout: 120_000 }, async () => {
+  const [routerPort, gatewayPort, oauthPort, apiPort, grokOauthPort] =
+    await Promise.all(Array.from({ length: 5 }, () => freePort()));
+  const rootDir = mkdtempSync(path.join(os.tmpdir(), "model-router-spawn-cleanup-"));
+  const stateDir = path.join(rootDir, "state");
+  const codexHome = path.join(rootDir, "codex-home");
+  const pidFile = path.join(rootDir, "children.txt");
+  mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  mkdirSync(codexHome, { recursive: true, mode: 0o700 });
+  writeFileSync(pidFile, "");
+  writeFileSync(path.join(stateDir, "internal-secret"), "spawn-internal-key-with-sufficient-length\n", { mode: 0o600 });
+  writeFileSync(path.join(stateDir, "caller-secret"), "spawn-caller-key-with-sufficient-length\n", { mode: 0o600 });
+
+  const child = spawn(process.execPath, [
+    "--import", new URL("./fixtures/startup-spawn-error.mjs", import.meta.url).href,
+    path.join(root, "src", "foreground-start.mjs"),
+  ], {
+    cwd: root,
+    env: {
+      ...process.env,
+      CODEX_HOME: codexHome,
+      CODEX_ROUTER_TEST_CHILD_PIDS: pidFile,
+      MODEL_ROUTER_TARGET: "codex",
+      MODEL_ROUTER_STATE_DIR: stateDir,
+      MODEL_ROUTER_PORT: String(routerPort),
+      MODEL_ROUTER_GATEWAY_PORT: String(gatewayPort),
+      MODEL_ROUTER_OAUTH_PORT: String(oauthPort),
+      MODEL_ROUTER_API_PORT: String(apiPort),
+      MODEL_ROUTER_GROK_OAUTH_PORT: String(grokOauthPort),
+      MODEL_ROUTER_LITELLM_BIN: process.execPath,
+    },
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  let errors = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk) => { errors += chunk; });
+  const closed = new Promise((resolve) => child.once("close", resolve));
+  let forwardersStopped = false;
+  try {
+    const exit = await waitForStartupExit(child, () => errors);
+    assert.equal(exit.signal, null);
+    assert.equal(exit.code, 1, errors);
+    assert.match(errors, /ENOENT/);
+    assert.match(errors, /startup failed: LiteLLM gateway exited before becoming healthy/);
+    assert.doesNotMatch(errors, /Unhandled 'error' event/);
+    assert.match(errors, /\[api-forwarder\] listening/);
+    for (const port of [oauthPort, apiPort, grokOauthPort]) {
+      assert.equal(await portIsClosed(port), true, `orphaned forwarder still owns port ${port}`);
+    }
+    forwardersStopped = true;
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    // The unfixed supervisor leaves these children behind. Retire only the
+    // exact PIDs recorded by this test's spawn fixture, even on assertion failure.
+    for (const text of forwardersStopped ? [] : readFileSync(pidFile, "utf8").trim().split("\n")) {
+      const pid = Number(text);
+      if (!Number.isSafeInteger(pid) || pid <= 0) continue;
+      try { process.kill(pid, "SIGKILL"); } catch (error) {
+        if (error.code !== "ESRCH") throw error;
+      }
+    }
+    await closed;
+    rmSync(rootDir, { recursive: true, force: true });
+  }
+});

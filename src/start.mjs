@@ -266,6 +266,7 @@ const commonEnv = {
 };
 
 const children = [];
+const childExits = new WeakMap();
 let shuttingDown = false;
 let stopNativeCatalogWatch = () => {};
 
@@ -288,17 +289,24 @@ function run(command, args, extraEnv = {}) {
     stdio: "inherit",
     ...spawnable.options,
   });
+  // Observe from spawn time, before health checks or later teardown await the
+  // child. A failed spawn emits error without exit; leaving it unhandled skips
+  // the finally block and strands forwarders that have already started.
+  childExits.set(child, new Promise((resolve) => {
+    child.once("exit", (code, signal) => resolve({ code, signal }));
+    child.on("error", (error) => {
+      console.error(`[model-router] child process error: ${error.message}`);
+      // Errors after a successful spawn (for example a failed kill) do not
+      // prove termination. Keep waiting for that child's actual exit.
+      if (child.pid === undefined) resolve({ code: 1, signal: null });
+    });
+  }));
   children.push(child);
   return child;
 }
 
 function waitForExit(child, label) {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return Promise.resolve({ label, code: child.exitCode, signal: child.signalCode });
-  }
-  return new Promise((resolve) => {
-    child.once("exit", (code, signal) => resolve({ label, code, signal }));
-  });
+  return childExits.get(child).then((result) => ({ label, ...result }));
 }
 
 // The probe loop lives in src/health-probe.mjs so it can be tested directly;
