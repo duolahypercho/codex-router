@@ -16,6 +16,7 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 
 const DEFAULT_KILL_GRACE_MS = 250;
@@ -797,6 +798,11 @@ export function runProcessTree(
     throw ownerSignalError(ownerSignalInProgress);
   }
   const remaining = remainingOperationMs(deadline, signal);
+  // Pipe chunks are byte boundaries, not character boundaries. Keep a decoder
+  // per captured stream; inherited/relayed stdio continues to forward raw bytes.
+  // Validate the encoding before acquiring coordinator resources or spawning.
+  const stdoutDecoder = stdio === "inherit" ? undefined : new StringDecoder(encoding);
+  const stderrDecoder = stdio === "inherit" ? undefined : new StringDecoder(encoding);
   const childSignalBudget = contractedOwnerSignalBudget(env, { childMayOwnProcessTrees });
   const coordinator = prepareOwnerSignalCoordinator(env, { create: childMayOwnProcessTrees });
   const childEnvironment = childSignalBudget === undefined
@@ -960,8 +966,8 @@ export function runProcessTree(
         }
         return;
       }
-      if (name === "stdout") stdout += chunk.toString(encoding);
-      else stderr += chunk.toString(encoding);
+      if (name === "stdout") stdout += stdoutDecoder.write(chunk);
+      else stderr += stderrDecoder.write(chunk);
     };
     if (relayInherited && !discardOutput) {
       const input = process.stdin;
@@ -1024,8 +1030,8 @@ export function runProcessTree(
           finish(resolve, {
             status,
             signal: childSignal,
-            stdout,
-            stderr,
+            stdout: stdout + (stdoutDecoder?.end() ?? ""),
+            stderr: stderr + (stderrDecoder?.end() ?? ""),
           });
         } catch (error) {
           finish(reject, error);
