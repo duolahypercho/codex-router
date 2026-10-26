@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "providers": [
+    {
+      "id": "cheaperinference",
+      "displayName": "Cheaper Inference",
+      "kind": "openai-compatible",
+      "ownedBy": "cheaperinference",
+      "baseUrl": "https://api.cheaperinference.com/v1",
+      "baseUrlEnv": "CHEAPERINFERENCE_API_BASE_URL",
+      "credential": {
+        "environment": [
+          "CHEAPERINFERENCE_API_KEY"
+        ],
+        "file": "cheaperinference-api-key.secret",
+        "legacyFiles": [],
+        "keychainServices": [
+          "codex-router-cheaperinference"
+        ],
+        "prompt": "Cheaper Inference API key"
+      }
+    }
+  ]
+}
