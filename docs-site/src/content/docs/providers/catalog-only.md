@@ -11,6 +11,7 @@ often for the repository to pin and live-verify individual entries:
 | Provider | Provider ID | Base URL |
 | --- | --- | --- |
 | Atlas Cloud | `atlascloud` | `https://api.atlascloud.ai/v1` |
+| Cheaper Inference | `cheaperinference` | `https://api.cheaperinference.com/v1` |
 | Groq | `groq` | `https://api.groq.com/openai/v1` |
 | Together AI | `together` | `https://api.together.xyz/v1` |
 | Fireworks AI | `fireworks` | `https://api.fireworks.ai/inference/v1` |
