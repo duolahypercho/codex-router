@@ -1,0 +1,1 @@
+- **Keyless OpenAI-compatible endpoints now retain the selected reasoning effort.** The Ollama compatibility workaround still removes unsupported reasoning controls only for the actual keyless Ollama transport, and Responses reasoning objects preserve the selected GLM effort through LiteLLM's Chat bridge.
