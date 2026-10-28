@@ -12,6 +12,7 @@ often for the repository to pin and live-verify individual entries:
 | --- | --- | --- |
 | AbliteratedLLM | `abliteratedllm` | `https://api.abliteratedllm.dev/v1` |
 | Atlas Cloud | `atlascloud` | `https://api.atlascloud.ai/v1` |
+| Runcrate | `runcrate` | `https://api.runcrate.ai/v1` |
 | Groq | `groq` | `https://api.groq.com/openai/v1` |
 | Together AI | `together` | `https://api.together.xyz/v1` |
 | Fireworks AI | `fireworks` | `https://api.fireworks.ai/inference/v1` |
