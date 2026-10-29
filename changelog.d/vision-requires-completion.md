@@ -1,1 +1,1 @@
-- Reject image-reading streams that end without a successful response terminal, keeping partial readings out of complete evidence and its cache while preserving per-image failure handling.
+- Require successful completion before accepting an image reading, keeping partial streams and explicitly incomplete JSON out of evidence and its cache without automatically buying another generation from a fallback engine.

@@ -214,9 +214,7 @@ async function stopChild(child) {
 }
 
 // The bridge pinned to a local engine: no credential, no registry entry, no
-// network. That is the one engine kind a test can stand up honestly, and it
-// exercises the identical request path a hosted engine takes right up to the
-// call itself.
+// network. Native-engine cases below use separate loopback mocks as well.
 async function startBridgedRouter(upstreams, { enabled = true, engine = "local" } = {}) {
   const stateDir = stateDirectory({
     version: 1,
@@ -792,5 +790,132 @@ test("with the bridge off an attached image is replaced by a stated failure", as
   } finally {
     await router.stop();
     await closeServer(upstreams.server);
+  }
+});
+
+
+test("native image streams without completion never switch engines or enter the evidence cache", async () => {
+  const nativeCalls = [];
+  const jsonVisionCalls = [];
+  const routedInputs = [];
+  let mode = "truncated";
+  let jsonStatus;
+  const complete = (text) => ({
+    id: "resp-native-vision",
+    object: "response",
+    status: "completed",
+    output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text }] }],
+  });
+  const sse = (type, value) => `event: ${type}\ndata: ${JSON.stringify({ type, ...value })}\n\n`;
+  const upstream = await mockServer(async (request, response) => {
+    if (request.url === "/health") return json(response, 200, { ok: true, credential_present: true });
+    const body = await bodyJson(request);
+    if (request.url === "/native/responses") {
+      nativeCalls.push(body.model);
+      if (mode === "refused" && body.model === "native-a") {
+        return json(response, 401, { error: { message: "session refused" } });
+      }
+      response.writeHead(200, { "Content-Type": "text/event-stream" });
+      if (body.model === "native-b" || mode === "valid" || mode === "json") {
+        response.end(sse("response.completed", { response: complete(TRANSCRIPT) }));
+      } else {
+        let stream = sse("response.output_text.delta", { delta: "PARTIAL_IMAGE_CONTENT" });
+        if (mode === "failed") stream += sse("response.failed", { response: { status: "failed" } });
+        if (mode === "bad-terminal") {
+          stream += sse("response.completed", { response: { ...complete(TRANSCRIPT), status: "in_progress" } });
+        }
+        response.end(stream);
+      }
+      return;
+    }
+    if (request.url === "/v1/responses") {
+      if (body.model === "grok-api-grok-4-5") {
+        jsonVisionCalls.push(body.model);
+        return json(response, 200, {
+          output_text: "PARTIAL_JSON_IMAGE_CONTENT",
+          ...(jsonStatus === undefined ? {} : { status: jsonStatus }),
+        });
+      }
+      routedInputs.push(body.input);
+      return json(response, 200, complete("ok"));
+    }
+    json(response, 404, { error: { message: `unexpected ${request.url}` } });
+  });
+  const stateDir = stateDirectory({ version: 1, enabled: true, engine: "native-a", effort: null });
+  writeFileSync(path.join(stateDir, "xai-api-key.secret"), "TEST_XAI_KEY\n", { mode: 0o600 });
+  const models = ["native-a", "native-b"].map((slug, priority) => ({
+    slug, visibility: "list", input_modalities: ["text", "image"], priority,
+  }));
+  for (const file of ["native-models.json", "merged-models.json"]) {
+    writeFileSync(path.join(stateDir, file), JSON.stringify({ models }), { mode: 0o600 });
+  }
+  const port = await openPort();
+  const child = run({
+    CODEX_ROUTER_PORT: String(port),
+    MODEL_ROUTER_STATE_DIR: stateDir,
+    CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${upstream.port}/native`,
+    CODEX_ROUTER_NO_DISCOVERY: "0",
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${upstream.port}/v1`,
+    CODEX_ROUTER_OAUTH_HEALTH_URL: `http://127.0.0.1:${upstream.port}/health`,
+    CODEX_ROUTER_API_HEALTH_URL: `http://127.0.0.1:${upstream.port}/health`,
+    CODEX_ROUTER_GROK_OAUTH_HEALTH_URL: `http://127.0.0.1:${upstream.port}/health`,
+    CODEX_ROUTER_GATEWAY_HEALTH_URL: `http://127.0.0.1:${upstream.port}/health`,
+  });
+  try {
+    await waitFor(`${routerBase(port)}/models`, child);
+    for (const broken of ["truncated", "failed", "bad-terminal"]) {
+      mode = broken;
+      const question = `read image: ${broken}`;
+      for (let resend = 0; resend < 2; resend += 1) {
+        const before = nativeCalls.length;
+        const result = await turn(port, imageTurn({ question }));
+        assert.equal(result.status, 200);
+        assert.deepEqual(nativeCalls.slice(before), ["native-a"], `${broken}, resend ${resend}`);
+        const text = textParts(routedInputs.at(-1)).join("\n");
+        assert.match(text, /stopped partway through reading it/);
+        assert.doesNotMatch(text, /PARTIAL_IMAGE_CONTENT|A terminal window showing/);
+      }
+    }
+    // A genuine HTTP refusal still tries the alternate; a successful read is
+    // cached on that engine and never confused with the rejected partial read.
+    mode = "refused";
+    let before = nativeCalls.length;
+    assert.equal((await turn(port, imageTurn({ question: "refusal control" }))).status, 200);
+    assert.deepEqual(nativeCalls.slice(before), ["native-a", "native-b"]);
+    assert.match(textParts(routedInputs.at(-1)).join("\n"), /A terminal window showing/);
+    mode = "valid";
+    before = nativeCalls.length;
+    assert.equal((await turn(port, imageTurn({ question: "valid control" }))).status, 200);
+    assert.deepEqual(nativeCalls.slice(before), ["native-a"]);
+    before = nativeCalls.length;
+    assert.equal((await turn(port, imageTurn({ question: "valid control" }))).status, 200);
+    assert.equal(nativeCalls.length, before, "completed evidence is reused");
+    // The gateway's whole JSON response has the same explicit status contract.
+    // Keep both real alternates available while proving it cannot buy a retry.
+    writeFileSync(path.join(stateDir, "vision-bridge.json"), JSON.stringify({
+      version: 1, enabled: true, engine: "grok-api/grok-4.5", effort: null,
+    }), { mode: 0o600 });
+    mode = "json";
+    for (jsonStatus of ["incomplete", "failed", "in_progress", "cancelled", "unknown", "completed", undefined]) {
+      const valid = jsonStatus === "completed" || jsonStatus === undefined;
+      for (let resend = 0; resend < 2; resend += 1) {
+        const visionBefore = jsonVisionCalls.length;
+        const nativeBefore = nativeCalls.length;
+        const question = `JSON image ${jsonStatus}`;
+        assert.equal((await turn(port, imageTurn({ question }))).status, 200);
+        assert.equal(jsonVisionCalls.length - visionBefore, valid && resend ? 0 : 1);
+        assert.equal(nativeCalls.length, nativeBefore, "JSON status cannot authorize switching engine");
+        const text = textParts(routedInputs.at(-1)).join("\n");
+        if (valid) assert.match(text, /PARTIAL_JSON_IMAGE_CONTENT/);
+        else {
+          assert.match(text, /stopped partway through reading it/);
+          assert.doesNotMatch(text, /PARTIAL_JSON_IMAGE_CONTENT|A terminal window showing/);
+        }
+      }
+    }
+  } finally {
+    await stopChild(child);
+    await closeServer(upstream.server);
+    rmSync(stateDir, { recursive: true, force: true });
   }
 });

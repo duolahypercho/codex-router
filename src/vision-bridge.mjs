@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { parseSseBlockEvent } from "./grok-oauth-turn.mjs";
-import { ResponseOutcomeObserver } from "./response-outcome.mjs";
+import { ResponseOutcomeObserver, responseOutcomeFromPayload } from "./response-outcome.mjs";
 import { generationRedirectRefusal, rejectGenerationRedirect } from "./generation-redirect.mjs";
 
 import { upstreamFailureKind } from "./error-translation.mjs";
@@ -785,10 +785,9 @@ export function responseText(payload) {
   return text.join("\n").trim();
 }
 
-// A stream that died partway through, as opposed to a stream that was merely
-// hard to parse. The distinction matters at exactly one place -- the caller
-// turns this into a stated per-image failure -- so it carries no upstream text
-// with it. Error bodies from the backend never reach a prompt or a log.
+// An image generation without successful completion is a per-image failure,
+// not permission to spend another engine. Keep that category through the
+// caller's safe message wrapper; it carries no upstream response text.
 export class VisionStreamError extends Error {
   constructor(message) {
     super(message);
@@ -1090,17 +1089,22 @@ async function attemptDescribe({
   }
   let text;
   try {
-    text = request.stream
-      ? streamedResponseText(bytes.toString("utf8"))
-      : responseText(JSON.parse(bytes.toString("utf8")));
+    if (request.stream) {
+      text = streamedResponseText(bytes.toString("utf8"));
+    } else {
+      const parsed = JSON.parse(bytes.toString("utf8"));
+      if (parsed?.status !== undefined && responseOutcomeFromPayload({
+        type: "response.completed", response: parsed,
+      }) !== "completed") throw new VisionStreamError("the reader did not complete its response");
+      text = responseText(parsed);
+    }
   } catch (error) {
     // A stream that failed mid-flight says so. Anything else is a shape this
     // parser could not read at all. Neither message carries upstream text.
-    throw new Error(
-      error instanceof VisionStreamError
-        ? `${engine.displayName || engine.slug} stopped partway through reading it`
-        : `${engine.displayName || engine.slug} returned an unreadable response`,
-    );
+    if (error instanceof VisionStreamError) {
+      throw new VisionStreamError(`${engine.displayName || engine.slug} stopped partway through reading it`);
+    }
+    throw new Error(`${engine.displayName || engine.slug} returned an unreadable response`);
   }
   // An empty reply is an engine that hiccupped, not one that refuses: worth
   // one more ask before the image is written off.

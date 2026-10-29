@@ -288,6 +288,7 @@ import {
   stripImages,
   substituteImages,
   supportsImageInput,
+  VisionStreamError,
 } from "./vision-bridge.mjs";
 import { readHiddenModels } from "./model-picker-state.mjs";
 import { readVisionBridgeSettings } from "./vision-bridge-state.mjs";
@@ -2555,7 +2556,9 @@ async function bridgeVisionInput(input, route, request) {
         return { text, engineName: engine.displayName || engine.slug };
       } catch (error) {
         lastError = error;
-        if (error?.code === "upstream_redirect_refused") throw error;
+        // A generation already started; an unreadable terminal result must not
+        // buy the image again from another engine.
+        if (error instanceof VisionStreamError || error?.code === "upstream_redirect_refused") throw error;
         if (error?.failureKind === "out_of_usage") exhaustedProviders.add(provider);
       }
     }
