@@ -173,7 +173,10 @@ export function readProviderSelectionDetail() {
       }`,
     };
   }
-  if (parsed?.version !== 1 || !Array.isArray(parsed.providers)) {
+  if (
+    parsed?.version !== 1 || !Array.isArray(parsed.providers)
+    || parsed.providers.some((id) => typeof id !== "string")
+  ) {
     return {
       providers: [],
       ignored: [],
@@ -259,7 +262,10 @@ export function pruneUnconfiguredProviders() {
   } catch {
     return [];
   }
-  if (parsed?.version !== 1 || !Array.isArray(parsed.providers)) return [];
+  if (
+    parsed?.version !== 1 || !Array.isArray(parsed.providers)
+    || parsed.providers.some((id) => typeof id !== "string")
+  ) return [];
 
   const { known, unknown } = filterKnownProviderIds(parsed.providers);
   const configured = new Set(configuredProviderIds());

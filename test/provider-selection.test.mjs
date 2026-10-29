@@ -365,6 +365,22 @@ test("an unreadable or wrong-version selection file degrades instead of throwing
   }
 });
 
+test("non-string policy entries neither throw nor authorize coerced provider ids", () => {
+  try {
+    for (const value of [{ toString: null }, ["custom"], {}, null, 1]) {
+      const contents = JSON.stringify({ version: 1, providers: ["deepseek", value] });
+      stageSelectionFile(contents);
+      assert.doesNotThrow(() => readProviderSelectionDetail());
+      assert.deepEqual(readProviderSelection(), []);
+      assert.match(readProviderSelectionDetail().degraded, /version\/providers are invalid/);
+      assert.deepEqual(pruneUnconfiguredProviders(), []);
+      assert.equal(readFileSync(PROVIDER_SELECTION_PATH, "utf8"), contents);
+    }
+  } finally {
+    rmSync(testRoot, { recursive: true, force: true });
+  }
+});
+
 // The read path degrading must not soften the write path: a person naming a
 // provider on the CLI, in `install --providers`, or through the tray still gets
 // a hard error for a typo rather than a silently narrower selection.
