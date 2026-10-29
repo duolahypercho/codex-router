@@ -1,0 +1,1 @@
+- Stop requalifying Vertex discoveries from ID-only cached answers. Explicit discovery now classifies current Model Garden resources with publisher provenance; static support-catalog inspection and inference are unchanged.

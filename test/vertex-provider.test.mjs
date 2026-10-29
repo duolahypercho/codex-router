@@ -237,7 +237,7 @@ test("Vertex endpoint base selects the hostname for the configured location", ()
   );
 });
 
-test("Vertex catalog cache identity includes the configured publisher set", () => {
+test("Vertex discovery uses the current configured publisher set", () => {
   const state = mkdtempSync(path.join(os.tmpdir(), "vertex-catalog-cache-test-"));
   const discoveryUrl = new URL("../src/vertex-model-discovery.mjs", import.meta.url).href;
   const script = `
@@ -707,4 +707,24 @@ test("Vertex forwarder selects protocol adapters, bearer auth, and streaming pat
     await new Promise((resolve) => upstream.close(resolve));
     rmSync(state, { recursive: true, force: true });
   }
+});
+
+test("repeated Vertex discovery never promotes a publisher-mismatched resource", async () => {
+  const { discoverVertexProviderModels } = await import("../src/vertex-model-discovery.mjs");
+  const provider = { id: "vertex", displayName: "Vertex fixture", baseUrl: "https://aiplatform.googleapis.com",
+    modelGarden: { apiVersion: "v1beta1", baseUrl: "https://aiplatform.googleapis.com", publishers: ["anthropic"], listAllVersions: true } };
+  let calls = 0;
+  const options = { credential: { value: "SYNTHETIC_ADC", projectId: "test-project", location: "us-central1" },
+    resolveHost: async () => ["8.8.8.8"],
+    fetchImpl: async () => { calls += 1; return new Response(JSON.stringify({ publisherModels: [{ name: "publishers/anthropic/models/gemini-2.5-pro" }] }), { headers: { "content-type": "application/json" } }); } };
+  const first = await discoverVertexProviderModels(provider, options);
+  const second = await discoverVertexProviderModels(provider, options);
+  assert.deepEqual(first.addable, []);
+  assert.deepEqual(second.addable, []);
+  assert.match(second.blocked["gemini-2.5-pro"], /publisher google, not anthropic/);
+  assert.equal(second.cached, false);
+  assert.equal(calls, 2, "explicit discovery always retains resource provenance");
+  const staticView = await discoverVertexProviderModels(provider, { staticCatalog: true });
+  assert.ok(staticView.supported.includes("gemini-2.5-pro"), "the authoritative static support catalog remains inspectable");
+  assert.equal(calls, 2);
 });

@@ -19,6 +19,7 @@ const {
   fitAdvisory,
   isLocalModelEnabled,
   localModelInventory,
+  localModelCapabilities,
   localModelStatusInputs,
   localModelsSnapshot,
   machineCapacity,
@@ -713,4 +714,21 @@ test("16-bit GGUF values preserve the following context metadata", () => {
     assert.equal(parseGgufContextLength(ggufHeader([["llama.context_length", type, 16384]])), 16384);
     assert.equal(parseGgufContextLength(buffer.subarray(0, 30)), undefined);
   }
+});
+
+test("capabilities without a content ID ignore old tag cache entries", () => {
+  const cache = { "retagged:latest": ["completion", "tools", "vision"] };
+  let shows = 0;
+  const spawn = (_command, args) => {
+    if (args[0] !== "show") return { status: 0, stdout: "ollama version 1" };
+    shows += 1;
+    return { status: 0, stdout: "Capabilities\n    completion\n" };
+  };
+  assert.deepEqual(localModelCapabilities("retagged:latest", undefined, { spawn, cache }), ["completion"]);
+  assert.deepEqual(localModelCapabilities("retagged:latest", undefined, { spawn, cache }), ["completion"]);
+  assert.equal(shows, 2, "a mutable tag must be inspected on each publication");
+  assert.deepEqual(cache["retagged:latest"], ["completion", "tools", "vision"]);
+  assert.deepEqual(localModelCapabilities("retagged:latest", "new-content-id", { spawn, cache }), ["completion"]);
+  assert.deepEqual(localModelCapabilities("retagged:latest", "new-content-id", { spawn, cache }), ["completion"]);
+  assert.equal(shows, 3, "unchanged content retains the polling cache");
 });

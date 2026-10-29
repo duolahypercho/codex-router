@@ -355,15 +355,17 @@ function writeCapabilityCache(models) {
 // Keyed by the model's content id, so a retagged or rebuilt model is re-read
 // while an unchanged one costs no subprocess at all -- the tray polls this.
 export function localModelCapabilities(tag, id, { spawn = spawnSync, cache } = {}) {
-  const store = cache || readCapabilityCache();
-  const key = id || tag;
-  if (store[key]) return store[key];
+  // A tag can be replaced without changing its name. Only content IDs are cache keys.
+  const store = id ? cache || readCapabilityCache() : undefined;
+  if (store?.[id]) return store[id];
   try {
     const result = spawn(localOllamaBinary(spawn), ["show", tag], { encoding: "utf8" });
     if (result.status !== 0 || typeof result.stdout !== "string") return [];
     const capabilities = parseOllamaCapabilities(result.stdout);
-    store[key] = capabilities;
-    if (!cache) writeCapabilityCache(store);
+    if (store) {
+      store[id] = capabilities;
+      if (!cache) writeCapabilityCache(store);
+    }
     return capabilities;
   } catch {
     return [];
