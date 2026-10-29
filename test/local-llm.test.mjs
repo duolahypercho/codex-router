@@ -811,3 +811,21 @@ test("a crashed local controller releases its kernel gate without stale-file rec
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
   }
 });
+
+test("an unadopted Ollama start cleans up its own child on every failure", async () => {
+  for (const phase of ["readiness", "identity"]) {
+    const signals = [];
+    let probes = 0;
+    await assert.rejects(ensureOllamaHeadless({
+      timeoutMs: phase === "readiness" ? 0 : 100,
+      fetchImpl: async () => {
+        if (++probes === 1) throw new Error("offline");
+        return new Response(JSON.stringify({ models: [] }));
+      },
+      spawnSyncImpl: () => ({ status: 0, stdout: "ollama version 1" }),
+      spawn: () => ({ pid: 12345, unref() {}, kill: (signal) => signals.push(signal) }),
+      processIdentity: () => { throw new Error("synthetic identity failure"); },
+    }), phase === "readiness" ? /did not become ready/ : /synthetic identity failure/);
+    assert.deepEqual(signals, ["SIGTERM"]);
+  }
+});
