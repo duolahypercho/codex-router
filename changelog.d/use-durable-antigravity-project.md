@@ -1,0 +1,1 @@
+- **Use the durable Antigravity project as the single resolved-project authority.** Remove the redundant success cache and its generation bookkeeping while preserving concurrent-discovery deduplication, durable revision checks and the fallback retry window.
