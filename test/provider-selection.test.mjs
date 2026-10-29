@@ -7,6 +7,7 @@ import test from "node:test";
 const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-selection-"));
 process.env.CODEX_HOME = path.join(testRoot, "codex");
 process.env.CODEX_ROUTER_STATE_DIR = path.join(testRoot, "state");
+process.env.MODEL_ROUTER_STATE_DIR = process.env.CODEX_ROUTER_STATE_DIR;
 process.env.KIMI_CODE_HOME = path.join(testRoot, "kimi-code");
 process.env.GROK_AUTH_PATH = path.join(testRoot, "grok", "auth.json");
 process.env.DEVIN_CREDENTIALS_PATH = path.join(testRoot, "devin", "credentials.toml");
@@ -314,12 +315,7 @@ test("a retired provider alias still maps to its successor while unknown ids are
   }
 });
 
-// When nothing in the file exists in this build, the operator's stored intent
-// says nothing about the providers this build does have, so the read falls back
-// to the no-file default rather than stranding the install with no route at
-// all. The credential-aware catalog still hides anything that cannot
-// authenticate, so this is the same coherent state as a fresh install.
-test("a selection naming only unknown providers falls back to the no-file default", () => {
+test("a selection naming only unknown providers keeps every built-in provider hidden", () => {
   try {
     stageSelectionFile(
       `${JSON.stringify({
@@ -328,7 +324,7 @@ test("a selection naming only unknown providers falls back to the no-file defaul
       })}\n`,
     );
 
-    assert.deepEqual(readProviderSelection(), [...PROVIDERS.keys()]);
+    assert.deepEqual(readProviderSelection(), []);
     const detail = readProviderSelectionDetail();
     assert.deepEqual(detail.ignored, [
       "provider-from-a-newer-build",
@@ -341,8 +337,7 @@ test("a selection naming only unknown providers falls back to the no-file defaul
 });
 
 // An explicitly empty list is a deliberate choice -- disabling the last
-// provider writes `[]` -- so it must not be mistaken for the unknown-id
-// fallback above and silently reopen every provider.
+// provider writes `[]` -- and remains valid without a repair diagnostic.
 test("an explicitly empty selection still hides every provider", () => {
   try {
     stageSelectionFile(`${JSON.stringify({ version: 1, providers: [] })}\n`);
@@ -359,11 +354,11 @@ test("an explicitly empty selection still hides every provider", () => {
 test("an unreadable or wrong-version selection file degrades instead of throwing", () => {
   try {
     stageSelectionFile("{ not json at all");
-    assert.deepEqual(readProviderSelection(), [...PROVIDERS.keys()]);
+    assert.deepEqual(readProviderSelection(), []);
     assert.match(readProviderSelectionDetail().degraded, /Unreadable provider selection/);
 
     stageSelectionFile(`${JSON.stringify({ version: 99, providers: ["deepseek"] })}\n`);
-    assert.deepEqual(readProviderSelection(), [...PROVIDERS.keys()]);
+    assert.deepEqual(readProviderSelection(), []);
     assert.match(readProviderSelectionDetail().degraded, /version\/providers are invalid/);
   } finally {
     rmSync(testRoot, { recursive: true, force: true });
@@ -457,7 +452,7 @@ test("pruneUnconfiguredProviders does not invent a selection file", () => {
   }
 });
 
-test("pruneUnconfiguredProviders deletes a file that names only unknown providers", () => {
+test("pruneUnconfiguredProviders preserves an empty policy when every stored provider is unknown", () => {
   try {
     stageSelectionFile(
       `${JSON.stringify({
@@ -471,10 +466,47 @@ test("pruneUnconfiguredProviders deletes a file that names only unknown provider
       removed.map(({ id }) => id).sort(),
       ["provider-from-a-newer-build", "provider-that-was-removed"],
     );
-    assert.equal(existsSync(PROVIDER_SELECTION_PATH), false);
-    // Same coherent state as a fresh install: no explicit file means show all,
-    // and the credential-aware catalog still hides anything that cannot auth.
-    assert.deepEqual(readProviderSelection(), [...PROVIDERS.keys()]);
+    assert.equal(existsSync(PROVIDER_SELECTION_PATH), true);
+    assert.deepEqual(JSON.parse(readFileSync(PROVIDER_SELECTION_PATH, "utf8")).providers, []);
+    assert.deepEqual(readProviderSelection(), []);
+    assert.deepEqual(pruneUnconfiguredProviders(), []);
+  } finally {
+    rmSync(testRoot, { recursive: true, force: true });
+  }
+});
+
+test("damaged provider policy cannot nominate a disabled remote model for failover or vision", async () => {
+  const { rankFailoverCandidates } = await import("../src/model-failover.mjs");
+  const { resolveVisionEngines } = await import("../src/vision-bridge.mjs");
+  const remoteSlug = "custom/qwen3.8-27b";
+  const failovers = () => rankFailoverCandidates(selectedConfiguredListedModels(), {
+    from: { slug: "deepseek/test-source", provider: "deepseek" },
+  });
+  const vision = () => resolveVisionEngines(selectedConfiguredListedModels, {
+    enabled: true, engine: null,
+  });
+  try {
+    writeProviderSelection(["custom"]);
+    assert.ok(failovers().some(({ model }) => model.slug === remoteSlug));
+    assert.ok(vision().some((model) => model.slug === remoteSlug));
+
+    for (const contents of [
+      "{ not json",
+      JSON.stringify({ version: 99, providers: ["custom"] }),
+      JSON.stringify({ version: 1, providers: ["provider-from-a-newer-build"] }),
+      JSON.stringify({ version: 1, providers: "custom" }),
+    ]) {
+      stageSelectionFile(contents);
+      assert.deepEqual(readProviderSelection(), []);
+      assert.deepEqual(failovers(), []);
+      assert.deepEqual(vision(), []);
+      assert.ok(providerSelectionStatus().degraded);
+      assert.equal(readFileSync(PROVIDER_SELECTION_PATH, "utf8"), contents);
+    }
+
+    // Explicit operator recovery names only the requested family.
+    assert.deepEqual(enableProvider("local"), ["local"]);
+    assert.equal(readProviderSelection().includes("custom"), false);
   } finally {
     rmSync(testRoot, { recursive: true, force: true });
   }
