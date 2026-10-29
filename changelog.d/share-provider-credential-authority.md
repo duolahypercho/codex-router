@@ -1,0 +1,1 @@
+- Resolve model discovery and provider account usage through the existing API-key pool authority; an unusable configured pool no longer falls back to a different legacy account.

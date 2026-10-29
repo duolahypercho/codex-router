@@ -14,7 +14,7 @@ import {
   providerCatalogRouteIds,
   providerCatalogSources,
 } from "./provider-catalogs.mjs";
-import { resolveProviderCredential } from "./provider-credentials.mjs";
+import { resolveProviderApiKeyForRequest } from "./provider-api-key-routing.mjs";
 
 function option(args, name) {
   const index = args.indexOf(name);
@@ -61,7 +61,11 @@ export function auditCatalogSourceIds(requested = "all", providers = PROVIDERS) 
   return [...new Set(sourceIds)].sort();
 }
 
-function defaultReadiness(provider) {
+async function auditCredential(provider) {
+  return (await resolveProviderApiKeyForRequest(provider)).credential;
+}
+
+async function defaultReadiness(provider) {
   if (providerCatalogKind(provider) === "devin") {
     return {
       ready: false,
@@ -77,15 +81,15 @@ function defaultReadiness(provider) {
   if (provider.kind !== "openai-compatible") {
     return { ready: false, reason: "This provider has no repository-auditable model endpoint." };
   }
-  return resolveProviderCredential(provider)
+  return await auditCredential(provider)
     ? { ready: true }
     : { ready: false, reason: "No repository secret is configured for this provider." };
 }
 
-function secretValues(provider, credentialResolver) {
+async function secretValues(provider, credentialResolver) {
   if (provider.kind !== "openai-compatible") return [];
   try {
-    const credential = credentialResolver(provider);
+    const credential = await credentialResolver(provider);
     return typeof credential?.value === "string" && credential.value
       ? [credential.value]
       : [];
@@ -150,7 +154,7 @@ export async function auditProviderModels({
   providers = PROVIDERS,
   discover = (providerId) => discoverProviderModels(providerId, { refresh: true, cache: false }),
   readiness = defaultReadiness,
-  credentialResolver = resolveProviderCredential,
+  credentialResolver = auditCredential,
   generatedAt = new Date().toISOString(),
 } = {}) {
   const sources = auditCatalogSourceIds(requested, providers);
@@ -181,7 +185,7 @@ export async function auditProviderModels({
         provider: providerId,
         displayName: provider.displayName,
         status: "failed",
-        error: redactAuditError(error, secretValues(provider, credentialResolver)),
+        error: redactAuditError(error, await secretValues(provider, credentialResolver)),
       });
     }
   }

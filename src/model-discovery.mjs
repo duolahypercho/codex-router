@@ -31,7 +31,8 @@ import {
 } from "./opencode-session.mjs";
 import { providerCatalogRouteIds } from "./provider-catalogs.mjs";
 import { readUserModels } from "./user-models.mjs";
-import { credentialStatus, resolveProviderCredential } from "./provider-credentials.mjs";
+import { credentialStatus } from "./provider-credentials.mjs";
+import { resolveProviderApiKeyForRequest } from "./provider-api-key-routing.mjs";
 import { VERSION } from "./version.mjs";
 import {
   fetchUntrustedModelCatalog,
@@ -230,8 +231,11 @@ async function providerDiscoveryIdentity(provider) {
     const { readDevinSession } = await import("./devin-cli-session.mjs");
     return { kind: "devin", session: readDevinSession() };
   }
-  const credential = resolveProviderCredential(provider);
-  if (!credential) throw new Error(credentialStatus(provider).setup);
+  const routing = await resolveProviderApiKeyForRequest(provider);
+  const credential = routing.credential;
+  if (!credential) throw new Error(routing.pooled
+    ? `Provider API-key pool is unavailable: ${routing.reason || "no eligible credential"}.`
+    : credentialStatus(provider).setup);
   return {
     kind: "api",
     credential,
@@ -298,8 +302,8 @@ async function providerPayload(provider, identity) {
       })),
     };
   }
-  const credential = identity?.credential || resolveProviderCredential(provider);
-  if (!credential) throw new Error(credentialStatus(provider).setup);
+  const credential = identity?.credential;
+  if (!credential) throw new Error("Provider discovery has no authorized credential.");
   // The same loopback guard the api-forwarder applies: a keyless provider's
   // placeholder credential passes the check above, so an unguarded override
   // would send `Bearer local` to whatever host the environment names.
