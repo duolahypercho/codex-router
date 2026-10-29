@@ -582,6 +582,7 @@ async function main() {
     // figure needs no note; it is first-hand and already labeled "advertised".
     let omitContextNote = Boolean(advertised);
     let omitReasoningNote = Boolean(flagEfforts);
+    let modalitiesOverridden = false;
     const describe = () => {
       if (!documented && !documentedEfforts) {
         // Nothing documented, but the provider's own catalog may have sized
@@ -589,7 +590,7 @@ async function main() {
         // metadata a conservative default; that stops being true here.
         const advertisedFields = [
           advertised ? "context window" : undefined,
-          advertisedModalities.length > 0 ? "input modalities" : undefined,
+          !modalitiesOverridden && advertisedModalities.length > 0 ? "input modalities" : undefined,
         ].filter(Boolean);
         if (advertisedFields.length > 0) {
           metadata.description = advertisedModelDescription(providerId, advertisedFields);
@@ -622,13 +623,9 @@ async function main() {
       if (context !== documented?.contextWindow) omitContextNote = true;
     }
     const defaultImage = (metadata.inputModalities || []).includes("image");
-    if (confirm(`  Does ${id} accept image input?`, defaultImage)) {
-      metadata.inputModalities = ["text", "image"];
-    } else if (documentedModalities) {
-      // Documented modalities were pre-filled above; an explicit no has to
-      // clear them or the stored entry would still advertise image paste.
-      metadata.inputModalities = ["text"];
-    }
+    const acceptsImage = confirm(`  Does ${id} accept image input?`, defaultImage);
+    metadata.inputModalities = acceptsImage ? ["text", "image"] : ["text"];
+    modalitiesOverridden = acceptsImage !== defaultImage;
     if (!flagEfforts) {
       const ladder = metadata.reasoningLevels?.map((level) => level.effort).join(",") || "high";
       const rawEfforts = promptLine(
