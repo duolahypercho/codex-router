@@ -1,0 +1,1 @@
+- **Simplified Chinese names active context tokens correctly.** Replace the request-count unit on session context occupancy without changing its counter or lifetime-usage field.

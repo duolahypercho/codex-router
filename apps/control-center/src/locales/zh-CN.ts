@@ -108,7 +108,7 @@ export const zhCN = {
   "context.row.archived": "已归档",
   "context.row.workspaceMissing": "未索引工作区",
   "context.row.modelMissing": "未索引模型",
-  "context.row.activeTokens": "{count} 个活跃请求",
+  "context.row.activeTokens": "{count} 个活跃上下文 token",
   "context.row.activeUnreported": "未提供活跃上下文",
   "context.row.totalTokens": "{count} 个总 token",
   "context.row.totalUnreported": "未提供累计用量",
