@@ -20,8 +20,8 @@ async function originFixture(t) {
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
     submissions.push(Buffer.concat(chunks).toString());
-    response.writeHead(submissions.length === 1 ? 503 : 200, { "content-type": "text/plain" });
-    response.end(submissions.length === 1 ? "Synthetic complete-POST failure" : "Synthetic replay success");
+    if (submissions.length === 1) request.socket.destroy();
+    else response.writeHead(200, { "content-type": "text/plain" }).end("Synthetic replay success");
   });
   return { url, submissions };
 }
@@ -61,85 +61,66 @@ test("a caller-visible byte during retry backoff closes the delivery gate", { ti
   clientSawByte();
   while (!(await reader.read()).done) { /* Drain the owned caller connection. */ }
   await settled;
-  assert.ifError(relayFailure);
+  assert.equal(relayFailure?.cause?.code, "UND_ERR_SOCKET");
   assert.equal(waited, true, "the predicate must change after the first retry decision");
   assert.equal(origin.submissions.length, 1, "a visible response must prevent a second real POST");
-  assert.equal(relayResult.retries, 0, "a canceled plan is not a submitted retry");
+  assert.equal(relayResult, undefined, "the original transport failure remains the result");
   assert.equal(attempts.length, 1, "attempt metadata must describe only actual submissions");
 });
 
-test("a retry predicate revoked during backoff prevents another POST before any output", { timeout: 10_000 }, async (t) => {
-  const origin = await originFixture(t);
-  let permitted = true;
-  let waits = 0;
-  const attempts = [];
-  const result = await fetchWithRetry(origin.url, turn, {
-    deliveryPolicy: "availability", retries: 1, backoffMs: 10, budgetMs: 10_000,
-    canRetry: () => permitted,
-    onAttempt: (attempt) => attempts.push(attempt),
-    sleepImpl: async () => { waits += 1; permitted = false; },
-  });
-  assert.equal(waits, 1, "the initial decision must permit entering backoff");
-  assert.equal(origin.submissions.length, 1, "revoking the predicate must stop the pending replay");
-  assert.equal(result.retries, 0);
-  assert.equal(attempts.length, 1);
-  assert.equal(await result.response.text(), "Synthetic complete-POST failure", "a canceled backoff must keep the original failure readable");
-});
-
-test("the total retry budget must still permit submission after backoff", { timeout: 10_000 }, async (t) => {
-  for (const elapsed of [100, 101, 99]) {
-    await t.test(`backoff finishes at ${elapsed}ms of a 100ms budget`, async (subtest) => {
+test("transport retry gates are rechecked after backoff without losing response ownership", async (t) => {
+  for (const gate of ["permission", "budget", "abort", "open"]) {
+    await t.test(gate, async (subtest) => {
       const origin = await originFixture(subtest);
+      let permitted = true;
       let clock = 0;
-      let waits = 0;
+      const controller = new AbortController();
       const attempts = [];
-      const result = await fetchWithRetry(origin.url, turn, {
-        deliveryPolicy: "availability", retries: 1, backoffMs: 10, budgetMs: 100,
-        now: () => clock,
+      const pending = fetchWithRetry(origin.url, turn, {
+        deliveryPolicy: "availability", retries: 1, backoffMs: 0, budgetMs: 100,
+        signal: controller.signal, canRetry: () => permitted, now: () => clock,
         onAttempt: (attempt) => attempts.push(attempt),
-        sleepImpl: async () => { waits += 1; clock = elapsed; },
+        sleepImpl: async () => {
+          if (gate === "permission") permitted = false;
+          if (gate === "budget") clock = 100;
+          if (gate === "abort") controller.abort();
+        },
       });
-      const expected = elapsed < 100 ? 2 : 1;
-      assert.equal(waits, 1, "the budget must expire during backoff, not during the first attempt");
-      assert.equal(origin.submissions.length, expected, "a POST may be resubmitted only while the total budget remains open");
-      assert.equal(result.retries, expected - 1, "retry counts must count additional real submissions");
-      assert.equal(attempts.length, expected);
-      assert.equal(result.response.status, expected === 2 ? 200 : 503);
-      assert.equal(await result.response.text(), expected === 2 ? "Synthetic replay success" : "Synthetic complete-POST failure");
+      if (gate === "open") {
+        const result = await pending;
+        assert.equal(result.retries, 1);
+        assert.equal(await result.response.text(), "Synthetic replay success");
+        assert.equal(origin.submissions.length, 2);
+        assert.equal(origin.submissions[0], origin.submissions[1]);
+      } else {
+        await assert.rejects(pending, (error) => gate === "abort"
+          ? error === controller.signal.reason : error?.cause?.code === "UND_ERR_SOCKET");
+        assert.equal(origin.submissions.length, 1);
+      }
+      assert.equal(attempts.length, gate === "open" ? 2 : 1);
     });
   }
 });
 
-test("an asynchronous response cancellation is also a delivery-gate boundary", { timeout: 10_000 }, async (t) => {
-  for (const change of ["caller permission", "total budget"]) {
-    await t.test(change, async (subtest) => {
-      const origin = await originFixture(subtest);
-      let permitted = true;
-      let clock = 0;
-      let cancellations = 0;
-      const result = await fetchWithRetry(origin.url, turn, {
-        deliveryPolicy: "availability", retries: 1, backoffMs: 0, budgetMs: 100,
-        canRetry: () => permitted, now: () => clock,
-        fetchImpl: async (target, init) => {
-          // Keep the real HTTP POST and Response. Instrument only the awaited
-          // body cancellation to deterministically expose a concurrent change.
-          const response = await fetch(target, init);
-          const cancel = response.body.cancel.bind(response.body);
-          response.body.cancel = async (...args) => {
-            await cancel(...args);
-            await Promise.resolve();
-            cancellations += 1;
-            if (change === "caller permission") permitted = false;
-            else clock = 100;
-          };
-          return response;
-        },
-        sleepImpl: async () => {},
+test("received HTTP failures stay readable and are never disposed for an automatic retry", async () => {
+  for (const deliveryPolicy of ["at-most-once", "availability"]) {
+    for (const method of ["GET", "POST"]) {
+      let submissions = 0;
+      let canceled = 0;
+      let slept = 0;
+      const original = new Response("Synthetic original diagnostic", { status: 503 });
+      original.body.cancel = async () => { canceled += 1; };
+      const result = await fetchWithRetry("http://synthetic.invalid", { method }, {
+        deliveryPolicy, retries: 2, fetchImpl: async () => { submissions += 1; return original; },
+        sleepImpl: async () => { slept += 1; },
       });
-      assert.equal(cancellations, 1, "the condition must change after cancellation begins");
-      assert.equal(origin.submissions.length, 1, "no real POST may cross a gate revoked during body cancellation");
+      assert.equal(submissions, 1);
+      assert.equal(canceled, 0);
+      assert.equal(slept, 0);
+      assert.equal(result.response, original);
+      assert.equal(await result.response.text(), "Synthetic original diagnostic");
       assert.equal(result.retries, 0);
-    });
+    }
   }
 });
 
