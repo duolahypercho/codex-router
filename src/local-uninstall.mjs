@@ -12,6 +12,7 @@ import {
   writeLocalDownload,
 } from "./local-download.mjs";
 import { normalizeLocalModelTag } from "./local-model-ref.mjs";
+import { processStartIdentity } from "./process-identity.mjs";
 import { ollamaCommand } from "./ollama-runtime.mjs";
 import {
   aggregateRollbackError,
@@ -111,6 +112,7 @@ async function main() {
   const startedAt = Date.now();
   const existing = readLocalDownload();
   if (existing?.status === "cancelled") return;
+  const workerIdentity = processStartIdentity(process.pid);
 
   writeLocalDownload({
     version: 1,
@@ -123,6 +125,7 @@ async function main() {
     updatedAt: startedAt,
     controllerPid: null,
     workerPid: process.pid,
+    workerIdentity,
   });
 
   try {

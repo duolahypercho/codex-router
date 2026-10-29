@@ -47,6 +47,7 @@ import {
 } from "./process-tree.mjs";
 import { inheritedProxyEnvironment } from "./proxy-environment.mjs";
 import { routerNodeBinary } from "./node-runtime.mjs";
+import { processStartIdentity } from "./process-identity.mjs";
 import { installStableFetchTransport } from "./fetch-transport.mjs";
 
 // The tray launches this control process from the desktop session, which can
@@ -2469,6 +2470,7 @@ async function handleLocalModels(action, value, ...rest) {
       updatedAt: Date.now(),
       kind: "download",
       controllerPid: process.pid,
+      controllerIdentity: processStartIdentity(process.pid),
       workerPid: null,
       ...extra,
     });
@@ -2594,7 +2596,9 @@ async function handleLocalModels(action, value, ...rest) {
         startedAt,
         updatedAt: Date.now(),
         controllerPid: null,
+        controllerIdentity: null,
         workerPid: child.pid,
+        workerIdentity: processStartIdentity(child.pid),
       });
       // Advisory, never blocking: the operator may well want a vision-only
       // model, but they should know before the gigabytes land.
@@ -2717,6 +2721,7 @@ async function handleLocalModels(action, value, ...rest) {
         startedAt,
         updatedAt: startedAt,
         controllerPid: process.pid,
+        controllerIdentity: processStartIdentity(process.pid),
         workerPid: null,
       });
       try {
@@ -2734,7 +2739,9 @@ async function handleLocalModels(action, value, ...rest) {
         writeLocalDownload({
           ...readLocalDownload(),
           controllerPid: null,
+          controllerIdentity: null,
           workerPid: child.pid,
+          workerIdentity: processStartIdentity(child.pid),
           updatedAt: Date.now(),
         });
       } catch (error) {
@@ -2744,6 +2751,7 @@ async function handleLocalModels(action, value, ...rest) {
           detail: "Removal failed to start",
           updatedAt: Date.now(),
           controllerPid: null,
+          controllerIdentity: null,
           error: error instanceof Error ? error.message : String(error),
         });
         throw error;
@@ -2772,6 +2780,7 @@ async function handleLocalModels(action, value, ...rest) {
       updatedAt: finishedAt,
       workerPid: null,
       controllerPid: null,
+      controllerIdentity: null,
       ...(warnings.catalogError ? { catalogError: warnings.catalogError } : {}),
       ...(warnings.restartError ? { restartError: warnings.restartError } : {}),
       error: undefined,

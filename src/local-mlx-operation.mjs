@@ -7,6 +7,7 @@ import {
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { processStartIdentity } from "./process-identity.mjs";
 import { writePrivateJson } from "./file-security.mjs";
 import {
   claimLocalOperation,
@@ -171,6 +172,7 @@ export async function startLocalMlxOperation({
   now = Date.now,
   platform = process.platform,
   arch = process.arch,
+  identity = processStartIdentity,
   claimGlobalOperation = claimLocalOperation,
   readLocalOperation = readLocalDownload,
 } = {}) {
@@ -217,6 +219,7 @@ export async function startLocalMlxOperation({
       startedAt,
       updatedAt: startedAt,
       controllerPid: process.pid,
+      controllerIdentity: identity(process.pid),
       workerPid: null,
     });
     let child;
@@ -246,6 +249,7 @@ export async function startLocalMlxOperation({
           ...current,
           controllerPid: null,
           workerPid: child.pid,
+          workerIdentity: identity(child.pid),
           updatedAt: Date.now(),
         })
       : current;
@@ -260,11 +264,16 @@ export function cancelLocalMlxOperation({
   platform = process.platform,
   spawnSyncImpl = spawnSync,
   now = Date.now(),
+  identity = (pid) => processStartIdentity(pid, { platform, spawn: spawnSyncImpl }),
 } = {}) {
   const state = readLocalMlxOperation({ now, kill });
   if (!isLocalMlxOperationActive(state)) return { cancelled: false, state };
   const pid = Number(state.workerPid || state.controllerPid);
   if (Number.isInteger(pid) && pid > 0 && pid !== process.pid) {
+    const expected = state.workerPid ? state.workerIdentity : state.controllerIdentity;
+    if (!expected || identity(pid) !== expected) {
+      throw new Error("The local MLX operation process identity is unavailable or changed; refusing to stop an unowned process.");
+    }
     if (platform === "win32") {
       const result = spawnSyncImpl("taskkill", ["/PID", String(pid), "/T", "/F"], {
         stdio: "ignore",
@@ -279,6 +288,9 @@ export function cancelLocalMlxOperation({
         kill(-pid, "SIGTERM");
       } catch (error) {
         if (error?.code !== "ESRCH") throw error;
+        if (identity(pid) !== expected) {
+          throw new Error("The local MLX operation process identity changed before the fallback stop.");
+        }
         try { kill(pid, "SIGTERM"); } catch (fallbackError) {
           if (fallbackError?.code !== "ESRCH") throw fallbackError;
         }
@@ -303,6 +315,7 @@ export function cancelLocalMlxOperation({
 async function runWorker() {
   const started = readLocalMlxOperation({ persist: false });
   if (!isLocalMlxOperationActive(started)) return;
+  const workerIdentity = processStartIdentity(process.pid);
   const abort = new AbortController();
   const abortWorker = () => abort.abort(new Error("Cancelled by user."));
   process.once("SIGTERM", abortWorker);
@@ -318,6 +331,7 @@ async function runWorker() {
       progressMode: status === "downloading" ? "indeterminate" : "determinate",
       controllerPid: null,
       workerPid: process.pid,
+      workerIdentity,
       updatedAt: Date.now(),
       error: undefined,
     });
@@ -325,7 +339,7 @@ async function runWorker() {
   const heartbeat = setInterval(() => {
     const current = readLocalMlxOperation({ persist: false });
     if (!isLocalMlxOperationActive(current)) return;
-    writeLocalMlxOperation({ ...current, workerPid: process.pid, updatedAt: Date.now() });
+    writeLocalMlxOperation({ ...current, workerPid: process.pid, workerIdentity, updatedAt: Date.now() });
   }, HEARTBEAT_MS);
   heartbeat.unref();
   try {

@@ -9,6 +9,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { ownerLeaseEndpoint, startOwnerServer, closeOwnerServer } from "./kernel-owner-lease.mjs";
+import { processStartIdentity } from "./process-identity.mjs";
 import { writePrivateJson } from "./file-security.mjs";
 import {
   applyModelOverlayPublication,
@@ -102,6 +103,7 @@ export function cancelLocalDownload(
     kill = process.kill,
     spawn = spawnSync,
     platform = process.platform,
+    identity = (pid) => processStartIdentity(pid, { platform, spawn }),
   } = {},
 ) {
   // Use one timestamp for reconciliation and the cancellation record. Tests
@@ -122,10 +124,12 @@ export function cancelLocalDownload(
   // controller PID is the cancellable process. Once the worker is handed off,
   // workerPid takes precedence and the controller has already returned.
   const pid = Number(state.workerPid || state.controllerPid);
-  // Reconciliation already checked the recorded worker once. Stop it now
-  // without probing a second time (the extra probe can itself race with the
-  // worker exiting and, on Unix, sends an unnecessary second signal check).
+  // Liveness does not establish ownership: the PID may now name another process.
   if (Number.isInteger(pid) && pid > 0 && pid !== process.pid) {
+    const expected = state.workerPid ? state.workerIdentity : state.controllerIdentity;
+    if (!expected || identity(pid) !== expected) {
+      throw new Error("The local model operation process identity is unavailable or changed; refusing to stop an unowned process.");
+    }
     if (platform === "win32") {
       const result = spawn("taskkill", ["/PID", String(pid), "/T", "/F"], {
         stdio: "ignore",
@@ -191,6 +195,7 @@ export async function downloadLocalModel(
     },
     baseUrl = process.env.MODEL_ROUTER_LOCAL_BASE_URL || DEFAULT_LOCAL_VISION_BASE_URL,
     onProgress,
+    processIdentity = processStartIdentity,
   } = {},
 ) {
   const tag = normalizeLocalModelTag(input);
@@ -210,6 +215,7 @@ export async function downloadLocalModel(
     }
   }
   const startedAt = Date.now();
+  const workerIdentity = processIdentity(process.pid);
   const cancelled = () => readLocalDownload()?.status === "cancelled";
   writeLocalDownload({
     version: 1,
@@ -221,6 +227,7 @@ export async function downloadLocalModel(
     startedAt,
     updatedAt: startedAt,
     workerPid: process.pid,
+    workerIdentity,
   });
   let lastPercent = -1;
   let lastDetail = "";
@@ -245,6 +252,7 @@ export async function downloadLocalModel(
           startedAt,
           updatedAt: Date.now(),
           workerPid: process.pid,
+          workerIdentity,
         });
         onProgress?.({ detail, percent: shown < 0 ? 0 : shown });
       },
@@ -352,6 +360,7 @@ export async function downloadLocalModel(
       startedAt,
       updatedAt: Date.now(),
       workerPid: process.pid,
+      workerIdentity,
       ...(catalogError ? { catalogError } : {}),
       ...(restartError ? { restartError } : {}),
       ...(activationRolledBack ? { activationRolledBack: true } : {}),
@@ -383,6 +392,7 @@ export async function downloadLocalModel(
       startedAt,
       updatedAt: Date.now(),
       workerPid: process.pid,
+      workerIdentity,
     });
     throw error;
   }
