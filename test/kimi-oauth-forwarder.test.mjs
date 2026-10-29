@@ -1,15 +1,49 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import vm from "node:vm";
 import { openPort } from "./port-pool.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const internalKey = "test-kimi-internal-service-key-with-sufficient-length";
+
+test("a Kimi 401 retry retains one region, credential slot and device identity", async () => {
+  const source = readFileSync(path.join(root, "src", "oauth-forwarder.mjs"), "utf8");
+  const functions = source.slice(source.indexOf("function normalizeKimiBody("), source.indexOf("const server = http.createServer("));
+  const first = { apiBase: "https://region-a.invalid/v1", credentialsPath: "slot-a", home: "device-a" };
+  const second = { apiBase: "https://region-b.invalid/v1", credentialsPath: "slot-b", home: "device-b" };
+  let selected = first;
+  const requests = [];
+  const context = vm.createContext({
+    Buffer, URL, AbortController, Date, console,
+    LISTEN_HOST: "127.0.0.1", INTERNAL_KEY: internalKey, QUIET: true,
+    HOP_BY_HOP_HEADERS: new Set(), requireInternalAuth: () => true,
+    resolveKimiCodeEnvironment: () => selected,
+    ensureFreshKimiOAuthToken: async ({ context = selected } = {}) => context.credentialsPath,
+    kimiIdentityHeaders: (context = selected) => ({ "X-Msh-Device-Id": context.home }),
+    readRequestBody: async () => Buffer.from("{}"),
+    foldInterveningAssistantMessages: () => {}, pipeResponse: async () => {},
+    writeJson: () => assert.fail("the second attempt succeeds"),
+    fetch: async (url, options) => {
+      requests.push({ url, token: options.headers.Authorization, device: options.headers["X-Msh-Device-Id"] });
+      selected = second;
+      return { status: requests.length === 1 ? 401 : 200, arrayBuffer: async () => new ArrayBuffer(0) };
+    },
+  });
+  vm.runInContext(functions, context);
+  await context.handleRequest({ method: "POST", url: "/v1/chat/completions", headers: {}, once() {} }, { once() {} });
+  assert.equal(requests.length, 2);
+  for (const request of requests) {
+    assert.equal(request.url, "https://region-a.invalid/v1/chat/completions");
+    assert.equal(request.token, "Bearer slot-a");
+    assert.equal(request.device, "device-a");
+  }
+});
 
 async function stop(child) {
   if (child.exitCode !== null) return;

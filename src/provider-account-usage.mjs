@@ -683,11 +683,12 @@ async function minimaxTokenPlanAccount(fetchImpl) {
 async function kimiOAuthAccount(fetchImpl) {
   const status = kimiOAuthStatus();
   if (!status.configured) return { status: "not-configured", source: "official-api", metrics: [] };
-  const accessToken = await ensureFreshKimiOAuthToken();
+  const context = resolveKimiCodeEnvironment();
+  const accessToken = await ensureFreshKimiOAuthToken({ context });
   const payload = await requestJson(
-    `${resolveKimiCodeEnvironment().apiBase}/usages`,
+    `${context.apiBase}/usages`,
     accessToken,
-    kimiIdentityHeaders(),
+    kimiIdentityHeaders(context),
     fetchImpl,
   );
   const metrics = kimiQuotaMetrics(payload);
