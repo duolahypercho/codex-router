@@ -4955,7 +4955,7 @@ async function handleResponses(request, response, requestUrl) {
         // true content rather than a receipt.
         if (!compactV1 && !compactV2) {
           const aged = await ageToolResultsWithRecovery(native.input, {
-            tools: toolResultReadbackTools(payload),
+            tools: toolResultReadbackTools(payload, { native: true }),
             scope: toolResultRecoveryScope(threadIdFromHeaders(request.headers), payload),
             enabled: nativeToolResultAgingEnabled(),
           });
