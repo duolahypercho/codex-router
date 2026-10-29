@@ -82,10 +82,11 @@ async function nextStreamEnvelope(reader, state) {
   }
 }
 
-async function fixture(responsesHandler) {
+async function fixture(responsesHandler, { observeResponse = () => {} } = {}) {
   const upstream = http.createServer(responsesHandler);
   const upstreamPort = await listen(upstream);
   const surface = http.createServer((request, response) => {
+    observeResponse(response);
     const route = new URL(request.url, `http://${request.headers.host}`).pathname;
     handleCursorRequest(request, response, route, {
       responsesUrl: `http://127.0.0.1:${upstreamPort}/v1/responses`,
@@ -110,6 +111,7 @@ test("Cursor app catalog uses neutral aliases and normalizes Responses-shaped ch
     received = JSON.parse(Buffer.concat(chunks).toString("utf8"));
     response.writeHead(200, { "content-type": "application/json" });
     response.end(JSON.stringify({
+      status: "completed",
       id: "resp_test",
       output: [{ type: "message", content: [{ type: "output_text", text: "done" }] }],
       usage: { input_tokens: 4, output_tokens: 1, total_tokens: 5 },
@@ -195,7 +197,7 @@ test("Cursor rejects models outside the published routed catalog", async () => {
   const app = await fixture((_request, response) => {
     upstreamCalls += 1;
     response.writeHead(200, { "content-type": "application/json" });
-    response.end(JSON.stringify({ output: [] }));
+    response.end(JSON.stringify({ status: "completed", output: [] }));
   });
   try {
     const response = await fetch(`${app.baseUrl}/cursor/v1/chat/completions`, {
@@ -235,6 +237,7 @@ test("Cursor zstd bodies inflate off the event loop and oversize frames never re
     assert.equal(JSON.parse(Buffer.concat(chunks).toString("utf8")).input, "hello");
     response.writeHead(200, { "content-type": "application/json" });
     response.end(JSON.stringify({
+      status: "completed",
       id: "resp_zstd",
       output: [{ type: "message", content: [{ type: "output_text", text: "done" }] }],
     }));
@@ -273,6 +276,7 @@ test("Cursor Agent catalog and a RunSSE/BidiAppend turn use the current Connect 
     received = JSON.parse(Buffer.concat(chunks).toString("utf8"));
     response.writeHead(200, { "content-type": "application/json" });
     response.end(JSON.stringify({
+      status: "completed",
       output: [{ type: "message", content: [{ type: "output_text", text: "OK" }] }],
       usage: { input_tokens: 7, output_tokens: 2 },
     }));
@@ -341,6 +345,7 @@ test("Cursor Agent executes routed read tools through its local controlled-exec 
     response.writeHead(200, { "content-type": "application/json" });
     if (received.length === 1) {
       response.end(JSON.stringify({
+      status: "completed",
         output: [{
           type: "function_call",
           call_id: "call_read",
@@ -352,6 +357,7 @@ test("Cursor Agent executes routed read tools through its local controlled-exec 
       return;
     }
     response.end(JSON.stringify({
+      status: "completed",
       output: [{ type: "message", content: [{ type: "output_text", text: "READ_OK" }] }],
       usage: { input_tokens: 5, output_tokens: 2 },
     }));
@@ -462,10 +468,12 @@ test("Cursor Agent keeps write, edit, and shell execution in the official client
     response.writeHead(200, { "content-type": "application/json" });
     response.end(JSON.stringify(received.length === 1
       ? {
+          status: "completed",
           output: calls.map((call) => ({ type: "function_call", call_id: call.id, ...call })),
           usage: { input_tokens: 4, output_tokens: 3 },
         }
       : {
+          status: "completed",
           output: [{ type: "message", content: [{ type: "output_text", text: "TOOLS_OK" }] }],
           usage: { input_tokens: 8, output_tokens: 1 },
         }));
@@ -548,4 +556,105 @@ test("Cursor Agent keeps write, edit, and shell execution in the official client
   } finally {
     await app.close();
   }
+});
+
+function simpleCliTurn(app, requestId, signal) {
+  const action = encodeMessageField(1, encodeMessageField(1, encodeStringField(1, "Reply.")));
+  const runRequest = Buffer.concat([encodeMessageField(2, action),
+    encodeMessageField(9, encodeStringField(1, "deepseek/test"))]);
+  const run = fetch(`${app.baseUrl}/agent.v1.AgentService/RunSSE`, {
+    method: "POST", headers: { "content-type": "application/connect+proto" },
+    body: connectEnvelope(encodeStringField(1, requestId)), signal,
+  });
+  // Cancellation can reject before the test awaits the stream headers.
+  run.catch(() => {});
+  const append = fetch(`${app.baseUrl}/aiserver.v1.BidiService/BidiAppend`, {
+    method: "POST", headers: { "content-type": "application/proto" },
+    body: Buffer.concat([encodeMessageField(2, encodeStringField(1, requestId)),
+      encodeVarintField(3, 0), encodeMessageField(4, encodeMessageField(1, runRequest))]),
+  });
+  return { run, append };
+}
+
+test("Cursor chat and pseudo-stream report token truncation and refuse other missing completions", async () => {
+  for (const payload of [
+    { status: "incomplete", incomplete_details: { reason: "max_output_tokens" } },
+    { status: "incomplete", incomplete_details: { reason: "content_filter" } },
+    { status: "failed" }, {},
+  ]) {
+    const app = await fixture((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ...payload, output: [{ type: "message", content: [{ type: "output_text", text: "partial" }] }] }));
+    });
+    try {
+      for (const stream of [false, true]) {
+        const response = await fetch(`${app.baseUrl}/cursor/v1/chat/completions`, {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model: "deepseek/test", messages: [], stream }),
+        });
+        const text = await response.text();
+        if (payload.incomplete_details?.reason === "max_output_tokens") {
+          assert.equal(response.status, 200);
+          assert.match(text, /"finish_reason":"length"/);
+        } else {
+          assert.equal(response.status, 502);
+          assert.doesNotMatch(text, /"finish_reason":"stop"/);
+        }
+      }
+    } finally { await app.close(); }
+  }
+});
+
+test("Cursor CLI ends an incomplete turn with an error instead of a normal turnEnded", async () => {
+  const app = await fixture((_request, response) => {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ status: "incomplete", incomplete_details: { reason: "max_output_tokens" },
+      output: [{ type: "message", content: [{ type: "output_text", text: "partial" }] }] }));
+  });
+  try {
+    const turn = simpleCliTurn(app, "incomplete-turn");
+    assert.equal((await turn.append).status, 200);
+    const envelopes = splitEnvelopes(Buffer.from(await (await turn.run).arrayBuffer()));
+    assert.equal(JSON.parse(envelopes.at(-1).payload).error.code, "internal");
+    assert.match(JSON.parse(envelopes.at(-1).payload).error.message, /output-token limit/);
+    assert.equal(envelopes.filter((item) => item.flags === 0).length, 1);
+  } finally { await app.close(); }
+});
+
+test("closing Cursor RunSSE cancels pending canonical work without late writes", async () => {
+  let release;
+  const answer = new Promise((resolve) => { release = resolve; });
+  let markStarted, markCancelled;
+  const started = new Promise((resolve) => { markStarted = resolve; });
+  const cancelled = new Promise((resolve) => { markCancelled = resolve; });
+  let lateWrites = 0;
+  const app = await fixture(async (request, response) => {
+    for await (const _chunk of request) { /* receive the synthetic canonical request */ }
+    response.once("close", markCancelled);
+    markStarted();
+    await answer;
+    response.end(JSON.stringify({ status: "completed", output: [] }));
+  }, { observeResponse(response) {
+    let closed = false;
+    response.once("close", () => { closed = true; });
+    const write = response.write;
+    response.write = function (...args) { if (closed) lateWrites += 1; return write.apply(this, args); };
+  } });
+  const controller = new AbortController();
+  try {
+    const turn = simpleCliTurn(app, "cancelled-turn", controller.signal);
+    await turn.append;
+    await started;
+    controller.abort();
+    await assert.rejects(turn.run);
+    let timer;
+    try {
+      await Promise.race([cancelled, new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error("canonical generation was not cancelled")), 2_000);
+      })]);
+    } finally { clearTimeout(timer); }
+    release();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(lateWrites, 0);
+  } finally { controller.abort(); release(); await app.close(); }
 });
