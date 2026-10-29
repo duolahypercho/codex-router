@@ -2251,7 +2251,9 @@ async function visionEvidenceFor(url, engine, request, effort, question = "") {
   // "what is the total?" and for "which rows are overdue?" are different
   // readings -- but the evidence cache keys on the question itself, so folding
   // it into this string as well would only key it twice.
-  const key = `${engine.slug}\u0000${effort || "default"}\u0000${account}\u0000${url}`;
+  const engineIdentity = engine.local
+    ? JSON.stringify([engine.slug, engine.gatewayModel, engine.baseUrl]) : engine.slug;
+  const key = `${engineIdentity}\u0000${effort || "default"}\u0000${account}\u0000${url}`;
   const cached = evidenceCache.get(key, question);
   // A cache hit buys nothing, so it records nothing: the events file is a
   // record of spend, not of calls the router avoided.
