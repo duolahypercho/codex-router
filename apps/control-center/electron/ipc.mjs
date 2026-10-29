@@ -33,6 +33,10 @@ const spawnableCommandUrl = import.meta.url.includes("/app.asar/")
   ? new URL("../../src/spawnable-command.mjs", import.meta.url)
   : new URL("../../../src/spawnable-command.mjs", import.meta.url);
 const { spawnableCommand } = await import(spawnableCommandUrl);
+const codexBinaryUrl = import.meta.url.includes("/app.asar/")
+  ? new URL("../../router-src/codex-binary.mjs", import.meta.url)
+  : new URL("../../../src/codex-binary.mjs", import.meta.url);
+const { findCodexBinary } = await import(codexBinaryUrl);
 const loginLeaseUrl = import.meta.url.includes("/app.asar/")
   ? new URL("../../src/chatgpt-login-lease.mjs", import.meta.url)
   : new URL("../../../src/chatgpt-login-lease.mjs", import.meta.url);
@@ -235,6 +239,7 @@ function safeTimestamp(value, fallback = undefined) {
 }
 
 function executablePath(name) {
+  if (name === "codex") return findCodexBinary();
   const directories = new Set();
   for (const directory of String(process.env.PATH || "").split(path.delimiter)) {
     if (path.isAbsolute(directory)) directories.add(directory);
@@ -264,7 +269,7 @@ function executablePath(name) {
     try {
       accessSync(candidate, process.platform === "win32" ? fsConstants.F_OK : fsConstants.X_OK);
       const resolved = realpathSync(candidate);
-      if (statSync(resolved).isFile()) return resolved;
+      if (statSync(resolved).isFile()) return candidate;
     } catch { /* keep looking */ }
   }
   return undefined;
