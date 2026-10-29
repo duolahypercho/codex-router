@@ -165,6 +165,13 @@ const bridgeSource = String.raw`
       emptyCompletionRetried: true,
     }];
   }
+  if (searchParams.get("mismatchedCache") === "1") {
+    target.usageEvents = Array.from({ length: 1000 }, (_, i) => ({
+      at: new Date(Date.now() - i * 1000).toISOString(),
+      model: "deepseek/deepseek-chat", provider: "deepseek", status: 200,
+      inputTokens: 100, cachedInputTokens: 10, outputTokens: 1,
+    }));
+  }
   const snapshot = {
     targets: { codex: target },
     catalog: {
@@ -453,6 +460,9 @@ const bridgeSource = String.raw`
       const totalTokens = staleProviderUsage && read > 1 ? 24000 : 12000;
       return {
         fetchedAt: "2026-08-27T08:00:00.000Z",
+        ...(searchParams.get("mismatchedCache") === "1" ? {
+          contextEfficiency: { last24hCachedInputTokens: 20000, dailyCachedInputTokens: [] },
+        } : {}),
         providers: [
           ...(fallbackUsage ? [{
             id: "openai",
@@ -2015,3 +2025,19 @@ for (const [language, copy] of [
     } finally { await browser.close(); await close(); }
   });
 }
+
+test("Status keeps differently scoped cache facts without inventing a percentage", { timeout: 30_000 }, async () => {
+  assert.ok(chromiumPath, "No Chromium executable is available.");
+  const { url, close } = await serveRenderer();
+  const browser = await chromium.launch({ executablePath: chromiumPath, headless: true });
+  try {
+    const page = await newEnglishTestPage(browser);
+    await page.goto(url + "?mismatchedCache=1");
+    await page.getByRole("button", { name: "Status", exact: true }).click();
+    const facts = page.locator(".st-context-stats");
+    await facts.getByText("20k", { exact: true }).waitFor();
+    await facts.getByText("100k", { exact: true }).waitFor();
+    assert.equal(await facts.locator("div").count(), 2);
+    assert.doesNotMatch(await facts.innerText(), /Reuse share|20\.0%|100\.0%/);
+  } finally { await browser.close(); await close(); }
+});

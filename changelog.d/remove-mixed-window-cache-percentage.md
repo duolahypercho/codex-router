@@ -1,0 +1,1 @@
+- **Status no longer presents a cache percentage from mismatched windows.** Keep the full-day cached-token totals and sampled event facts, removing the duplicate ratio that divided full-day reuse by only the last 1,000 input events.

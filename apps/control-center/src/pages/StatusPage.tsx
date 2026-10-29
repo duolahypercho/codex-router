@@ -210,9 +210,6 @@ export function StatusPage({
   const cachedInputTokens = contextEfficiency?.last24hCachedInputTokens
     ?? eventCachedInputTokens;
   const observedInputTokens = events.reduce((sum, event) => sum + (event.inputTokens || 0), 0);
-  const cacheReusePercent = observedInputTokens > 0
-    ? Math.min(100, (cachedInputTokens / observedInputTokens) * 100)
-    : null;
   const estimatedInputEvents = events.filter((event) =>
     Number.isFinite(Number(event.estimatedInputTokens)),
   ).length;
@@ -414,11 +411,6 @@ export function StatusPage({
                   <dt>{t("status.context.inputObserved")}</dt>
                   <dd>{compactNumber(observedInputTokens)}</dd>
                   <small>{t("status.context.acrossEvents", { count: exactNumber(events.length) })}</small>
-                </div>
-                <div>
-                  <dt>{t("status.context.reuseShare")}</dt>
-                  <dd>{cacheReusePercent == null ? t("status.context.notMeasured") : `${cacheReusePercent.toFixed(1)}%`}</dd>
-                  <small>{t("status.context.reuseShareDesc")}</small>
                 </div>
               </dl>
               <p className="st-telemetry-note">
