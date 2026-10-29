@@ -177,3 +177,54 @@ test("tool and image blocks map to the canonical request shape", () => {
   assert.equal(converted.model, "deepseek/test");
   assert.equal(converted.input[0].content[1].image_url, "data:image/png;base64,AA==");
 });
+
+test("Claude streaming and non-streaming preserve output-token truncation and terminal usage", async () => {
+  const payload = { status: "incomplete", incomplete_details: { reason: "max_output_tokens" },
+    output: [{ type: "message", content: [{ type: "output_text", text: "partial" }] }],
+    usage: { input_tokens: 3, output_tokens: 7, total_tokens: 10 } };
+  const app = await fixture((request, response) => {
+    if (request.headers.accept?.includes("text/event-stream")) {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end(`data: ${JSON.stringify({ type: "response.incomplete", response: payload })}\n\n`);
+    } else {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify(payload));
+    }
+  });
+  try {
+    for (const stream of [false, true]) {
+      const response = await fetch(`${app.baseUrl}/v1/messages`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "deepseek/test", max_tokens: 7, messages: [], stream }),
+      });
+      assert.equal(response.status, 200);
+      const text = await response.text();
+      const events = stream ? text.split("\n").filter((line) => line.startsWith("data: ")).map((line) => JSON.parse(line.slice(6))) : [];
+      const terminal = stream ? events.find((event) => event.type === "message_delta") : JSON.parse(text);
+      assert.equal(stream ? terminal.delta.stop_reason : terminal.stop_reason, "max_tokens");
+      assert.equal(terminal.usage.output_tokens, 7);
+      assert.match(text, /partial/);
+    }
+  } finally { await app.close(); }
+});
+
+test("Claude does not disguise other incomplete reasons or absent stream terminals as success", async () => {
+  for (const missingTerminal of [false, true]) {
+    const app = await fixture((_request, response) => {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write('data: {"type":"response.output_text.delta","delta":"partial"}\n\n');
+      if (!missingTerminal) response.write('data: {"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"content_filter"}}}\n\n');
+      response.end();
+    });
+    try {
+      const response = await fetch(`${app.baseUrl}/v1/messages`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "deepseek/test", max_tokens: 7, messages: [], stream: true }),
+      });
+      const text = await response.text();
+      assert.match(text, /event: error/);
+      assert.doesNotMatch(text, /"stop_reason":"(?:end_turn|max_tokens)"/);
+      assert.doesNotMatch(text, /event: message_stop/);
+    } finally { await app.close(); }
+  }
+});

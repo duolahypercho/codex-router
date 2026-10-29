@@ -244,6 +244,14 @@ function anthropicUsage(usage = {}) {
   };
 }
 
+function claudeStopReason(payload) {
+  if (payload?.status === "incomplete" && payload.incomplete_details?.reason === "max_output_tokens") return "max_tokens";
+  if (payload?.status !== "completed") {
+    throw new Error("The routed response did not complete: " + (payload?.incomplete_details?.reason || payload?.status || "missing terminal status"));
+  }
+  return outputToolParts(payload).length ? "tool_use" : "end_turn";
+}
+
 export function responsesToClaudeMessage(payload, requestedModel) {
   const content = [...outputTextParts(payload), ...outputToolParts(payload)];
   return {
@@ -252,8 +260,7 @@ export function responsesToClaudeMessage(payload, requestedModel) {
     role: "assistant",
     model: requestedModel,
     content,
-    stop_reason: content.some((part) => part.type === "tool_use") ? "tool_use" :
-      payload?.status === "incomplete" ? "max_tokens" : "end_turn",
+    stop_reason: claudeStopReason(payload),
     stop_sequence: null,
     usage: anthropicUsage(payload?.usage),
   };
@@ -368,9 +375,11 @@ function streamEvent(response, translator, event, state) {
     }));
     return;
   }
-  if (event.type === "response.completed") {
+  if (["response.completed", "response.incomplete"].includes(event.type)) {
+    const payload = { ...event.response, status: event.response?.status || event.type.slice("response.".length) };
+    const reason = claudeStopReason(payload);
     if (!state.content && event.response) {
-      const fallback = responsesToClaudeMessage(event.response, state.requestedModel);
+      const fallback = responsesToClaudeMessage(payload, state.requestedModel);
       for (const part of fallback.content) {
         if (part.type === "text") response.write(translator.push({ type: "text-delta", id: "fallback", text: part.text }));
         else response.write(translator.push({ type: "tool-call", toolCallId: part.id, toolName: part.name, input: part.input }));
@@ -378,7 +387,7 @@ function streamEvent(response, translator, event, state) {
     }
     response.write(translator.push({
       type: "finish",
-      finishReason: outputToolParts(event.response).length ? "tool-calls" : "stop",
+      finishReason: reason === "max_tokens" ? "length" : reason === "tool_use" ? "tool-calls" : "stop",
       totalUsage: usageForTranslator(event.response?.usage),
     }));
     state.completed = true;
@@ -412,11 +421,17 @@ async function handleStream(request, response, upstream, requestedModel) {
         break;
       }
       streamEvent(response, translator, event, state);
+      if (state.completed) break;
     }
+    if (!state.completed) throw new Error("The routed stream ended without a terminal event.");
     if (!state.failed) response.write(translator.finish());
-    response.end();
+  } catch (error) {
+    if (!response.destroyed && !response.writableEnded) {
+      response.write(`event: error\ndata: ${JSON.stringify({ type: "error", error: { type: "api_error", message: error.message } })}\n\n`);
+    }
   } finally {
     clearInterval(ping);
+    if (!response.destroyed && !response.writableEnded) response.end();
   }
 }
 
