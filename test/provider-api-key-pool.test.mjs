@@ -705,3 +705,35 @@ test("lock serializes concurrent state updates and preserves every session turn"
   assert.equal(state.providers.openrouter.sessions["session-1"].turns, 12);
   assert.equal(existsSync(`${filePath}.pool-lock`), false);
 });
+
+test("pool attempts do not send after backoff or credential selection exhausts the budget", async () => {
+  for (const phase of ["backoff", "selection", "within-budget"]) {
+    const filePath = path.join(root, `budget-${phase}.json`);
+    const first = metadata(credential("budget_first", "FIRST", { priority: 2 }));
+    const second = metadata(credential("budget_second", "SECOND", { priority: 1 }));
+    await upsertProviderApiKey("openrouter", first, { filePath });
+    await upsertProviderApiKey("openrouter", second, { filePath });
+    let elapsed = 0;
+    const sends = [];
+    const result = await runProviderApiKeyAttempts("openrouter", {
+      filePath,
+      now: () => NOW + elapsed,
+      resolveCredential: (id) => {
+        if (phase === "selection") elapsed = 5001;
+        return id === first.id ? "FIRST" : "SECOND";
+      },
+      sleepImpl: async (ms) => { elapsed += ms; },
+      send: async ({ apiKey }) => {
+        sends.push(elapsed);
+        if (apiKey === "FIRST") {
+          elapsed = phase === "within-budget" ? 100 : 4900;
+          return { status: 429, ok: false, committed: false };
+        }
+        return { status: 200, ok: true, committed: false };
+      },
+    });
+    assert.equal(sends.length, phase === "within-budget" ? 2 : phase === "selection" ? 0 : 1);
+    assert.equal(result.reason, phase === "within-budget" ? "success" : "no_retry_candidate");
+    assert.ok(sends.every((at) => at < 5000));
+  }
+});
