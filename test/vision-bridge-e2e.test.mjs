@@ -432,10 +432,8 @@ test("a failed vision read degrades to a stated failure and the turn still compl
       imageTurn({ question: "What does this error say?" }),
     );
     assert.equal(result.status, 200);
-    // A 500 is transient, so the read was asked for again before the image was
-    // written off: one attempt plus two retries.
     report(`attempts against a failing engine: ${upstreams.state.visionRequests.length}`);
-    assert.equal(upstreams.state.visionRequests.length, 3);
+    assert.equal(upstreams.state.visionRequests.length, 1);
     const sent = upstreams.state.gatewayRequests.at(-1);
     assert.equal(imageParts(sent.input).length, 0);
     const stated = textParts(sent.input).find((text) => text.includes("could not be read"));
@@ -455,10 +453,7 @@ test("a failed vision read degrades to a stated failure and the turn still compl
     );
     assert.equal(retry.status, 200);
     report(`reads after a failure then a recovery: ${upstreams.state.visionRequests.length}`);
-    // Three attempts against the failing engine, then one against the
-    // recovered one. Nothing was cached, so recovery is tried rather than the
-    // failure being replayed for an hour.
-    assert.equal(upstreams.state.visionRequests.length, 4);
+    assert.equal(upstreams.state.visionRequests.length, 2);
     assert.ok(
       textParts(upstreams.state.gatewayRequests.at(-1).input).some((text) =>
         text.includes("<<<IMAGE EVIDENCE"),
@@ -872,17 +867,17 @@ test("native image streams without completion never switch engines or enter the 
         assert.equal(result.status, 200);
         assert.deepEqual(nativeCalls.slice(before), ["native-a"], `${broken}, resend ${resend}`);
         const text = textParts(routedInputs.at(-1)).join("\n");
-        assert.match(text, /stopped partway through reading it/);
+        assert.match(text, /returned an unreadable response/);
         assert.doesNotMatch(text, /PARTIAL_IMAGE_CONTENT|A terminal window showing/);
       }
     }
-    // A genuine HTTP refusal still tries the alternate; a successful read is
-    // cached on that engine and never confused with the rejected partial read.
+    // A refused chosen reader reports failure; another configured account is
+    // not an implicit second purchase. A later successful read is cached.
     mode = "refused";
     let before = nativeCalls.length;
     assert.equal((await turn(port, imageTurn({ question: "refusal control" }))).status, 200);
-    assert.deepEqual(nativeCalls.slice(before), ["native-a", "native-b"]);
-    assert.match(textParts(routedInputs.at(-1)).join("\n"), /A terminal window showing/);
+    assert.deepEqual(nativeCalls.slice(before), ["native-a"]);
+    assert.doesNotMatch(textParts(routedInputs.at(-1)).join("\n"), /A terminal window showing/);
     mode = "valid";
     before = nativeCalls.length;
     assert.equal((await turn(port, imageTurn({ question: "valid control" }))).status, 200);
@@ -908,7 +903,7 @@ test("native image streams without completion never switch engines or enter the 
         const text = textParts(routedInputs.at(-1)).join("\n");
         if (valid) assert.match(text, /PARTIAL_JSON_IMAGE_CONTENT/);
         else {
-          assert.match(text, /stopped partway through reading it/);
+          assert.match(text, /returned an unreadable response/);
           assert.doesNotMatch(text, /PARTIAL_JSON_IMAGE_CONTENT|A terminal window showing/);
         }
       }

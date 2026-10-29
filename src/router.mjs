@@ -284,11 +284,10 @@ import {
   hasNativeSession,
   inputHasImage,
   nativeAccountKey,
-  resolveVisionEngines,
+  resolveVisionEngine,
   stripImages,
   substituteImages,
   supportsImageInput,
-  VisionStreamError,
 } from "./vision-bridge.mjs";
 import { readHiddenModels } from "./model-picker-state.mjs";
 import { readVisionBridgeSettings } from "./vision-bridge-state.mjs";
@@ -2231,7 +2230,7 @@ function rememberVisionFailure(readKey, error, now = Date.now()) {
 // Codex resends the whole conversation every turn, so the same screenshot
 // arrives again on every follow-up. Without the hash cache a five-turn
 // conversation about one image would buy the same transcript five times.
-async function visionEvidenceFor(url, engine, request, effort, question = "", retryDelaysMs) {
+async function visionEvidenceFor(url, engine, request, effort, question = "") {
   // A native engine is spent on the caller's own ChatGPT session, so it can
   // only be reached with the headers this very request arrived with. The router
   // never stores those.
@@ -2267,7 +2266,10 @@ async function visionEvidenceFor(url, engine, request, effort, question = "", re
   // waiting on and cost it an image it could have had. `describeImage` bounds
   // itself with its own timeout, and an abandoned read still fills the cache
   // for the retry that usually follows.
-  const read = readVisionEvidence({ url, engine, nativeCall, effort, question, key, retryDelaysMs });
+  if (providerCooldown(cooldownScope(visionEngineProvider(engine)))) {
+    throw new Error(`${engine.displayName || engine.slug} is temporarily unavailable because its provider reported a quota or rate limit`);
+  }
+  const read = readVisionEvidence({ url, engine, nativeCall, effort, question, key });
   visionReadsInFlight.set(readKey, read);
   try {
     return await read;
@@ -2287,7 +2289,7 @@ async function visionEvidenceFor(url, engine, request, effort, question = "", re
 // leave no trace at all. Token counts are not available here (`describeImage`
 // returns the transcript, not the envelope), so the event carries what it
 // honestly has.
-async function readVisionEvidence({ url, engine, nativeCall, effort, question, key, retryDelaysMs }) {
+async function readVisionEvidence({ url, engine, nativeCall, effort, question, key }) {
   const startedAt = Date.now();
   let status = 0;
   try {
@@ -2299,7 +2301,6 @@ async function readVisionEvidence({ url, engine, nativeCall, effort, question, k
       nativeCall,
       effort,
       question,
-      ...(retryDelaysMs ? { retryDelaysMs } : {}),
     });
     status = 200;
     return evidenceCache.set(key, question, text);
@@ -2476,26 +2477,8 @@ async function bridgeVisionInput(input, route, request) {
     return stripImages(input, `${route.displayName || route.slug} cannot read images`).input;
   }
   const settings = readVisionBridgeSettings();
-  // Nothing below is evaluated unless `resolveVisionEngines` is actually going to
-  // rank candidates, which it is not when the bridge is off and not when the
-  // engine is pinned to `local`. Both of those used to pay for this list anyway:
-  // `selectedConfiguredListedModels()` probes every provider's credential
-  // synchronously, spawning `/usr/bin/security` once per provider per keychain
-  // service on macOS, and this runs inside the request handler -- so a bridge
-  // that was switched off still stalled the event loop for ~250ms on every
-  // pasted image, for every other in-flight request as well.
-  //
-  // The set itself is unchanged. It is still exactly the selected, credentialed,
-  // listed models, plus native candidates that need two things at once, neither
-  // sufficient alone. The shared helper (`src/vision-engines.mjs`) applies the
-  // same auth gate the catalog build and the tray apply -- this path used to
-  // read the capture off disk with no gate at all. But every on-disk artifact is
-  // reused across a failed probe by design, so a sign-out leaves them naming an
-  // engine nothing can call. The caller's live session is the evidence that
-  // cannot be stale, so it has to hold too: without one there is no native
-  // engine to nominate, and a pin naming one stops resolving on the very next
-  // paste rather than at the next catalog rebuild.
-  const engines = resolveVisionEngines(
+  // Build remote candidates lazily; native candidates also require a live session.
+  const engine = resolveVisionEngine(
     () => [
       ...selectedConfiguredListedModels(),
       ...(request && hasNativeSession(nativeHeaders(request))
@@ -2504,7 +2487,7 @@ async function bridgeVisionInput(input, route, request) {
     ],
     settings,
   );
-  if (!engines.length) {
+  if (!engine) {
     // The catalog only advertises image input while an engine resolves, so
     // this is the race where one went away mid-conversation, or a client that
     // attached an image regardless.
@@ -2513,71 +2496,14 @@ async function bridgeVisionInput(input, route, request) {
       "the router's vision bridge is off or has no enabled vision model to read it with",
     ).input;
   }
-  const { effort } = settings;
-  let fellBack = 0;
-  // A quota exhaustion is account/provider-wide evidence, not a reason to walk
-  // every model slug backed by that same account. Keep this set scoped to the
-  // current bridge call when the provider did not name a reset window; that
-  // avoids duplicate spend without inventing how long the quota will stay
-  // empty. A provider-named window is persisted by readVisionEvidence instead.
-  const exhaustedProviders = new Set();
-  // Each engine in turn until one reads the image. The first is the operator's
-  // choice and answers nearly always; the rest exist so a lapsed session or a
-  // provider outage costs a slower read rather than the whole image.
-  const readWithAnyEngine = async (url, question) => {
-    let lastError;
-    for (const [index, engine] of engines.entries()) {
-      // The same identity the window was recorded under: a separately billed
-      // variant shares this account's credential but not its allowance.
-      const provider = cooldownScope(visionEngineProvider(engine));
-      const cooled = providerCooldown(provider);
-      if (cooled || exhaustedProviders.has(provider)) {
-        lastError ??= new Error(
-          `${engine.displayName || engine.slug} is temporarily unavailable because its provider reported a quota or rate limit`,
-        );
-        continue;
-      }
-      // Retry the engine only when there is nothing else to try. Waiting out a
-      // 250ms + 1s ladder against an endpoint that is down, when a working
-      // engine is sitting right behind it, is how a fallback that works turns
-      // into a paste that takes half a minute -- measured at 30-52s before this
-      // line existed. Another provider beats another attempt.
-      const last = index === engines.length - 1;
-      try {
-        const text = await visionEvidenceFor(
-          url,
-          engine,
-          request,
-          effort,
-          question,
-          last ? undefined : [],
-        );
-        if (index) fellBack += 1;
-        return { text, engineName: engine.displayName || engine.slug };
-      } catch (error) {
-        lastError = error;
-        // A generation already started; an unreadable terminal result must not
-        // buy the image again from another engine.
-        if (error instanceof VisionStreamError || error?.code === "upstream_redirect_refused") throw error;
-        if (error?.failureKind === "out_of_usage") exhaustedProviders.add(provider);
-      }
-    }
-    // Every engine refused, so the turn says what the last one said -- the
-    // operator's own engine is named first in the log line above it.
-    throw lastError;
-  };
-  const result = await substituteImages(input, (url, _ordinal, question) =>
-    readWithAnyEngine(url, question),
-  );
-  // Never gated on QUIET, for the same reason the retry line is not: a
-  // production LaunchAgent hard-sets `CODEX_ROUTER_QUIET=1`, and this is the
-  // one line that says the router spent an engine's quota on a paste nobody
-  // named. Silent automatic spending is the failure mode; the log carries a
-  // model, an engine, and counts -- never a transcript.
+  const result = await substituteImages(input, async (url, _ordinal, question) => ({
+    text: await visionEvidenceFor(url, engine, request, settings.effort, question),
+    engineName: engine.displayName || engine.slug,
+  }));
+  // Record the engine used for this auxiliary read.
   console.error(
-    `[codex-router] vision-bridge model=${route.slug} engine=${engines[0].slug} ` +
-      `images=${result.images} described=${result.described} failed=${result.failed}` +
-      (fellBack ? ` fellBack=${fellBack}` : ""),
+    `[codex-router] vision-bridge model=${route.slug} engine=${engine.slug} ` +
+      `images=${result.images} described=${result.described} failed=${result.failed}`,
   );
   return result.input;
 }

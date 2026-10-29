@@ -1,1 +1,1 @@
-- Require successful completion before accepting an image reading, keeping partial streams and explicitly incomplete JSON out of evidence and its cache without automatically buying another generation from a fallback engine.
+- Simplify image reading to one selected engine and one request. Remove automatic retries and cross-engine fallback; successful readings still cache and partial readings remain explicit failures.
