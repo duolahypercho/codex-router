@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import vm from "node:vm";
 
 const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-selection-"));
 process.env.CODEX_HOME = path.join(testRoot, "codex");
@@ -378,6 +379,55 @@ test("non-string policy entries neither throw nor authorize coerced provider ids
     }
   } finally {
     rmSync(testRoot, { recursive: true, force: true });
+  }
+});
+
+test("a dangling selection policy keeps providers hidden while a readable symlink keeps working", (t) => {
+  try {
+    mkdirSync(path.dirname(PROVIDER_SELECTION_PATH), { recursive: true });
+    const target = path.join(testRoot, "missing-policy.json");
+    try {
+      symlinkSync(target, PROVIDER_SELECTION_PATH, "file");
+    } catch (error) {
+      if (process.platform === "win32" && error?.code === "EPERM") {
+        t.skip("Windows fixture cannot create file symlinks without the required privilege");
+        return;
+      }
+      throw error;
+    }
+    assert.equal(lstatSync(PROVIDER_SELECTION_PATH).isSymbolicLink(), true);
+    assert.deepEqual(readProviderSelection(), []);
+    assert.match(readProviderSelectionDetail().degraded, /Unreadable provider selection/);
+    assert.deepEqual(pruneUnconfiguredProviders(), []);
+    assert.equal(lstatSync(PROVIDER_SELECTION_PATH).isSymbolicLink(), true);
+
+    writeFileSync(target, JSON.stringify({ version: 1, providers: ["deepseek"] }));
+    assert.deepEqual(readProviderSelection(), ["deepseek"]);
+    assert.equal(readProviderSelectionDetail().degraded, undefined);
+  } finally {
+    rmSync(testRoot, { recursive: true, force: true });
+  }
+});
+
+test("selection read ENOENT requires directory-entry absence before using the legacy default", () => {
+  for (const state of ["present", "unreadable", "absent"]) {
+    let inspections = 0;
+    const read = vm.runInNewContext(`(${readProviderSelectionDetail.toString()})`, {
+      process: { env: {} }, TARGET: "codex", PROVIDER_SELECTION_PATH: "synthetic-policy",
+      providerIds: () => ["legacy-default"],
+      readFileSync: () => { throw Object.assign(new Error("missing target"), { code: "ENOENT" }); },
+      lstatSync: () => {
+        inspections += 1;
+        if (state !== "present") throw Object.assign(new Error("entry check"), {
+          code: state === "absent" ? "ENOENT" : "EACCES",
+        });
+        return { isSymbolicLink: () => true };
+      },
+    });
+    const result = read();
+    assert.equal(inspections, 1, state);
+    assert.deepEqual(Array.from(result.providers), state === "absent" ? ["legacy-default"] : []);
+    assert.equal(Boolean(result.degraded), state !== "absent");
   }
 });
 

@@ -2,6 +2,7 @@ import { COMPATIBILITY_LAYER } from "./model-registry.mjs";
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
 } from "node:fs";
@@ -163,7 +164,13 @@ export function readProviderSelectionDetail() {
     parsed = JSON.parse(readFileSync(PROVIDER_SELECTION_PATH, "utf8"));
   } catch (error) {
     if (error?.code === "ENOENT") {
-      return { providers: providerIds(), ignored: [], degraded: undefined };
+      try {
+        lstatSync(PROVIDER_SELECTION_PATH);
+      } catch (entryError) {
+        if (entryError?.code === "ENOENT") {
+          return { providers: providerIds(), ignored: [], degraded: undefined };
+        }
+      }
     }
     return {
       providers: [],
