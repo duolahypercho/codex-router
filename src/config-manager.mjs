@@ -80,7 +80,6 @@ const standaloneWebSearchStartMarker =
   "# BEGIN codex-router-standalone-web-search-managed";
 const standaloneWebSearchEndMarker =
   "# END codex-router-standalone-web-search-managed";
-const createdAgentsTableMarker = "# codex-router-created-agents-table";
 const managedAgentMaxConcurrency = 6;
 // Codex 0.147 records a child's FINAL_ANSWER as subAgentActivity
 // `interacted` and keeps that child visually working for the whole live
@@ -270,66 +269,8 @@ function removeMarkedBlock(input) {
   );
 }
 
-function removeCreatedAgentsTableIfEmpty(input) {
-  const lines = input.split("\n");
-  const markerIndex = lines.findIndex(
-    (line) => line.trim() === createdAgentsTableMarker,
-  );
-  if (markerIndex === -1) return input;
-
-  let headerIndex = markerIndex + 1;
-  while (headerIndex < lines.length && !lines[headerIndex].trim()) headerIndex += 1;
-  if (!/^\s*\[\s*agents\s*\]\s*(?:#.*)?$/.test(lines[headerIndex] || "")) {
-    lines.splice(markerIndex, 1);
-    return lines.join("\n");
-  }
-
-  let tableEnd = headerIndex + 1;
-  while (tableEnd < lines.length && !/^\s*\[/.test(lines[tableEnd])) tableEnd += 1;
-  const hasUserValues = lines
-    .slice(headerIndex + 1, tableEnd)
-    .some((line) => line.trim() && !line.trim().startsWith("#"));
-  if (hasUserValues) {
-    lines.splice(markerIndex, 1);
-  } else {
-    lines.splice(headerIndex, 1);
-    lines.splice(markerIndex, 1);
-  }
-  return lines.join("\n");
-}
-
-function removeEmptyFeaturesTable(input) {
-  const lines = input.split("\n");
-  const headers = lines
-    .map((line, index) =>
-      /^\s*\[features\]\s*(?:#.*)?$/.test(line) ? index : -1,
-    )
-    .filter((index) => index !== -1);
-  if (!headers.length) return input;
-  const remove = new Set();
-  for (const header of headers) {
-    let tableEnd = header + 1;
-    while (tableEnd < lines.length && !/^\s*\[/.test(lines[tableEnd])) tableEnd += 1;
-    const hasValue = lines
-      .slice(header + 1, tableEnd)
-      .some((line) => line.trim() && !line.trim().startsWith("#"));
-    if (hasValue) continue;
-    remove.add(header);
-    for (let index = header + 1; index < tableEnd; index += 1) remove.add(index);
-  }
-  if (!remove.size) return input;
-  return lines
-    .map((line, index) => (remove.has(index) ? null : line))
-    .filter((line) => line !== null)
-    .join("\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trimEnd();
-}
-
 function withoutManagedAgentConcurrency(input) {
-  return removeCreatedAgentsTableIfEmpty(
-    removeMarkerPair(input, agentConcurrencyStartMarker, agentConcurrencyEndMarker),
-  );
+  return removeMarkerPair(input, agentConcurrencyStartMarker, agentConcurrencyEndMarker);
 }
 
 function withoutManagedMultiAgentV2(input) {
@@ -1269,9 +1210,7 @@ function clean(contents) {
   const knownManaged =
     markerPairs.some(([start]) => contents.includes(start)) ||
     knownCatalogPaths.some((catalogPath) => contents.includes(catalogPath));
-  const withoutBlock = removeEmptyFeaturesTable(
-    removeCreatedAgentsTableIfEmpty(removeMarkedBlock(contents)),
-  );
+  const withoutBlock = removeMarkedBlock(contents);
   const { rootLines, tableLines } = splitRoot(withoutBlock);
   const rootText = rootLines.join("\n");
   const bases = new Set(rootAssignmentIndexes(rootText, "openai_base_url"));

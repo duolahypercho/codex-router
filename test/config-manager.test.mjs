@@ -2666,3 +2666,23 @@ test("a multiline model setting is refused without partial deletion", () => {
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("cleanup preserves empty tables and multiline table examples", () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "router-empty-table-prose-"));
+  const config = path.join(home, "config.toml");
+  const prose = "developer_instructions = '''\n# codex-router-created-agents-table\n[agents]\n[features]\n\n[example]\ntext only\n'''";
+  const contents = `${prose}\nmodel = "gpt-5.6-sol"\n[agents]\n[features]\n`;
+  writeFileSync(config, contents);
+  try {
+    const env = { MODEL_ROUTER_STATE_DIR: path.join(home, "router-state") };
+    run("enable", home, undefined, [], env);
+    assert.ok(readFileSync(config, "utf8").includes(prose));
+    run("disable", home, undefined, [], env);
+    const restored = readFileSync(config, "utf8");
+    assert.ok(restored.includes(prose));
+    assert.match(restored.replace(prose, ""), /\[agents\]\s*\[features\]/);
+    assert.doesNotMatch(restored.replace(prose, ""), /BEGIN codex-router/);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
