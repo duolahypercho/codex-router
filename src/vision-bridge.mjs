@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { parseSseBlockEvent } from "./grok-oauth-turn.mjs";
+import { ResponseOutcomeObserver } from "./response-outcome.mjs";
 import { generationRedirectRefusal, rejectGenerationRedirect } from "./generation-redirect.mjs";
 
 import { upstreamFailureKind } from "./error-translation.mjs";
@@ -794,11 +796,9 @@ export class VisionStreamError extends Error {
   }
 }
 
-const STREAM_FAILURE_TYPES = new Set(["error", "response.failed", "response.incomplete"]);
-
 // Reassembles a Responses SSE stream into the same string the buffered shape
-// would have produced. Deltas are preferred because they are always present;
-// the terminal `response.completed` envelope is the fallback for a backend that
+// would have produced. Once completion is established, prefer streamed deltas;
+// the terminal response envelope is the fallback for a backend that
 // only sends the finished object, and it is read with the same parser as a
 // non-streaming reply so both paths agree on what counts as text.
 //
@@ -814,37 +814,29 @@ const STREAM_FAILURE_TYPES = new Set(["error", "response.failed", "response.inco
 export function streamedResponseText(body) {
   const deltas = [];
   let envelope;
-  let failed = false;
+  const outcome = new ResponseOutcomeObserver();
   for (const block of String(body).split(/\r?\n\r?\n/)) {
-    for (const line of block.split(/\r?\n/)) {
-      if (!line.startsWith("data:")) continue;
-      const data = line.slice(5).trim();
-      if (!data || data === "[DONE]") continue;
-      let event;
-      try {
-        event = JSON.parse(data);
-      } catch {
-        continue;
-      }
-      if (event?.type === "response.output_text.delta" && typeof event.delta === "string") {
-        deltas.push(event.delta);
-      } else if (STREAM_FAILURE_TYPES.has(event?.type) || event?.error) {
-        failed = true;
-        if (event?.response) envelope = event.response;
-      } else if (event?.response) {
-        envelope = event.response;
-      }
+    const event = parseSseBlockEvent(block);
+    outcome.observe(event);
+    if (event?.error) outcome.observe({ type: "error" });
+    if (event?.type === "response.output_text.delta" && typeof event.delta === "string") {
+      deltas.push(event.delta);
+    } else if (
+      (event?.type === "response.completed" || event?.type === "response.done")
+      && event.response && typeof event.response === "object"
+      && !Array.isArray(event.response)
+    ) {
+      envelope = event.response;
     }
   }
-  // A backend that only ever sends the finished object leaves `status` unset,
-  // so an absent status is not a verdict. A present one that is not
-  // "completed" is: the stream stopped somewhere other than the end.
-  const status = typeof envelope?.status === "string" ? envelope.status : undefined;
-  if (failed || (status !== undefined && status !== "completed")) {
+  // Deltas and HTTP EOF do not certify a full image reading. The terminal's
+  // embedded status follows the same conservative rule as other Responses
+  // consumers; a failure cannot be erased by a later completed event.
+  if (!envelope || outcome.outcome() !== "completed") {
     throw new VisionStreamError("the reader's response stream failed before it finished");
   }
   const streamed = deltas.join("").trim();
-  return streamed || (envelope ? responseText(envelope) : "");
+  return streamed || responseText(envelope);
 }
 
 // The Codex backend rejects a non-streaming Responses call outright with

@@ -1145,6 +1145,8 @@ test("describeImage sends a native engine to the Codex backend with the caller's
           "",
           'data: {"type":"response.output_text.delta","delta":"An invoice."}',
           "",
+          'data: {"type":"response.completed","response":{"status":"completed","output":[]}}',
+          "",
           "data: [DONE]",
           "",
         ].join("\n"),
@@ -1196,6 +1198,8 @@ test("a streamed reply is reassembled from deltas, and from the final envelope w
     "",
     'data: {"type":"response.output_text.delta","delta":"A chart."}',
     "",
+    'data: {"type":"response.completed","response":{"status":"completed","output":[]}}',
+    "",
     "data: [DONE]",
     "",
   ].join("\n");
@@ -1207,8 +1211,9 @@ test("a streamed reply is reassembled from deltas, and from the final envelope w
     'data: {"type":"response.completed","response":{"output":[{"content":[{"type":"output_text","text":"Only at the end."}]}]}}\n\n';
   assert.equal(streamedResponseText(envelope), "Only at the end.");
 
-  // Keep-alives and unparseable lines must not break reassembly.
-  assert.equal(streamedResponseText(": keep-alive\n\ndata: not json\n\n"), "");
+  // Inert or malformed frames do not hide a real terminal or certify one.
+  assert.equal(streamedResponseText(`: keep-alive\n\ndata: not json\n\n${envelope}`), "Only at the end.");
+  assert.throws(() => streamedResponseText(": keep-alive\n\ndata: not json\n\n"), VisionStreamError);
 });
 
 test("effort levels are read from both catalog spellings", () => {
@@ -1252,7 +1257,7 @@ test("a chosen effort rides along to the engine", async () => {
     effort: "xhigh",
     fetchImpl: async (url, init) => {
       body = JSON.parse(init.body);
-      return new Response('data: {"type":"response.output_text.delta","delta":"An invoice."}\n\n', {
+      return new Response('data: {"type":"response.output_text.delta","delta":"An invoice."}\n\ndata: {"type":"response.completed","response":{"status":"completed","output":[]}}\n\n', {
         status: 200,
       });
     },
@@ -1277,7 +1282,7 @@ test("an effort the engine never offered is dropped rather than sent", async () 
     effort: "max",
     fetchImpl: async (url, init) => {
       body = JSON.parse(init.body);
-      return new Response('data: {"type":"response.output_text.delta","delta":"An invoice."}\n\n', {
+      return new Response('data: {"type":"response.output_text.delta","delta":"An invoice."}\n\ndata: {"type":"response.completed","response":{"status":"completed","output":[]}}\n\n', {
         status: 200,
       });
     },
@@ -1298,7 +1303,7 @@ test("no chosen effort leaves the request exactly as it was", async () => {
     },
     fetchImpl: async (url, init) => {
       body = JSON.parse(init.body);
-      return new Response('data: {"type":"response.output_text.delta","delta":"An invoice."}\n\n', {
+      return new Response('data: {"type":"response.output_text.delta","delta":"An invoice."}\n\ndata: {"type":"response.completed","response":{"status":"completed","output":[]}}\n\n', {
         status: 200,
       });
     },
@@ -1360,6 +1365,31 @@ test("a terminal response whose status is not completed is a failure", () => {
   assert.throws(() => streamedResponseText(body), VisionStreamError);
 });
 
+test("image deltas need an actual successful terminal, not clean EOF or DONE text", () => {
+  for (const tail of [
+    "",
+    "data: [DONE]\n\n",
+    'data: {"type":"response.created","response":{"status":"completed"}}\n\n',
+    'data: {"type":"response.completed","response":[]}\n\n',
+    'data: {"type":"response.completed","response":{"status":"unknown"}}\n\n',
+    'data: {"type":"response.cancelled"}\n\n',
+    'data: {"type":"response.failed"}\n\ndata: {"type":"response.completed","response":{"status":"completed"}}\n\n',
+  ]) {
+    assert.throws(() => streamedResponseText(`${DELTA_LINES.join("\n")}\n${tail}`), VisionStreamError);
+  }
+});
+
+test("vision completion uses SSE data framing and retains a terminal-only reading", () => {
+  const terminal = [
+    ": keep-alive",
+    "event: response.completed",
+    'data: {"type":"response.completed",',
+    'data: "response":{"status":"completed","output_text":"A complete reading."}}',
+    "", "",
+  ].join("\r\n");
+  assert.equal(streamedResponseText(terminal), "A complete reading.");
+});
+
 test("the streamed shapes that already worked keep working", () => {
   // A normal stream carries an in_progress envelope before the deltas and a
   // completed one after. Neither may be mistaken for a failure.
@@ -1384,37 +1414,45 @@ test("the streamed shapes that already worked keep working", () => {
 });
 
 test("a mid-stream failure degrades that one image instead of quoting a truncated read", async () => {
-  const result = await substituteImages(imageInput(), async (url) => ({
-    text: await describeImage({
-      engine: nativeVisionEngine(NATIVE_LUNA),
-      imageUrl: url,
-      gatewayBase: "http://127.0.0.1:4100/v1",
-      headers: {},
-      nativeCall: {
-        baseUrl: "https://chatgpt.com/backend-api/codex",
-        headers: { Authorization: "Bearer caller-session" },
-      },
-      fetchImpl: async () =>
-        new Response(
-          [
-            ...DELTA_LINES,
-            'data: {"type":"error","error":{"message":"upstream overloaded"}}',
-            "",
-          ].join("\n"),
-          { status: 200 },
-        ),
-    }),
-    engineName: "GPT-5.6 Luna",
-  }));
-  assert.equal(result.described, 0);
-  assert.equal(result.failed, 1);
-  const text = result.input[0].content[1].text;
-  // The degradation path already existed; it simply never fired here.
-  assert.match(text, /could not be read/);
-  assert.match(text, /stopped partway through/);
-  // The half-read transcript must not survive into the turn under any framing.
-  assert.doesNotMatch(text, /Invoice 4471/);
-  assert.doesNotMatch(text, /IMAGE EVIDENCE/);
+  for (const tail of [
+    ['data: {"type":"error","error":{"message":"upstream overloaded"}}', ""],
+    [],
+  ]) {
+    let reads = 0;
+    const result = await substituteImages(imageInput(), async (url) => ({
+      text: await describeImage({
+        engine: nativeVisionEngine(NATIVE_LUNA),
+        imageUrl: url,
+        gatewayBase: "http://127.0.0.1:4100/v1",
+        headers: {},
+        nativeCall: {
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          headers: { Authorization: "Bearer caller-session" },
+        },
+        fetchImpl: async () => {
+          reads += 1;
+          return new Response(
+            [
+              ...DELTA_LINES,
+              ...tail,
+            ].join("\n"),
+            { status: 200 },
+          );
+        },
+      }),
+      engineName: "GPT-5.6 Luna",
+    }));
+    assert.equal(reads, 1, "an indeterminate partial read must not buy another generation");
+    assert.equal(result.described, 0);
+    assert.equal(result.failed, 1);
+    const text = result.input[0].content[1].text;
+    // The degradation path already existed; it simply never fired here.
+    assert.match(text, /could not be read/);
+    assert.match(text, /stopped partway through/);
+    // The half-read transcript must not survive into the turn under any framing.
+    assert.doesNotMatch(text, /Invoice 4471/);
+    assert.doesNotMatch(text, /IMAGE EVIDENCE/);
+  }
 });
 
 // --- one native gate, not three -------------------------------------------

@@ -1,0 +1,1 @@
+- Reject image-reading streams that end without a successful response terminal, keeping partial readings out of complete evidence and its cache while preserving per-image failure handling.
