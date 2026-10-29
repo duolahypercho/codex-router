@@ -1554,8 +1554,8 @@ function buildModelBreakdown(
         inputTokens: Number.isFinite(Number(model.inputTokens)) ? Number(model.inputTokens) : null,
         cachedInputTokens: null,
         outputTokens: Number.isFinite(Number(model.outputTokens)) ? Number(model.outputTokens) : null,
-        tokensPerSecond: Number.isFinite(Number(model.observedTokensPerSecond))
-          ? Number(model.observedTokensPerSecond)
+        tokensPerSecond: model.observedTokensPerSecond != null && Number.isFinite(model.observedTokensPerSecond)
+          ? model.observedTokensPerSecond
           : null,
         speedSampleCount: Number(model.speedSampleCount) || 0,
       })),

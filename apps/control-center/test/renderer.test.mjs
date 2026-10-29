@@ -494,6 +494,11 @@ const bridgeSource = String.raw`
             last24hTokens: totalTokens,
             last24hRequests: 8,
             dailyUsageBuckets: [{ startDate: accountUsageDay, tokens: totalTokens, requests: 8 }],
+            ...(searchParams.get("speedTelemetry") === "1" ? { models: [
+              { slug: "deepseek/unknown-speed", displayName: "Unmeasured speed model", requests: 1, totalTokens: 10, observedTokensPerSecond: null, speedSampleCount: 0 },
+              { slug: "deepseek/zero-speed", displayName: "Measured zero model", requests: 1, totalTokens: 10, observedTokensPerSecond: 0, speedSampleCount: 1 },
+              { slug: "deepseek/known-speed", displayName: "Measured speed model", requests: 1, totalTokens: 10, observedTokensPerSecond: 12, speedSampleCount: 1 },
+            ] } : {}),
             account: {
               status: "available",
               metrics: [
@@ -2039,5 +2044,26 @@ test("Status keeps differently scoped cache facts without inventing a percentage
     await facts.getByText("100k", { exact: true }).waitFor();
     assert.equal(await facts.locator("div").count(), 2);
     assert.doesNotMatch(await facts.innerText(), /Reuse share|20\.0%|100\.0%/);
+  } finally { await browser.close(); await close(); }
+});
+
+test("null speed stays unmeasured while numeric zero remains a speed sample", { timeout: 30_000 }, async () => {
+  assert.ok(chromiumPath, "No Chromium executable is available.");
+  const { url, close } = await serveRenderer();
+  const browser = await chromium.launch({ executablePath: chromiumPath, headless: true });
+  try {
+    const page = await newEnglishTestPage(browser);
+    await page.goto(url + "?speedTelemetry=1");
+    const dashboard = page.locator(".db-breakdown-row");
+    await dashboard.filter({ hasText: "Unmeasured speed model" }).waitFor();
+    assert.equal(await dashboard.filter({ hasText: "Unmeasured speed model" }).locator(".is-speed").count(), 0);
+    assert.equal(await dashboard.filter({ hasText: "Measured zero model" }).locator(".is-speed").innerText(), "0.0 tok/s");
+    await page.getByRole("button", { name: "Status", exact: true }).click();
+    const unknown = page.locator(".st-model-row").filter({ hasText: "Unmeasured speed model" });
+    await unknown.getByText("Speed unmeasured", { exact: true }).waitFor();
+    assert.doesNotMatch(await unknown.innerText(), /0\.0 tok\/s/);
+    assert.equal(await page.locator(".st-speed-list article").count(), 2);
+    assert.equal(await page.locator(".st-speed-list").getByText("0.0 tok/s", { exact: true }).count(), 1);
+    assert.equal(await page.locator(".st-speed-list").getByText("12.0 tok/s", { exact: true }).count(), 1);
   } finally { await browser.close(); await close(); }
 });
