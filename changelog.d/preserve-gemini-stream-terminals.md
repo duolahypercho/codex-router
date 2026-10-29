@@ -1,0 +1,1 @@
+- **Preserve Gemini stream framing and completion evidence.** Accept CRLF canonical SSE and stop inferring success from partial output; interrupted streams close with a non-success finish reason instead of STOP.
