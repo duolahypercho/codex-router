@@ -150,6 +150,22 @@ function modalitiesFrom(source, keys) {
   return normalizeModalities(value, keys[0]);
 }
 
+// Simultaneous advertised scopes are limits, so the smallest usable value wins.
+export function advertisedContextLength(record, { numericStrings = false } = {}) {
+  let smallest;
+  for (let value of [
+    record?.context_length, record?.contextWindow, record?.context_window,
+    record?.max_context_window_tokens, record?.top_provider?.context_length,
+    record?.capabilities?.context_length, record?.capabilities?.context_window,
+    record?.capabilities?.limits?.max_context_window_tokens,
+  ]) {
+    if (numericStrings && typeof value === "string" && /^\d+$/.test(value.trim())) value = Number(value);
+    if (!Number.isInteger(value) || value < 1) continue;
+    if (smallest === undefined || value < smallest) smallest = value;
+  }
+  return smallest;
+}
+
 /** Convert a provider's OpenAI-compatible `/models` record into canonical metadata. */
 export function modelMetadataFromProviderRecord(record, { trusted = false } = {}) {
   if (!record || typeof record !== "object" || Array.isArray(record)) {
@@ -166,11 +182,8 @@ export function modelMetadataFromProviderRecord(record, { trusted = false } = {}
   const displayName = first(record, ["display_name", "displayName", "name"]);
   if (displayName !== undefined) metadata.displayName = displayName;
 
-  const context = first(record, ["context_length", "contextWindow", "context_window", "max_context_window_tokens"])
-    ?? first(capabilities, ["context_length", "context_window"])
-    ?? first(capabilities.limits || {}, ["max_context_window_tokens"])
-    ?? first(record.top_provider || {}, ["context_length"]);
-  if (context !== undefined) metadata.contextWindow = typeof context === "string" && /^\d+$/.test(context.trim()) ? Number(context) : context;
+  const context = advertisedContextLength(record, { numericStrings: true });
+  if (context !== undefined) metadata.contextWindow = context;
 
   const input = modalitiesFrom(record, ["input_modalities", "inputModalities"])
     ?? modalitiesFrom(architecture, ["input_modalities", "inputModalities"]);

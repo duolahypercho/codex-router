@@ -1,0 +1,1 @@
+- Use the smallest advertised serving limit for generic curation and built-in discovery through the same context-window parser.

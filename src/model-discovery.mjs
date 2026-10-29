@@ -10,6 +10,7 @@ import {
 } from "./model-catalog-cache.mjs";
 import { modelCatalogMetadata } from "./model-catalog-metadata.mjs";
 import {
+  advertisedContextLength,
   mergeDiscoveredModels,
   modelMetadataFromPreset,
   modelMetadataFromProviderRecord,
@@ -202,19 +203,6 @@ export function freeModelIds(payload, provider) {
 // rely on: a model that can do 200K reached through an endpoint that serves
 // 131K is a 131K model here. Anything that is not a positive integer is treated
 // as silence -- a string, a float, or a zero is a catalog quirk, not a size.
-function advertisedContextLength(item) {
-  let smallest;
-  for (const value of [
-    item?.context_length,
-    item?.top_provider?.context_length,
-    item?.context_window,
-    item?.capabilities?.limits?.max_context_window_tokens,
-  ]) {
-    if (!Number.isInteger(value) || value < 1) continue;
-    if (smallest === undefined || value < smallest) smallest = value;
-  }
-  return smallest;
-}
 
 // Model id -> input modalities the provider itself stated for that model.
 // Present only where a record said so: curation must be able to tell a served
