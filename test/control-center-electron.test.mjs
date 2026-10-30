@@ -1824,9 +1824,12 @@ test("the model directory combines provider setup with de-duplicated model-famil
   assert.match(models, /className="pm-group-heading"/);
   assert.match(providerModelsCss, /\.pm-group-heading\s*\{/);
 
-  // The switch states its own value, and the disclosure sits at the far left
-  // so it cannot read as part of that switch.
-  assert.match(models, /className="pm-family-state" aria-hidden>\{on \? t\("models\.status\.on"\) : t\("models\.status\.off"\)\}/);
+  // Families expose their summary to readers; mutations stay on individual
+  // routes, including the shortcut for a family containing only one route.
+  assert.match(models, /className="pm-family-state">\{on \? t\("models\.status\.on"\) : t\("models\.status\.off"\)\}/);
+  assert.doesNotMatch(models, /updateFamilyPicker|onFamilyPicker/);
+  assert.match(models, /\{!multiRoute \? \([\s\S]{0,600}onChange=\{\(visible\) => onRoutePicker\(family\.routes\[0\], visible\)\}/);
+  assert.match(models, /onPickerChange=\{\(checked\) => onRoutePicker\(model, checked\)\}/);
   assert.match(models, /<ChevronDown className="pm-accordion-chevron"[\s\S]{0,80}<BrandLogo/);
   assert.match(providerModelsCss, /\.pm-family-open \{[^}]*grid-template-columns: 14px 38px/s);
 
