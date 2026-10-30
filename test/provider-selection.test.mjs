@@ -543,18 +543,18 @@ test("pruneUnconfiguredProviders preserves an empty policy when every stored pro
 
 test("damaged provider policy cannot nominate a disabled remote model for failover or vision", async () => {
   const { rankFailoverCandidates } = await import("../src/model-failover.mjs");
-  const { resolveVisionEngines } = await import("../src/vision-bridge.mjs");
+  const { resolveVisionEngine } = await import("../src/vision-bridge.mjs");
   const remoteSlug = "custom/qwen3.8-27b";
   const failovers = () => rankFailoverCandidates(selectedConfiguredListedModels(), {
     from: { slug: "deepseek/test-source", provider: "deepseek" },
   });
-  const vision = () => resolveVisionEngines(selectedConfiguredListedModels, {
-    enabled: true, engine: null,
+  const vision = () => resolveVisionEngine(selectedConfiguredListedModels, {
+    enabled: true, engine: remoteSlug,
   });
   try {
     writeProviderSelection(["custom"]);
     assert.ok(failovers().some(({ model }) => model.slug === remoteSlug));
-    assert.ok(vision().some((model) => model.slug === remoteSlug));
+    assert.equal(vision()?.slug, remoteSlug);
 
     for (const contents of [
       "{ not json",
@@ -565,7 +565,7 @@ test("damaged provider policy cannot nominate a disabled remote model for failov
       stageSelectionFile(contents);
       assert.deepEqual(readProviderSelection(), []);
       assert.deepEqual(failovers(), []);
-      assert.deepEqual(vision(), []);
+      assert.equal(vision(), undefined);
       assert.ok(providerSelectionStatus().degraded);
       assert.equal(readFileSync(PROVIDER_SELECTION_PATH, "utf8"), contents);
     }
