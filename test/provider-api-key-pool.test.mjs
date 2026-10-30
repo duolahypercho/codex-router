@@ -530,6 +530,8 @@ test("attempts re-read a paused initial candidate before sending", async () => {
 });
 
 test("attempts never retry origin 500 and cap an explicit large attempt request", async () => {
+  // This case measures status and attempt-count policy, not ACL wall time.
+  // Budget expiry during selection/backoff has its own regression below.
   const noRetryPath = path.join(root, "no-retry-500.json");
   for (const id of ["one", "two"]) {
     await upsertProviderApiKey("openrouter", metadata(credential(`five_${id}`, id)), { filePath: noRetryPath });
@@ -543,6 +545,7 @@ test("attempts never retry origin 500 and cap an explicit large attempt request"
       return { status: 500, ok: false, committed: false };
     },
     sleepImpl: async () => {},
+    now: () => NOW,
   });
   assert.equal(calls, 1);
   assert.equal(originFailure.reason, "failed");
@@ -561,6 +564,7 @@ test("attempts never retry origin 500 and cap an explicit large attempt request"
       return { status: 429, ok: false, committed: false };
     },
     sleepImpl: async () => {},
+    now: () => NOW,
   });
   assert.equal(calls, 3);
 });
