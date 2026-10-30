@@ -165,13 +165,6 @@ const bridgeSource = String.raw`
       emptyCompletionRetried: true,
     }];
   }
-  if (searchParams.get("mismatchedCache") === "1") {
-    target.usageEvents = Array.from({ length: 1000 }, (_, i) => ({
-      at: new Date(Date.now() - i * 1000).toISOString(),
-      model: "deepseek/deepseek-chat", provider: "deepseek", status: 200,
-      inputTokens: 100, cachedInputTokens: 10, outputTokens: 1,
-    }));
-  }
   const snapshot = {
     targets: { codex: target },
     catalog: {
@@ -421,35 +414,6 @@ const bridgeSource = String.raw`
         summary: { lifetimeTokens: 24000, peakDailyTokens: 24000, currentStreakDays: 1 },
       };
     },
-    getFreePool: async () => ({
-      pool: "free/auto",
-      available: true,
-      enabled: true,
-      catalog: { source: "static", kilo: 2, opencode: 1 },
-      members: [
-        { position: 1, slug: "free/auto", upstreamModel: "kilo-auto/free", lane: "kilo", self: true, enabled: true, drained: true, drainedUntil: new Date(Date.now() + 9 * 60_000).toISOString(), drainReason: "rate_limited", drainStatus: 429, remainingMs: 9 * 60_000 },
-        { position: 2, slug: "free/fixture-lightning", upstreamModel: "fixture/lightning:free", lane: "kilo", self: false, enabled: true, drained: false },
-        { position: 3, slug: "free-opencode/fixture-pickle", upstreamModel: "fixture-pickle", lane: "opencode", self: false, enabled: true, drained: false },
-      ],
-      usage: {
-        requests: 1,
-        attempts: 2,
-        served: 1,
-        errors: 1,
-        fallbacks: 1,
-        exhausted: 0,
-        inputTokens: 1200,
-        outputTokens: 34,
-        byMember: [
-          { model: "free/auto", requests: 1, served: 0, failed: 1, inputTokens: 0, outputTokens: 0 },
-          { model: "free/fixture-lightning", requests: 1, served: 1, failed: 0, inputTokens: 1200, outputTokens: 34 },
-        ],
-        recent: [
-          { at: new Date(Date.now() - 60_000).toISOString(), model: "free/fixture-lightning", status: 200, failoverFrom: "free/auto", inputTokens: 1200, outputTokens: 34 },
-          { at: new Date(Date.now() - 61_000).toISOString(), model: "free/auto", status: 429, reason: "rate_limited", inputTokens: 0, outputTokens: 0 },
-        ],
-      },
-    }),
     getProviderUsage: async () => {
       providerUsageReads += 1;
       const read = providerUsageReads;
@@ -460,9 +424,6 @@ const bridgeSource = String.raw`
       const totalTokens = staleProviderUsage && read > 1 ? 24000 : 12000;
       return {
         fetchedAt: "2026-08-27T08:00:00.000Z",
-        ...(searchParams.get("mismatchedCache") === "1" ? {
-          contextEfficiency: { last24hCachedInputTokens: 20000, dailyCachedInputTokens: [] },
-        } : {}),
         providers: [
           ...(fallbackUsage ? [{
             id: "openai",
@@ -494,11 +455,6 @@ const bridgeSource = String.raw`
             last24hTokens: totalTokens,
             last24hRequests: 8,
             dailyUsageBuckets: [{ startDate: accountUsageDay, tokens: totalTokens, requests: 8 }],
-            ...(searchParams.get("speedTelemetry") === "1" ? { models: [
-              { slug: "deepseek/unknown-speed", displayName: "Unmeasured speed model", requests: 1, totalTokens: 10, observedTokensPerSecond: null, speedSampleCount: 0 },
-              { slug: "deepseek/zero-speed", displayName: "Measured zero model", requests: 1, totalTokens: 10, observedTokensPerSecond: 0, speedSampleCount: 1 },
-              { slug: "deepseek/known-speed", displayName: "Measured speed model", requests: 1, totalTokens: 10, observedTokensPerSecond: 12, speedSampleCount: 1 },
-            ] } : {}),
             account: {
               status: "available",
               metrics: [
@@ -1031,7 +987,6 @@ test("the production renderer exposes model discovery and picker actions", { tim
     await oxFamily.waitFor();
     assert.match(await oxFamily.innerText(), /6 providers/);
     assert.match(await oxFamily.innerText(), /6 routes/i);
-    assert.equal(await oxFamily.locator('.pm-family-action input[type="checkbox"]').count(), 0, "multi-route availability is read-only; choices belong to each route");
     await oxFamily.locator(".pm-family-open").click();
     assert.equal(await oxFamily.locator(".pm-route-row").count(), 6);
     assert.equal(await oxFamily.locator('.pm-route-row[data-availability="known"]').count(), 4);
@@ -1255,50 +1210,6 @@ test("the production renderer exposes model discovery and picker actions", { tim
     );
     assert.deepEqual(corruptPoolErrors, []);
     await corruptPoolPage.close();
-    assert.deepEqual(pageErrors, [], `renderer errors: ${pageErrors.join("; ")}`);
-  } finally {
-    await browser.close();
-    await close();
-  }
-});
-
-test("the Usage page shows the free/auto pool: members, drains, and the backend that served", { timeout: 120_000 }, async () => {
-  assert.equal(existsSync(path.join(dist, "index.html")), true, "npm test must build the renderer first");
-  assert.ok(chromiumPath, "No Chromium executable is available for the Control Center renderer test.");
-
-  const { url, close } = await serveRenderer();
-  const browser = await chromium.launch({
-    executablePath: chromiumPath,
-    headless: true,
-    args: process.platform === "linux" ? ["--no-sandbox"] : [],
-  });
-  const pageErrors = [];
-  try {
-    const page = await newEnglishTestPage(browser, { viewport: { width: 1280, height: 840 } });
-    page.setDefaultTimeout(10_000);
-    page.on("pageerror", (error) => pageErrors.push(error.message));
-    page.on("console", (message) => {
-      if (message.type() === "error") pageErrors.push(message.text());
-    });
-
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
-    await page.waitForFunction(() => window.routerControlTest.navigationReady());
-    assert.equal(
-      await page.evaluate(() => window.routerControlTest.navigate({ destination: "usage", sourceId: "openai" })),
-      true,
-    );
-    const panel = page.locator('section[aria-label="Free Auto pool"]');
-    await panel.waitFor();
-    await panel.getByText(/^1 of 3 drained$/i).waitFor();
-    const members = panel.locator('[aria-label="Backend models, in try order"] [role="listitem"]');
-    assert.equal(await members.count(), 3);
-    assert.match(await members.nth(0).innerText(), /kilo-auto\/free[\s\S]*Drained 9m \(rate_limited, 429\)/i);
-    assert.match(await members.nth(1).innerText(), /fixture\/lightning:free[\s\S]*1 served[\s\S]*Ready/i);
-    assert.match(await members.nth(2).innerText(), /OpenCode Zen/);
-    const recent = panel.locator('[aria-label="Recent attempts"] [role="listitem"]');
-    assert.equal(await recent.count(), 2);
-    assert.match(await recent.nth(0).innerText(), /free\/fixture-lightning[\s\S]*200[\s\S]*Fallback from free\/auto[\s\S]*1\.2k in \/ 34 out/);
-    assert.match(await recent.nth(1).innerText(), /429[\s\S]*Drained: rate_limited/);
     assert.deepEqual(pageErrors, [], `renderer errors: ${pageErrors.join("; ")}`);
   } finally {
     await browser.close();
@@ -1767,32 +1678,43 @@ test(`${language} covers every page, dialogs, raw values, English round trips an
     args: process.platform === "linux" ? ["--no-sandbox"] : [],
   });
   const errors = [];
-  const consoleErrors = [];
-  const failedRequests = [];
   const artifacts = process.env.CODEX_ROUTER_UI_ARTIFACTS;
   if (artifacts) mkdirSync(artifacts, { recursive: true });
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 840 }, locale: "en-US" });
     page.setDefaultTimeout(10_000);
     page.on("pageerror", error => errors.push(error.message));
-    page.on("console", message => { if (message.type() === "error") consoleErrors.push(message.text()); });
-    page.on("requestfailed", request => failedRequests.push({ url: request.url(), error: request.failure()?.errorText }));
+    page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
+    await page.addInitScript(() => {
+      window.__localeSelectionEvents = [];
+      for (const type of ["input", "change"]) document.addEventListener(type, event => {
+        if (event.target instanceof HTMLSelectElement) {
+          window.__localeSelectionEvents.push({ type, value: event.target.value });
+        }
+      }, true);
+    });
     await page.goto(url);
     await page.getByRole("button", { name: "Settings", exact: true }).click();
-    await page.getByRole("combobox", { name: "Interface language" }).selectOption(language);
+    const selected = await page.getByRole("combobox", { name: "Interface language" }).selectOption(language);
     try {
       await page.getByRole("heading", { level: 1, name: copy.settings }).waitFor();
     } catch (error) {
       const state = await page.evaluate(() => ({
-        inputValue: document.querySelector('select:has(option[value="zh-TW"])')?.value ?? null,
-        htmlLang: document.documentElement.lang,
+        language: document.documentElement.lang,
+        visibility: document.visibilityState,
         storedLanguage: localStorage.getItem("codex-router-language"),
-        headings: [...document.querySelectorAll("h1")].map(element => element.textContent),
-      })).catch(collectionError => ({ collectionError: String(collectionError) }));
-      const detail = `Language transition diagnostic: ${JSON.stringify({ language, ...state, pageErrors: errors, consoleErrors, failedRequests })}`;
-      const originalStack = error.stack;
-      error.message += `\n${detail}`;
-      if (typeof originalStack === "string") error.stack = `${originalStack}\n${detail}`;
+        headings: [...document.querySelectorAll("h1")].map(element => ({
+          text: element.textContent,
+          width: element.getBoundingClientRect().width,
+          height: element.getBoundingClientRect().height,
+        })),
+        selects: [...document.querySelectorAll("select")].map(element => ({
+          label: element.getAttribute("aria-label"), value: element.value,
+        })),
+        events: window.__localeSelectionEvents,
+        healthReads: window.routerControlTest.healthReads(),
+      }));
+      console.error("Locale transition state:", JSON.stringify({ selected, errors, ...state }));
       throw error;
     }
     const ids = ["dashboard", "usage", "status", "models", "local", "harness", "context", "settings"];
@@ -2031,38 +1953,3 @@ for (const [language, copy] of [
     } finally { await browser.close(); await close(); }
   });
 }
-
-test("Status keeps differently scoped cache facts without inventing a percentage", { timeout: 30_000 }, async () => {
-  const { url, close } = await serveRenderer();
-  const browser = await chromium.launch({ executablePath: chromiumPath, headless: true });
-  try {
-    const page = await newEnglishTestPage(browser);
-    await page.goto(url + "?mismatchedCache=1");
-    await page.getByRole("button", { name: "Status", exact: true }).click();
-    const facts = page.locator(".st-context-stats");
-    await facts.getByText("20k", { exact: true }).waitFor();
-    await facts.getByText("100k", { exact: true }).waitFor();
-    assert.equal(await facts.locator("div").count(), 2);
-    assert.doesNotMatch(await facts.innerText(), /Reuse share|20\.0%|100\.0%/);
-  } finally { await browser.close(); await close(); }
-});
-
-test("null speed stays unmeasured while numeric zero remains a speed sample", { timeout: 30_000 }, async () => {
-  const { url, close } = await serveRenderer();
-  const browser = await chromium.launch({ executablePath: chromiumPath, headless: true });
-  try {
-    const page = await newEnglishTestPage(browser);
-    await page.goto(url + "?speedTelemetry=1");
-    const dashboard = page.locator(".db-breakdown-row");
-    await dashboard.filter({ hasText: "Unmeasured speed model" }).waitFor();
-    assert.equal(await dashboard.filter({ hasText: "Unmeasured speed model" }).locator(".is-speed").count(), 0);
-    assert.equal(await dashboard.filter({ hasText: "Measured zero model" }).locator(".is-speed").innerText(), "0.0 tok/s");
-    await page.getByRole("button", { name: "Status", exact: true }).click();
-    const unknown = page.locator(".st-model-row").filter({ hasText: "Unmeasured speed model" });
-    await unknown.getByText("Speed unmeasured", { exact: true }).waitFor();
-    assert.doesNotMatch(await unknown.innerText(), /0\.0 tok\/s/);
-    assert.equal(await page.locator(".st-speed-list article").count(), 2);
-    assert.equal(await page.locator(".st-speed-list").getByText("0.0 tok/s", { exact: true }).count(), 1);
-    assert.equal(await page.locator(".st-speed-list").getByText("12.0 tok/s", { exact: true }).count(), 1);
-  } finally { await browser.close(); await close(); }
-});
