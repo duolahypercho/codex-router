@@ -1980,22 +1980,9 @@ export function registerIpcHandlers({
     if (typeof visible !== "boolean") throw new Error("visible must be boolean.");
     return runJson(["picker", "set", model, visible ? "show" : "hide"], { timeoutMs: CATALOG_MUTATION_TIMEOUT_MS });
   });
-  handleAction("setPickerModels", async (input = {}) => {
-    const { models, showAll } = input;
-    // The renderer's compact "show all" control uses a boolean; bulk callers
-    // may instead provide individual validated model entries.
-    if (typeof models === "undefined" && typeof showAll === "boolean") {
-      return runJson(["picker", "all", showAll ? "show" : "hide"], { timeoutMs: CATALOG_MUTATION_TIMEOUT_MS });
-    }
-    if (!Array.isArray(models) || models.length > 500) throw new Error("models must be an array.");
-    let result;
-    for (const item of models) {
-      const slug = typeof item === "string" ? item : item?.slug;
-      const visible = typeof item === "string" ? true : item?.visible;
-      if (typeof visible !== "boolean") throw new Error("Each picker model needs a boolean visible value.");
-      result = await runJson(["picker", "set", await validateModel(slug), visible ? "show" : "hide"], { timeoutMs: CATALOG_MUTATION_TIMEOUT_MS });
-    }
-    return result || (await runJson(["picker", "status"]));
+  handleAction("setPickerModels", async ({ showAll } = {}) => {
+    if (typeof showAll !== "boolean") throw new Error("showAll must be boolean.");
+    return runJson(["picker", "all", showAll ? "show" : "hide"], { timeoutMs: CATALOG_MUTATION_TIMEOUT_MS });
   });
 
   handleAction("installLocalModel", async ({ tag, yes = false, force = false } = {}) => {

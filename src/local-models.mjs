@@ -440,25 +440,6 @@ export function isLocalModelEnabled(tag, selection = readLocalModelSelection()) 
   return selection.enabled.some((entry) => canonicalLocalModelTag(entry) === canonical);
 }
 
-// Deleting reclaims gigabytes and cannot be undone without downloading again,
-// so the caller must pass explicit consent rather than this inferring it.
-export function removeLocalModel(tag, { spawn = spawnSync, confirmed = false, capabilitiesFor } = {}) {
-  const value = String(tag || "").trim();
-  if (!value) throw new Error("A model tag is required.");
-  if (!confirmed) {
-    throw new Error(`Removing ${value} deletes it from disk. Pass --yes to confirm.`);
-  }
-  const result = spawn(localOllamaBinary(spawn), ["rm", value], { encoding: "utf8" });
-  if (result.status !== 0) {
-    const detail = String(result.stderr || "").trim();
-    throw new Error(`\`ollama rm ${value}\` failed${detail ? `: ${detail}` : "."}`);
-  }
-  // A deleted model cannot stay checked, or the picker would offer something
-  // that is no longer on disk.
-  setLocalModelEnabled(value, false, capabilitiesFor ? { capabilitiesFor } : undefined);
-  return value;
-}
-
 // One view the tray can render directly: what is installed, what is checked,
 // what is loaded, and which ones can read images.
 export function localModelsSnapshot({

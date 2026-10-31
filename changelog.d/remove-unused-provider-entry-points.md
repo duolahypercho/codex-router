@@ -1,0 +1,1 @@
+- **Remove unused provider entry points.** Antigravity sign-in uses the existing session writer, and local model removal uses the existing withdrawal transaction; remove the obsolete aliases and helper-only tests.

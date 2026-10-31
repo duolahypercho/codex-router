@@ -1,0 +1,1 @@
+- **Remove the unused duplicate setup onboarding implementation.** Keep the terminal prompts used by model curation, and exercise Vertex setup guidance through the running setup command.
