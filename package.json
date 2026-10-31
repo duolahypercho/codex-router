@@ -9,7 +9,7 @@
   },
   "scripts": {
     "check": "node scripts-check.mjs",
-    "test": "node --test --test-timeout=600000 test/*.test.mjs"
+    "test": "node --import ./test/helpers/isolated-runtime-environment.mjs --test --test-timeout=600000 test/*.test.mjs"
   },
   "dependencies": {
     "proper-lockfile": "4.1.2",

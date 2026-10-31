@@ -78,6 +78,9 @@ fi
 (
   cd "$control_center_dir"
   npm ci 1>&2
+  # The default cache stays outside HOME and packaged UI resources.
+  export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-"$repo_dir/generated/playwright-browsers"}"
+  npx --no-install playwright install --only-shell chromium 1>&2
   npm run check 1>&2
   npm test 1>&2
   npm run build 1>&2

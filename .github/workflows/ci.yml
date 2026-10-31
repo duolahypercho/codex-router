@@ -38,7 +38,7 @@ jobs:
         # Private-file tests launch real PowerShell ACL helpers. Avoid starving
         # their existing deadlines on shared runners; retain every test and
         # all within-file request/race concurrency assertions.
-        run: node --test --test-timeout=600000 --test-concurrency=2 test/*.test.mjs
+        run: node --import ./test/helpers/isolated-runtime-environment.mjs --test --test-timeout=600000 --test-concurrency=2 test/*.test.mjs
       - run: npm audit --omit=dev --audit-level=high
       - name: Test the macOS tray
         if: runner.os == 'macOS'
@@ -159,6 +159,8 @@ jobs:
       # Pull-request artifacts are deliberately unsigned and intended only for
       # testing against a matching Codex Router checkout/install.
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      # Keep the locked browser available when tests isolate HOME and APPDATA.
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.test-playwright-browsers
     defaults:
       run:
         working-directory: apps/control-center
@@ -186,6 +188,8 @@ jobs:
         run: npm ci --omit=dev
       - name: Install Electron dependencies
         run: npm ci
+      - name: Install Chromium headless shell for Electron renderer tests
+        run: npx --no-install playwright install --only-shell chromium
       - name: Check Electron sources
         run: npm run check
       - name: Test Electron integration

@@ -1,0 +1,1 @@
+- Release the generation-outcome renderer test server when browser launch fails before its browser cleanup block.
