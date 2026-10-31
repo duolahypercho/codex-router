@@ -101,9 +101,19 @@ export function isCanonicalOpenCodeFreeSession(id) {
 }
 
 function base62From(bytes) {
+  // Rejection sampling keeps the alphabet uniform: 256 % 62 != 0, so a plain
+  // modulo on a CSPRNG byte is biased toward the low symbols.
   let out = "";
-  for (const byte of bytes) out += BASE62[byte % 62];
-  return out;
+  for (const byte of bytes) {
+    if (byte >= 248) continue; // 248 = 4 * 62
+    out += BASE62[byte % 62];
+  }
+  while (out.length < bytes.length) {
+    const [extra] = randomBytes(1);
+    if (extra >= 248) continue;
+    out += BASE62[extra % 62];
+  }
+  return out.slice(0, bytes.length);
 }
 
 let lastStamp = 0;
