@@ -481,7 +481,7 @@ in code to its official endpoint.
 
 | Picker label | Provider ID | Endpoint | Free-model rule |
 | --- | --- | --- | --- |
-| OpenCode Free | `opencode-free` | `https://opencode.ai/zen/v1` | `big-pickle` and IDs ending in `-free` |
+| OpenCode Free | `opencode-free` | `https://opencode.ai/inference/v1` | `big-pickle` and IDs ending in `-free` (public CLI fingerprint; no key) |
 | Kilo Free | `kilo-free` | `https://api.kilo.ai/api/gateway` | IDs ending in `:free` |
 
 Neither ships its free subset as checked-in metadata: everything comes from the
@@ -533,15 +533,17 @@ The individual free models behind it stay hidden.
 ```
 
 **Members, in try order.** Kilo's `kilo-auto/free` router comes first. Next
-come the Kilo gateway's `:free` models, then the OpenCode Zen free lane
-(`big-pickle` and IDs ending in `-free`, minus every ID Zen serves only to its
-own client or has withdrawn, as listed in `src/opencode-curation.mjs`). Today
-that leaves the OpenCode lane empty until a refresh finds a free ID that Zen
-serves to any caller. Both lanes are the documented
-anonymous endpoints that the `kilo-free` and `opencode-free` entries above
-also use. No credential, signed header or client impersonation is involved.
-A built-in list ships with the router. It is
-replaced by the live `/models` lists (filtered to the free rule) when
+come the Kilo gateway's free models (`:free` / `/free` / `-free`, plus other
+`isFree` listings the catalog accepts), then the OpenCode Zen free lane
+(`big-pickle` and IDs ending in `-free`, minus IDs Zen has withdrawn, as listed
+in `src/opencode-curation.mjs`). Both lanes need no login and no API key. The
+OpenCode lane talks to `https://opencode.ai/inference/v1` and sends OpenCode's
+public CLI client fingerprint (User-Agent `opencode/latest/2.0.26/cli`,
+`Authorization: Bearer public`, paired session headers, and the official
+`read`/`shell` tool definitions — see `src/opencode-free-lane.mjs`). That is
+the same public client shape the no-login reference plugin uses; there is no
+per-user secret. A built-in list ships with the router. It is replaced by the
+live `/models` lists (filtered to the free rule) when
 `./bin/control free-pool refresh` runs, or once a day at router start while
 `free` is enabled (`MODEL_ROUTER_FREE_POOL_REFRESH=0` turns that off). A
 refreshed list takes effect after a router restart. If a refresh fails, the
@@ -599,9 +601,12 @@ Nothing is sent anywhere.
 - Free tiers are rate-limited per IP and shared by everyone behind that IP.
 - Prompts sent to free models may be logged or used for training by the
   upstream.
-- OpenCode Zen serves most of its free tier only to its own client. Those IDs
-  are left out of the pool rather than worked around, so in practice the pool
-  is the Kilo lane.
+- OpenCode's free tier accepts the public CLI fingerprint above. Without it
+  the same free ids answer FreeTierError. The fingerprint is not a login and
+  uses the pooled `Bearer public` credential; OpenCode may still rate-limit or
+  region-block the IP, and may log prompts.
+- A refreshed OpenCode or Kilo member list only takes effect after a router
+  restart.
 
 ### Custom: one provider, many endpoints
 

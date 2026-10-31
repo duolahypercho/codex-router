@@ -6,10 +6,10 @@
       "displayName": "OpenCode Free",
       "kind": "openai-compatible",
       "ownedBy": "opencode",
-      "baseUrl": "https://opencode.ai/zen/v1",
+      "baseUrl": "https://opencode.ai/inference/v1",
       "authMode": "anonymous",
       "anonymousModelPolicy": "opencode-console",
-      "anonymousNote": "No API key is needed for OpenCode Zen free models. Use at your own risk: access is a published exception, not an entitlement, and the free catalog and limits can change without notice."
+      "anonymousNote": "No API key or login is needed for OpenCode Zen free models. The router sends OpenCode's public CLI client fingerprint on /inference/v1 (see src/opencode-free-lane.mjs). Use at your own risk: access is a published exception, not an entitlement; prompts may be logged; per-IP free limits apply; and the free catalog can change without notice."
     },
     {
       "id": "opencode-free-responses",
@@ -18,14 +18,14 @@
       "ownedBy": "opencode",
       "variantOf": "opencode-free",
       "protocol": "openai-responses",
-      "baseUrl": "https://opencode.ai/zen/v1",
+      "baseUrl": "https://opencode.ai/inference/v1",
       "authMode": "anonymous",
       "anonymousModelPolicy": "explicit-models",
       "anonymousModels": [
         "muse-spark-1.2-contributor-free",
         "muse-spark-1.3-contributor-free"
       ],
-      "anonymousNote": "No API key is needed for Muse Spark contributor free models. This internal Responses route accepts only documented free models. Use at your own risk: access is a published exception, not an entitlement, and limits can change without notice."
+      "anonymousNote": "No API key or login is needed for Muse Spark contributor free models when they are still listed. This Responses route accepts only documented free models and uses the same public CLI fingerprint as the chat free lane. Use at your own risk: several Muse free ids have been withdrawn; limits can change without notice."
     }
   ]
 }

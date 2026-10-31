@@ -17,10 +17,10 @@
       "kind": "openai-compatible",
       "ownedBy": "opencode",
       "variantOf": "free",
-      "baseUrl": "https://opencode.ai/zen/v1",
+      "baseUrl": "https://opencode.ai/inference/v1",
       "authMode": "anonymous",
       "anonymousModelPolicy": "opencode-console",
-      "anonymousNote": "The OpenCode Zen free lane behind free/auto. OpenCode serves most of its free tier only to its own client; those ids are left out, so this lane fills only with free ids Zen serves to any caller."
+      "anonymousNote": "The OpenCode Zen free lane behind free/auto. Requests go to /inference/v1 with OpenCode's public CLI client fingerprint (no login, no API key). Free ids Zen has withdrawn stay out of the pool."
     }
   ]
 }

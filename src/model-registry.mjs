@@ -38,12 +38,12 @@ function fail(message) {
 // future registry entry cannot turn an arbitrary HTTPS endpoint into a
 // credential-free exfiltration path.
 const ANONYMOUS_ENDPOINTS = Object.freeze({
-  "opencode-free": "https://opencode.ai/zen/v1",
-  "opencode-free-responses": "https://opencode.ai/zen/v1",
+  "opencode-free": "https://opencode.ai/inference/v1",
+  "opencode-free-responses": "https://opencode.ai/inference/v1",
   "kilo-free": "https://api.kilo.ai/api/gateway",
   // The free/auto pool: the same two free lanes, under one picker entry.
   free: "https://api.kilo.ai/api/gateway",
-  "free-opencode": "https://opencode.ai/zen/v1",
+  "free-opencode": "https://opencode.ai/inference/v1",
 });
 
 // The same guarantee, one level down. A per-model endpoint moves the address

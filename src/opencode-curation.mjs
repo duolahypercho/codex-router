@@ -43,13 +43,13 @@ import { OPENCODE_GEMINI_MODEL } from "./opencode-gemini.mjs";
 // response is still preferred by curate-models, because that one describes the
 // served route first-hand.
 
-// Most of that catalog is no longer reachable from here at all. OpenCode
-// answers a free-tier request that did not come from its own client with
-// `FreeTierError: OpenCode's free tier can only be used from within OpenCode`,
-// so the id is refused before any of the metadata above matters. That is an
-// access policy the provider states in the error, not a protocol gap this
-// router can adapt to, and the ids it covers are listed in
-// OPENCODE_FREE_CLIENT_GATED below.
+// OpenCode's free chat path answers FreeTierError unless the request carries
+// the public CLI client fingerprint. free/auto and the anonymous opencode-free
+// provider send that fingerprint on /inference/v1 (see
+// src/opencode-free-lane.mjs), so the free ids below are reachable without a
+// login or API key. OPENCODE_FREE_CLIENT_GATED is kept as the historical list
+// of ids that needed the fingerprint; it no longer blocks curation or the
+// free/auto pool.
 //
 // Separately, `hy3-free` and `laguna-s-2.1-free` have been withdrawn from
 // Zen's /models response, which now answers `ModelError: Model hy3-free is not
@@ -259,38 +259,19 @@ const OPENCODE_FREE_MODELS = Object.freeze({
   }),
 });
 
-// Free ids OpenCode serves only to its own client. Curation refuses these
-// rather than handing the operator a picker entry that fails on its first
-// request -- the same fail-closed rule the unverified-protocol branch below
-// applies, for a cause that is the provider's policy rather than this
-// router's coverage.
+// Historical free ids that required the public CLI fingerprint. Kept for
+// docs and diagnostics. They are no longer blocked from curation or free/auto
+// once opencode-free-lane.mjs is on the wire. OPENCODE_FREE_WITHDRAWN stays a
+// hard refusal: those ids no longer exist upstream.
 //
-// Probed 2026-09-23 and re-probed 2026-10-21 against
-// https://opencode.ai/zen/v1 in the exact shape the router uses: no credential
-// (`opencode-free` is in the registry's ANONYMOUS_ENDPOINTS), the
-// `x-opencode-session` header this repository attaches, Chat Completions for
-// the primary ids and Responses for the Muse pair.
-//
-// The 2026-10-21 probe changed the picture. Every free id OpenCode still
-// lists now answers FreeTierError, so the gate covers the whole advertised
-// tier rather than all but one id -- and the ids it has withdrawn answer
-// `ModelDeprecated` or "Model is unavailable" instead. Nothing on this
-// provider answers any more.
-//
-// The two lists separate the two failures because they are different facts
-// about the provider, and an operator reading the refusal deserves to know
-// which one they hit. OPENCODE_FREE_CLIENT_GATED holds the ids Zen still
-// advertises, which are refused because OpenCode serves them only to its own
-// client. OPENCODE_FREE_WITHDRAWN holds the ids Zen has dropped, which are
-// refused because the id no longer exists.
-//
-// The lists are per id rather than a blanket provider rule, because the tier
-// was not always gated: `deepseek-v4-flash-free` cleared the same gate on
-// the 2026-09-23 run, so the gate is a property of OpenCode's access policy
-// at a point in time rather than of the id's name.
+// Earlier probes (2026-09-23 / 2026-10-21) against https://opencode.ai/zen/v1
+// without the fingerprint returned FreeTierError; the free chat path now
+// uses /inference/v1 with the public CLI fingerprint instead.
 const OPENCODE_FREE_CLIENT_GATED = Object.freeze([
+  "beam-free",
   "big-pickle",
   "deepseek-v4.1-flash-free",
+  "flint-40b-free",
   "glm-5.3-flash-free",
   "jev-1.13-free",
   "mimo-v2.6-flash-free",
@@ -311,21 +292,22 @@ const OPENCODE_FREE_WITHDRAWN = Object.freeze([
   "nemotron-3-ultra-free",
 ]);
 
-// Whether Zen refuses this free id to every client but its own, or has
-// withdrawn it. free/auto's OpenCode lane leaves these out: a member that
-// cannot answer its first request would only cost each turn a wasted hop, and
-// getting past the client gate is not something this repository does.
+// Withdrawn free ids only. Client-fingerprint ids are served through
+// src/opencode-free-lane.mjs, so they are no longer refused here.
+export function openCodeFreeIdWithdrawn(upstreamModel) {
+  return OPENCODE_FREE_WITHDRAWN.includes(upstreamModel);
+}
+
 export function openCodeFreeIdRefused(upstreamModel) {
-  return OPENCODE_FREE_CLIENT_GATED.includes(upstreamModel) ||
-    OPENCODE_FREE_WITHDRAWN.includes(upstreamModel);
+  return openCodeFreeIdWithdrawn(upstreamModel);
 }
 
 function clientGatedReason(upstreamModel) {
   return (
-    `OpenCode serves ${upstreamModel} only to its own client: the same request from this `
-    + `router is answered "OpenCode's free tier can only be used from within OpenCode". `
-    + `That is OpenCode's access policy rather than a router compatibility limitation, so `
-    + `the id cannot be curated into a route that works.`
+    `OpenCode serves ${upstreamModel} only to its own client unless the request carries `
+    + `the public CLI fingerprint this router now sends on the free lane `
+    + `(src/opencode-free-lane.mjs). This message is kept for diagnostics; curation `
+    + `no longer blocks these ids.`
   );
 }
 
@@ -485,14 +467,19 @@ const CURATION_ROUTES = Object.freeze({
       "muse-spark-1.3-contributor-free",
     ]),
     primaryModels: Object.freeze([
+      "beam-free",
       "big-pickle",
       "deepseek-v4-flash-free",
+      "deepseek-v4.1-flash-free",
+      "flint-40b-free",
+      "glm-5.3-flash-free",
       "hy3-free",
       "laguna-s-2.1-free",
       "mimo-v2.5-free",
       "mimo-v2.6-flash-free",
       "nemotron-3-ultra-free",
       "nemotron-3.5-lightning-free",
+      "nemotron-3.5-super-vl-free",
     ]),
     clientGatedModels: OPENCODE_FREE_CLIENT_GATED,
     withdrawnModels: OPENCODE_FREE_WITHDRAWN,
@@ -565,9 +552,8 @@ function curatedModelRouteSelection(providerId, upstreamModel, { existingProvide
   // gated id keeps its entry in `responsesModels`/`primaryModels`; what the
   // gate withholds is the route's first appearance, which is the request that
   // would fail.
-  if (!existingProvider && route?.clientGatedModels?.includes(upstreamModel)) {
-    return { blockedReason: clientGatedReason(upstreamModel) };
-  }
+  // Client-fingerprint free ids are reachable via opencode-free-lane.mjs, so
+  // they are not blocked here. Withdrawn ids still have no working route.
   if (!existingProvider && route?.withdrawnModels?.includes(upstreamModel)) {
     return { blockedReason: withdrawnReason(upstreamModel) };
   }
