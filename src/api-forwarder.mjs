@@ -83,6 +83,12 @@ import {
 } from "./openai-adapters.mjs";
 import { threadIdFromHeaders } from "./codex-session-names.mjs";
 import { applyOpenCodeSessionHeaders, isOpenCodeProvider } from "./opencode-session.mjs";
+import {
+  applyOpenCodeFreeFingerprint,
+  applyOpenCodeFreeLaneHeaders,
+  isOpenCodeFreeLaneProvider,
+  openCodeFreeFingerprintStyle,
+} from "./opencode-free-lane.mjs";
 import { clampOpenCodeMessageContent } from "./opencode-message-compat.mjs";
 import {
   ensureOpenCodeGeminiThoughtSignatures,
@@ -1561,6 +1567,11 @@ function normalizeBody(buffer, contentType, route) {
     }
   }
   if (adapter) payload = adapter.normalizeBody(payload, model);
+  // OpenCode's anonymous free lane needs the public CLI fingerprint on the
+  // body (official read/shell defs + <env>) before the bytes leave the box.
+  if (isOpenCodeFreeLaneProvider(provider)) {
+    applyOpenCodeFreeFingerprint(payload, openCodeFreeFingerprintStyle(route));
+  }
   const targetPath = adapter?.targetPath
     ? adapter.targetPath({ model, body: payload })
     : undefined;
@@ -1627,6 +1638,14 @@ function upstreamHeaders(requestHeaders, body, apiKey, provider, extraHeaders = 
   // OpenCode Go/Zen affinity must win over any session.headers merge above:
   // starting 2026-09-06 their edge may refuse requests without this header.
   applyOpenCodeSessionHeaders(headers, {
+    provider,
+    requestHeaders,
+    body,
+  });
+  // The anonymous free lane overrides UA, Authorization, and session headers
+  // with the public CLI fingerprint. Must run after the generic session merge
+  // so a UUID x-opencode-session cannot leave FreeTierError on the wire.
+  applyOpenCodeFreeLaneHeaders(headers, {
     provider,
     requestHeaders,
     body,

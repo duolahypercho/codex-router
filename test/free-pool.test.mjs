@@ -55,20 +55,34 @@ test("Kilo listing keeps only free, tool-capable text models and never re-adds t
   assert.equal(members[0].preferredIndex, 2);
 });
 
-test("OpenCode listing keeps free chat models and drops priced, tool-less, client-gated or withdrawn ones", () => {
+test("OpenCode listing keeps free chat models and drops priced, tool-less, or withdrawn ones", () => {
   const members = parseOpenCodeFreeModels({
     data: [
-      // Zen serves big-pickle only to its own client and has withdrawn
-      // hy3-free; neither can answer a router request.
+      // big-pickle is free-lane reachable with the public CLI fingerprint;
+      // hy3-free has been withdrawn and stays out.
       { id: "big-pickle", limit: { context: 200000 } },
       { id: "hy3-free" },
       { id: "some-model-free", cost: { input: 0, output: 0 } },
       { id: "paid-model-free", cost: { input: 1, output: 2 } },
+      {
+        id: "nested-free",
+        cost: { text: { input: { price: 0 }, output: { price: 0 } } },
+        limit: { context: 131072 },
+      },
+      {
+        id: "nested-paid-free",
+        cost: { text: { input: { price: 1 }, output: { price: 2 } } },
+      },
       { id: "claude-sonnet" },
       { id: "notools-free", capabilities: { tools: { supported: false } } },
     ],
   });
-  assert.deepEqual(members.map((member) => member.id), ["some-model-free"]);
+  assert.deepEqual(members.map((member) => member.id), [
+    "big-pickle",
+    "some-model-free",
+    "nested-free",
+  ]);
+  assert.equal(members[0].contextLength, 200000);
 });
 
 test("member order: Kilo preference, then window; the catch-all router and small windows go last", () => {

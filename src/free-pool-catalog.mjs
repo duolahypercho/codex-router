@@ -8,16 +8,18 @@
 // from the registry: the registry imports it while it is still loading.
 //
 // Only two upstreams are read, both publicly documented anonymous endpoints
-// that need no key and no client impersonation: the Kilo gateway's free pool
-// and the OpenCode Zen free lane. Their `/models` listings are fetched by
-// `refreshFreePoolCatalog` (src/free-pool.mjs) -- no prompt is ever sent to
+// that need no login and no API key: the Kilo gateway's free pool and the
+// OpenCode Zen free lane. OpenCode's free chat path lives on /inference/v1 and
+// accepts the public CLI client fingerprint (see src/opencode-free-lane.mjs);
+// the /models listing is still served from zen/v1. Their catalogs are fetched
+// by `refreshFreePoolCatalog` (src/free-pool.mjs) -- no prompt is ever sent to
 // discover them -- and written to `free-pool-catalog.json`. Without that file
 // the static list below is used, so a fresh install still has a working pool.
 
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
-import { openCodeFreeIdRefused } from "./opencode-curation.mjs";
+import { openCodeFreeIdWithdrawn } from "./opencode-curation.mjs";
 import { STATE_DIR } from "./paths.mjs";
 
 export const FREE_POOL_SLUG = "free/auto";
@@ -47,11 +49,19 @@ export const STATIC_FREE_POOL_CATALOG = Object.freeze({
     { id: "nvidia/nemotron-3.5-lightning:free", contextLength: 1_000_000, image: false, preferredIndex: 3 },
     { id: "openrouter/free", contextLength: 200_000, image: true, preferredIndex: 4 },
   ]),
-  // Every free id Zen currently lists is either client-gated or withdrawn
-  // (see OPENCODE_FREE_CLIENT_GATED in opencode-curation.mjs), so the lane
-  // ships empty and fills only from a refresh that finds an id Zen serves to
-  // anyone.
-  opencode: Object.freeze([]),
+  // Live OpenCode Zen free chat ids as of 2026-11-01. Withdrawn ids stay out
+  // (see OPENCODE_FREE_WITHDRAWN). The free lane answers on /inference/v1 with
+  // the public CLI fingerprint in src/opencode-free-lane.mjs.
+  opencode: Object.freeze([
+    { id: "nemotron-3.5-super-vl-free", contextLength: 1_000_000, image: true },
+    { id: "beam-free", contextLength: 1_048_576, image: false },
+    { id: "nemotron-3.5-lightning-free", contextLength: 262_144, image: false },
+    { id: "deepseek-v4.1-flash-free", contextLength: 200_000, image: false },
+    { id: "glm-5.3-flash-free", contextLength: 200_000, image: false },
+    { id: "flint-40b-free", contextLength: 131_072, image: false },
+    { id: "mimo-v2.6-flash-free", contextLength: 200_000, image: false },
+    { id: "big-pickle", contextLength: 200_000, image: false },
+  ]),
 });
 
 // The same rule the registry enforces for the `free` provider. Kept here so a
@@ -69,7 +79,9 @@ export function openCodeFreeId(id) {
     id === id.trim() &&
     /^[a-z0-9][a-z0-9._-]{0,127}$/i.test(id) &&
     (id === "big-pickle" || id.endsWith("-free")) &&
-    !openCodeFreeIdRefused(id);
+    // Withdrawn ids stay out. Client-gated free ids are included: the free
+    // lane sends OpenCode's public CLI fingerprint (opencode-free-lane.mjs).
+    !openCodeFreeIdWithdrawn(id);
 }
 
 function positiveInteger(value) {
@@ -111,9 +123,36 @@ export function parseKiloFreeModels(document) {
   return members;
 }
 
-// OpenCode Zen's shape: `{ data: [{ id, type, cost: { input, output },
-// capabilities: { tools: { supported } }, limit: { context }, modalities: {
-// input } }] }`. Older listings carry only ids, so a missing field is not a
+// Collect every numeric price leaf under a cost object. Zen's older listings
+// used `{ input, output }`; the 2026-11 shape nests them under `text` as
+// `{ text: { input: { price }, output: { price } } }`.
+function costPrices(node, out = []) {
+  if (node == null) return out;
+  if (typeof node === "number") {
+    out.push(node);
+    return out;
+  }
+  if (typeof node !== "object") return out;
+  if (typeof node.price === "number") out.push(node.price);
+  for (const value of Object.values(node)) costPrices(value, out);
+  return out;
+}
+
+function openCodeZeroCost(cost) {
+  if (!cost || typeof cost !== "object") return true;
+  const prices = costPrices(cost);
+  // A missing price object is treated as free (name already matched *-free).
+  // A stated non-zero leaf rejects the row.
+  return prices.length === 0 || prices.every((value) => value === 0);
+}
+
+function openCodeInputModalities(modalities) {
+  const input = Array.isArray(modalities?.input) ? modalities.input : [];
+  return input.some((value) => value === "image" || String(value).startsWith("image/"));
+}
+
+// OpenCode Zen's shape: `{ data: [{ id, type, cost, capabilities, limit,
+// modalities }] }`. Older listings carry only ids, so a missing field is not a
 // rejection; a stated non-zero price or a stated lack of tools is.
 export function parseOpenCodeFreeModels(document) {
   const rows = Array.isArray(document?.data) ? document.data : [];
@@ -123,14 +162,13 @@ export function parseOpenCodeFreeModels(document) {
     const id = row?.id;
     if (!openCodeFreeId(id) || seen.has(id)) continue;
     if (row.type !== undefined && row.type !== "chat") continue;
-    if (row.cost && typeof row.cost === "object" && !zeroPrice(row.cost)) continue;
+    if (!openCodeZeroCost(row.cost)) continue;
     if (row.capabilities?.tools?.supported === false) continue;
-    const input = Array.isArray(row.modalities?.input) ? row.modalities.input : [];
     seen.add(id);
     members.push({
       id,
       contextLength: positiveInteger(row.limit?.context),
-      image: input.includes("image"),
+      image: openCodeInputModalities(row.modalities),
     });
   }
   return members;

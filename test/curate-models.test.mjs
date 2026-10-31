@@ -255,39 +255,23 @@ test("scripted OpenCode curation refuses an uncertified discovered protocol rout
   }
 });
 
-// OpenCode answers a free-tier request that did not come from its own client
-// with `FreeTierError: OpenCode's free tier can only be used from within
-// OpenCode`. Curating such an id would hand the operator a picker entry that
-// fails on its first request, which is the exact outcome the unverified-
-// protocol refusal beside it exists to prevent, so the gate refuses it too --
-// and says the provider's policy is the cause, not this router's coverage.
-test("client-gated OpenCode Free ids are refused, and the one that answers is not", () => {
+// OpenCode free ids that need the public CLI fingerprint are curatable now
+// that the free lane sends it. Withdrawn free ids stay refused.
+test("fingerprint free ids can be curated; withdrawn OpenCode Free ids stay refused", () => {
   for (const id of [
     "big-pickle",
+    "beam-free",
+    "flint-40b-free",
     "mimo-v2.6-flash-free",
     "deepseek-v4.1-flash-free",
     "glm-5.3-flash-free",
-    "jev-1.13-free",
     "nemotron-3.5-lightning-free",
     "nemotron-3.5-super-vl-free",
   ]) {
-    const reason = curatedModelBlockReason("opencode-free", id);
-    assert.equal(typeof reason, "string", `${id} is not refused`);
-    assert.match(reason, /only to its own client/);
-    assert.match(reason, /can only be used from within OpenCode/);
-    // The cause has to be named as the provider's, or the message reads like a
-    // missing feature somebody could wait for this repository to ship.
-    assert.match(reason, /access policy rather than a router compatibility limitation/);
-    assert.throws(() => curatedModelProviderId("opencode-free", id), /only to its own client/);
-    // The Responses half of the same provider pair answers identically.
-    assert.match(
-      curatedModelBlockReason("opencode-free-responses", id) || "",
-      /only to its own client/,
-    );
+    assert.equal(curatedModelBlockReason("opencode-free", id), undefined, id);
+    assert.equal(curatedModelProviderId("opencode-free", id), "opencode-free", id);
   }
-  // The ids Zen has withdrawn are refused for their own reason, not the
-  // gate's: the id no longer exists, so the cause is not OpenCode's access
-  // policy and the message must not point at it.
+  // The ids Zen has withdrawn are refused: the id no longer exists.
   for (const id of [
     "deepseek-v4-flash-free",
     "hy3-free",
@@ -300,12 +284,11 @@ test("client-gated OpenCode Free ids are refused, and the one that answers is no
     const reason = curatedModelBlockReason("opencode-free", id);
     assert.equal(typeof reason, "string", `${id} is not refused`);
     assert.match(reason, /has withdrawn/);
-    assert.doesNotMatch(reason, /only to its own client/);
     assert.throws(() => curatedModelProviderId("opencode-free", id), /has withdrawn/);
   }
 });
 
-// The gate withholds a route's first appearance. It must not reach a row the
+// Withdrawn / previously gated ids already curated must still resolve. A row the
 // operator already has: curation resolves every stored entry through the same
 // function, and refusing those would strand them short of their documented
 // provider and metadata.
@@ -332,10 +315,10 @@ test("a gated id already curated still resolves to its documented route", () => 
   assert.equal(normalized.autoCompact, 850_000);
 });
 
-test("scripted OpenCode Free curation refuses a client-gated id by name", () => {
-  const dir = mkdtempSync(path.join(os.tmpdir(), "curate-models-opencode-free-gated-"));
+test("scripted OpenCode Free curation refuses a withdrawn id by name", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "curate-models-opencode-free-withdrawn-"));
   const fixture = path.join(dir, "models.json");
-  writeFileSync(fixture, JSON.stringify({ data: [{ id: "mimo-v2.6-flash-free" }] }));
+  writeFileSync(fixture, JSON.stringify({ data: [{ id: "hy3-free" }] }));
   try {
     const result = spawnSync(
       process.execPath,
@@ -343,7 +326,7 @@ test("scripted OpenCode Free curation refuses a client-gated id by name", () => 
         path.join(root, "src", "curate-models.mjs"),
         "opencode-free",
         "--models",
-        "mimo-v2.6-flash-free",
+        "hy3-free",
         "--fixture",
         fixture,
         "--no-apply",
@@ -360,7 +343,7 @@ test("scripted OpenCode Free curation refuses a client-gated id by name", () => 
       },
     );
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /mimo-v2\.6-flash-free only to its own client/);
+    assert.match(result.stderr, /has withdrawn hy3-free/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
