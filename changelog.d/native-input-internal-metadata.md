@@ -1,0 +1,1 @@
+- **Native input strips Codex-only message metadata.** Remove the top-level internal passthrough field before forwarding input items to the native Responses endpoint, which rejects that field.

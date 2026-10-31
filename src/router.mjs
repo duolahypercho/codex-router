@@ -2722,6 +2722,19 @@ function normalizeNativeInput(
 ) {
   if (!Array.isArray(input)) return input;
   const normalized = input.flatMap((item) => {
+    // Codex uses this internal field; the native Responses endpoint rejects it.
+    if (
+      item &&
+      typeof item === "object" &&
+      !Array.isArray(item) &&
+      Object.hasOwn(item, "internal_chat_message_metadata_passthrough")
+    ) {
+      const {
+        internal_chat_message_metadata_passthrough: _internalMetadata,
+        ...nativeItem
+      } = item;
+      item = nativeItem;
+    }
     if (item?.type === "reasoning") {
       const reasoning = sanitizeReasoningForNative(item, {
         stateless: statelessReasoning,
