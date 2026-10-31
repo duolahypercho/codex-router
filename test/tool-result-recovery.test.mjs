@@ -392,6 +392,59 @@ test("without a local execution tool no output is rewritten or written to disk",
   assert.equal(hasLocalReadbackTool([{type: "function", name: "exec", description: "Remote database query"}]), false);
 });
 
+test("Responses Lite additional_tools declarations reach durable, proof-gated archival", async t => {
+  const options = await fixture(t);
+  const liteTools = [{ type: "namespace", name: "functions", tools: [
+    { type: "custom", name: "exec", description: "Use tools.exec_command(...)" },
+  ] }];
+  const declaration = { type: "additional_tools", role: "developer", tools: liteTools };
+  const lite = extra => ({ model: "gpt-6-luna", tool_choice: "auto", input: [declaration, ...history()], ...extra });
+  assert.deepEqual(toolResultReadbackTools(lite()), liteTools);
+  assert.deepEqual(toolResultReadbackTools(lite({ tool_choice: undefined })), liteTools);
+  assert.deepEqual(toolResultReadbackTools(lite({ input: [declaration, { ...declaration, tools: tools }] })), [...liteTools, ...tools]);
+  // Explicit restrictions and top-level inventories keep their current meaning.
+  assert.deepEqual(toolResultReadbackTools(lite({ tools: [] })), []);
+  assert.equal(toolResultReadbackTools(lite({ tools })), tools);
+  assert.deepEqual(toolResultReadbackTools(lite({ tool_choice: "none" })), []);
+  assert.deepEqual(toolResultReadbackTools(lite({ tool_choice: { type: "function", name: "other" } })), []);
+  assert.equal(toolResultReadbackTools(lite({ input: history() })), undefined);
+  assert.equal(toolResultReadbackTools(lite({ input: [{ ...declaration, role: "user" }, ...history()] })), undefined);
+  assert.equal(toolResultReadbackTools({ tools: undefined }), undefined);
+
+  const payload = lite();
+  const recover = (input, retain) => ageToolResultsWithRecovery(input, {
+    tools: toolResultReadbackTools(payload), scope: options.scope, frontier: 0, retain,
+  });
+  let attempts = 0;
+  const failed = await recover(payload.input, () => { attempts += 1; return undefined; });
+  assert.equal(attempts, 1, "the declared reader makes the result a retention candidate");
+  assert.equal(failed.input, payload.input);
+  assert.equal(failed.stats.toolResultsAged, 0);
+  const thrown = await recover(payload.input, () => { throw new Error("disk full"); });
+  assert.equal(thrown.input[2].output, full);
+  assert.equal(thrown.stats.toolResultsAged, 0);
+
+  const retain = (text, info) => retainToolResult(text, { ...options, ...info });
+  const pending = await recover(payload.input, retain);
+  assert.ok(pending.input[2].output.startsWith(full), "an unproven client retains every original byte");
+  assert.equal(pending.stats.toolResultsAged, 0);
+  const [savedFile] = readdirSync(options.directory).filter(n => n.endsWith(".result"));
+  const proof = readRetainedToolResult(savedFile.slice(0, -7), options);
+  const forged = { ...proof, readbackProof: proof.readbackProof.slice(0, -1) + (proof.readbackProof.endsWith("A") ? "B" : "A") };
+  const reader = value => ({ type: "custom_tool_call_output", call_id: "reader", output: JSON.stringify(value) });
+  const invalid = await recover([...payload.input, reader(forged)], retain);
+  assert.ok(invalid.input[2].output.startsWith(full));
+  assert.equal(invalid.stats.toolResultsAged, 0);
+  const foreign = await ageToolResultsWithRecovery([...payload.input, reader(proof)], {
+    tools: toolResultReadbackTools(payload), scope: "other-thread", frontier: 0, retain,
+  });
+  assert.ok(foreign.input[2].output.startsWith(full));
+  const aged = await recover([...payload.input, reader(proof)], retain);
+  assert.equal(aged.stats.toolResultsAged, 1);
+  assert.match(aged.input[2].output, /tool-result-read.mjs/u);
+  assert.equal(payload.input[2].output, full, "pristine input is not mutated");
+});
+
 test("a snapshot is reused without changing content and leased across history replay", async t => {
   const options = await fixture(t);
   const start = Date.now();
