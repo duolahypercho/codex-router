@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -12,6 +12,7 @@ function scratch() {
 }
 
 test("a log under the cap is left alone", () => {
+  assert.equal(DEFAULT_MAX_LOG_BYTES, 32 * 1024 * 1024);
   assert.equal(logRotationPlan(0), "keep");
   assert.equal(logRotationPlan(DEFAULT_MAX_LOG_BYTES), "keep");
   assert.equal(logRotationPlan(DEFAULT_MAX_LOG_BYTES + 1), "rotate");
@@ -28,14 +29,14 @@ test("an oversized log is moved aside and the content is preserved", () => {
   const dir = scratch();
   const log = path.join(dir, "router.log");
   try {
-    writeFileSync(log, "x".repeat(DEFAULT_MAX_LOG_BYTES + 10), "utf8");
-    const result = rotateLog(log);
+    writeFileSync(log, "x".repeat(42), "utf8");
+    const result = rotateLog(log, { maxBytes: 32 });
     assert.equal(result.rotated, true);
     // Rotated, not deleted: the tail before a restart is often the only
     // record of why the service died.
     assert.equal(existsSync(log), false);
     assert.equal(existsSync(`${log}.1`), true);
-    assert.equal(readFileSync(`${log}.1`, "utf8").length, DEFAULT_MAX_LOG_BYTES + 10);
+    assert.equal(readFileSync(`${log}.1`, "utf8"), "x".repeat(42));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -46,12 +47,12 @@ test("only one previous generation is kept", () => {
   const log = path.join(dir, "router.log");
   try {
     writeFileSync(`${log}.1`, "oldest", "utf8");
-    writeFileSync(log, "y".repeat(DEFAULT_MAX_LOG_BYTES + 10), "utf8");
-    assert.equal(rotateLog(log).rotated, true);
+    writeFileSync(log, "y".repeat(42), "utf8");
+    assert.equal(rotateLog(log, { maxBytes: 32 }).rotated, true);
     // Two files bound the worst case at 2x the cap; without replacing the
     // previous generation the directory would grow without limit instead.
     assert.equal(existsSync(`${log}.2`), false);
-    assert.notEqual(readFileSync(`${log}.1`, "utf8"), "oldest");
+    assert.equal(readFileSync(`${log}.1`, "utf8"), "y".repeat(42));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -115,11 +116,30 @@ test("rotating twice does not lose the log to a failed replace", () => {
   const log = path.join(dir, "router.log");
   try {
     for (const marker of ["first", "second"]) {
-      writeFileSync(log, marker + "z".repeat(DEFAULT_MAX_LOG_BYTES), "utf8");
-      assert.equal(rotateLog(log).rotated, true);
+      writeFileSync(log, marker + "z".repeat(32), "utf8");
+      assert.equal(rotateLog(log, { maxBytes: 32 }).rotated, true);
     }
-    assert.ok(readFileSync(`${log}.1`, "utf8").startsWith("second"));
+    assert.equal(readFileSync(`${log}.1`, "utf8"), "second" + "z".repeat(32));
     assert.equal(existsSync(log), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a failed rotation preserves the current log and previous destination", () => {
+  const dir = scratch();
+  const log = path.join(dir, "router.log");
+  try {
+    const content = "current log content";
+    writeFileSync(log, content, "utf8");
+    // A nonempty directory cannot be replaced by a file on supported platforms.
+    mkdirSync(`${log}.1`);
+    writeFileSync(path.join(`${log}.1`, "keep"), "previous destination", "utf8");
+    const result = rotateLog(log, { maxBytes: 16 });
+    assert.equal(result.rotated, false);
+    assert.equal(result.reason, "failed");
+    assert.equal(readFileSync(log, "utf8"), content);
+    assert.equal(readFileSync(path.join(`${log}.1`, "keep"), "utf8"), "previous destination");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

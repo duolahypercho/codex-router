@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { assertBefore } from "./script-order.mjs";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   mkdirSync,
@@ -16,6 +17,13 @@ import { fileURLToPath } from "node:url";
 import { DIRTY_PREVIEW_LIMIT, localModificationsMessage } from "../src/update.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+test("script ordering rejects either missing step and reversed steps", () => {
+  assertBefore("preflight\ninstall", "preflight", "install");
+  assert.throws(() => assertBefore("install", "preflight", "install"), /Missing required step/);
+  assert.throws(() => assertBefore("preflight", "preflight", "install"), /Missing required step/);
+  assert.throws(() => assertBefore("install\npreflight", "preflight", "install"), /must precede/);
+});
 
 // Windows does not guarantee a POSIX shell. Run these executable-shell
 // assertions wherever `sh` is available (including Git Bash on CI), and skip
@@ -141,10 +149,7 @@ test("Homebrew setup never reconciles package-manager-owned dependencies", () =>
   assert.match(policy, /echo managed/);
   assert.match(policy, /case "\$\(install_step node-deps\)" in\n\s*managed\)/);
   assert.match(policy, /case "\$\(install_step python-deps\)" in\n\s*managed\)/);
-  assert.ok(
-    policy.indexOf("CODEX_ROUTER_PACKAGE_MANAGER") < policy.indexOf('"$force_deps" = true'),
-    "--force-deps must not mutate Homebrew's managed dependency tree",
-  );
+  assertBefore(policy, "CODEX_ROUTER_PACKAGE_MANAGER", '"$force_deps" = true', "--force-deps must not mutate Homebrew's managed dependency tree");
 });
 
 test("POSIX updates republish every installed companion client", () => {
@@ -169,17 +174,11 @@ test("guided Windows setup forwards the selected client target to the installer"
 
 test("OpenClaw installers enforce its Node matrix before dependency or catalog work", () => {
   const posixInstall = withoutComments(readScript("bin", "install"));
-  assert.ok(
-    posixInstall.indexOf("openclaw-install.mjs\" preflight") < posixInstall.indexOf("npm ci --omit=dev"),
-  );
+  assertBefore(posixInstall, "openclaw-install.mjs\" preflight", "npm ci --omit=dev");
   const windowsInstall = withoutComments(readScript("install.ps1"));
-  assert.ok(
-    windowsInstall.indexOf("openclaw-install.mjs\") preflight") < windowsInstall.indexOf("npm ci --omit=dev"),
-  );
+  assertBefore(windowsInstall, "openclaw-install.mjs\") preflight", "npm ci --omit=dev");
   const enable = withoutComments(readScript("bin", "enable"));
-  assert.ok(
-    enable.indexOf("openclaw-install.mjs preflight") < enable.indexOf("provider-selection.mjs ensure-configured"),
-  );
+  assertBefore(enable, "openclaw-install.mjs preflight", "provider-selection.mjs ensure-configured");
 });
 
 test("Windows doctor repair forwards the active client target", () => {
@@ -194,15 +193,9 @@ test("client-independent smoke tests accept every supported target", () => {
 
 test("both installers preflight pending login-free refreshes before catalog publication", () => {
   const posix = withoutComments(readScript("bin", "install"));
-  assert.ok(
-    posix.indexOf("login-free-refresh-journal.mjs assert-clear") <
-      posix.indexOf("node src/catalog.mjs"),
-  );
+  assertBefore(posix, "login-free-refresh-journal.mjs assert-clear", "node src/catalog.mjs");
   const windows = withoutComments(readScript("install.ps1"));
-  assert.ok(
-    windows.indexOf("login-free-refresh-journal.mjs assert-clear") <
-      windows.indexOf("src/catalog.mjs"),
-  );
+  assertBefore(windows, "login-free-refresh-journal.mjs assert-clear", "src/catalog.mjs");
   const doctor = readScript("src", "doctor.mjs");
   assert.match(doctor, /path\.join\(SOURCE_ROOT, "bin", "install"\)/);
   assert.match(doctor, /path\.join\(SOURCE_ROOT, "install\.ps1"\)/);
@@ -465,11 +458,7 @@ test("both installers restore a detached rollback checkout to main before updati
   );
   assert.match(posixUpdate, /ensure_main_branch "\$install_dir"/);
   assert.match(posixUpdate, /git -C "\$install_dir" pull --ff-only origin main/);
-  assert.ok(
-    posixUpdate.indexOf('ensure_main_branch "$install_dir"') <
-      posixUpdate.indexOf("previous_revision="),
-    "previous_revision must be recorded after HEAD is on main, matching install.ps1",
-  );
+  assertBefore(posixUpdate, 'ensure_main_branch "$install_dir"', "previous_revision=", "previous_revision must be recorded after HEAD is on main, matching install.ps1");
 
   assert.match(
     posix,
@@ -649,11 +638,7 @@ test("native catalog adoption is inside both installer rollback transactions", (
   const posix = readFileSync(path.join(root, "bin", "install"), "utf8");
   const windows = readFileSync(path.join(root, "install.ps1"), "utf8");
 
-  assert.ok(
-    posix.indexOf("trap rollback EXIT HUP INT TERM") <
-      posix.indexOf("prepare-from-config"),
-    "POSIX adoption must start after the rollback trap",
-  );
+  assertBefore(posix, "trap rollback EXIT HUP INT TERM", "prepare-from-config", "POSIX adoption must start after the rollback trap");
   assert.match(posix, /clear-pending/);
   assert.match(windows, /\$AdoptionPending\s*=\s*\$true/);
   assert.match(windows, /native-catalog-source\.mjs clear-pending/);
@@ -933,10 +918,7 @@ test("installer rollback undoes only what the run created", () => {
   // Both installers must read the pre-existing state before they mutate it.
   assert.match(posix, /config_was_enabled=/);
   assert.match(posix, /service_was_installed=/);
-  assert.ok(
-    posix.indexOf("service_was_installed=false") < posix.indexOf("rollback() {"),
-    "POSIX must capture prior state before defining the rollback that reads it",
-  );
+  assertBefore(posix, "service_was_installed=false", "rollback() {", "POSIX must capture prior state before defining the rollback that reads it");
   assert.match(windows, /\$ConfigWasEnabled\s*=/);
   assert.match(windows, /\$ServiceWasInstalled\s*=/);
 
@@ -961,23 +943,10 @@ test("both installers record the manifest before waiting on health", () => {
   const posix = readFileSync(path.join(root, "bin", "install"), "utf8");
   const windows = readFileSync(path.join(root, "install.ps1"), "utf8");
 
-  assert.ok(
-    posix.indexOf("install-manifest.mjs record") < posix.indexOf("wait-health.mjs"),
-    "POSIX must record the manifest before the health wait",
-  );
-  assert.ok(
-    windows.indexOf("install-manifest.mjs record") < windows.indexOf("wait-health.mjs"),
-    "Windows must record the manifest before the health wait",
-  );
-  assert.ok(
-    posix.indexOf("install-manifest.mjs record") < posix.indexOf("node src/service.mjs install"),
-    "POSIX must record the manifest before installing the service",
-  );
-  assert.ok(
-    windows.indexOf("install-manifest.mjs record") <
-      windows.indexOf("& node src/service.mjs install"),
-    "Windows must record the manifest before installing the service",
-  );
+  assertBefore(posix, "install-manifest.mjs record", "wait-health.mjs", "POSIX must record the manifest before the health wait");
+  assertBefore(windows, "install-manifest.mjs record", "wait-health.mjs", "Windows must record the manifest before the health wait");
+  assertBefore(posix, "install-manifest.mjs record", "node src/service.mjs install", "POSIX must record the manifest before installing the service");
+  assertBefore(windows, "install-manifest.mjs record", "& node src/service.mjs install", "Windows must record the manifest before installing the service");
 });
 
 // The foreign-state override is what lets a checkout rebuild state that
@@ -1176,37 +1145,16 @@ test("a readiness timeout leaves the installed service and config in place", () 
   // still pointing at it.
   assert.match(posix, /if \[ "\$readiness_timeout" = true \]; then\s*\n\s*return/);
   assert.match(windows, /if \(\$ReadinessTimedOut\) \{ throw \}/);
-  assert.ok(
-    posix.indexOf('if [ "$readiness_timeout" = true ]') <
-      posix.indexOf("node src/service.mjs uninstall"),
-    "the POSIX timeout guard must precede the service teardown it skips",
-  );
-  assert.ok(
-    windows.indexOf("if ($ReadinessTimedOut) { throw }") <
-      windows.indexOf("& node src/service.mjs uninstall"),
-    "the Windows timeout guard must precede the service teardown it skips",
-  );
+  assertBefore(posix, 'if [ "$readiness_timeout" = true ]', "node src/service.mjs uninstall", "the POSIX timeout guard must precede the service teardown it skips");
+  assertBefore(windows, "if ($ReadinessTimedOut) { throw }", "& node src/service.mjs uninstall", "the Windows timeout guard must precede the service teardown it skips");
 
   // The flag has to be set before the rollback can read it. Under `set -u` an
   // unset variable would abort the trap itself.
-  assert.ok(
-    posix.indexOf("readiness_timeout=false") < posix.indexOf("rollback() {"),
-    "POSIX must initialise the flag before defining the rollback that reads it",
-  );
-  assert.ok(
-    windows.indexOf("$ReadinessTimedOut = $false") <
-      windows.indexOf("if ($ReadinessTimedOut) { throw }"),
-    "Windows must initialise the flag before the rollback guard that reads it",
-  );
+  assertBefore(posix, "readiness_timeout=false", "rollback() {", "POSIX must initialise the flag before defining the rollback that reads it");
+  assertBefore(windows, "$ReadinessTimedOut = $false", "if ($ReadinessTimedOut) { throw }", "Windows must initialise the flag before the rollback guard that reads it");
 
   // A second full health wait on the same cold start can only fail the same
   // way, so the timeout branch must stop rather than fall through to it.
-  assert.ok(
-    posix.indexOf('[ "$service_status" -eq 75 ]') < posix.indexOf("node src/wait-health.mjs"),
-    "POSIX must decide on the timeout before the second health wait",
-  );
-  assert.ok(
-    windows.indexOf("$LASTEXITCODE -eq 75") < windows.indexOf("& node src/wait-health.mjs"),
-    "Windows must decide on the timeout before the second health wait",
-  );
+  assertBefore(posix, '[ "$service_status" -eq 75 ]', "node src/wait-health.mjs", "POSIX must decide on the timeout before the second health wait");
+  assertBefore(windows, "$LASTEXITCODE -eq 75", "& node src/wait-health.mjs", "Windows must decide on the timeout before the second health wait");
 });
