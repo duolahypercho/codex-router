@@ -4,7 +4,6 @@ import test from "node:test";
 
 import {
   ageToolResults as applyAging,
-  shapeToolResult,
 } from "../src/tool-result-aging.mjs";
 
 function ageToolResults(input, options) {
@@ -19,7 +18,7 @@ function output(id, value) {
   return { type: "function_call_output", call_id: id, output: value };
 }
 
-test("Cua runtime documentation survives aging and shaping while ordinary results still age", () => {
+test("Cua runtime documentation survives aging while ordinary results still age", () => {
   for (const identity of [
     { namespace: "mcp__cua_repl", name: "js" },
     { name: "mcp__cua_repl__js" },
@@ -37,7 +36,7 @@ test("Cua runtime documentation survives aging and shaping while ordinary result
         ];
         const retained = [];
         const result = ageToolResults(input, {
-          frontier: 0, minBytes: 16384, denseShaping: true,
+          frontier: 0, minBytes: 16384,
           retain: (_text, info) => { retained.push(info.callId); return "Read archived output."; },
         });
         assert.equal(result.input[1], input[1]);
@@ -70,10 +69,8 @@ test("instruction readers are protected across tools and wrappers, ordinary data
       output('instruction', 'Documentation and ordinary text\n'.repeat(3000)),
       {type:'message', role:'assistant', content:'Continue'},
     ];
-    for (const denseShaping of [false, true]) {
-      const result = ageToolResults(input, {frontier:0, minBytes:16384, denseShaping});
-      assert.equal(result.input[1] === input[1], protectedRead, JSON.stringify([name,args,denseShaping]));
-    }
+    const result = ageToolResults(input, {frontier:0, minBytes:16384});
+    assert.equal(result.input[1] === input[1], protectedRead, JSON.stringify([name,args]));
   }
 });
 
@@ -118,26 +115,24 @@ for (const [label, name, args, protectedRead] of [
   ["malformed runtime code field", "mcp__cua_repl__js", { code: 42 }, false],
 ]) {
   test(`instruction classification: ${label}`, () => {
-    for (const denseShaping of [false, true]) {
-      for (const structured of [false, true]) {
-        const text = 'Instruction and ordinary data\n'.repeat(3000);
-        const value = structured ? [{ type: 'input_text', text }] : text;
-        const input = [
-          { ...call('read', name), arguments: typeof args === 'string' ? args : JSON.stringify(args) },
-          output('read', value),
-          { type: 'message', role: 'assistant', content: 'Continue.' },
-        ];
-        let retained = 0;
-        const result = ageToolResults(input, {
-          frontier: 0, minBytes: 16384, denseShaping,
-          retain: () => { retained += 1; return 'Read archived output.'; },
-        });
-        assert.equal(result.input[1] === input[1], protectedRead);
-        assert.equal(retained, protectedRead ? 0 : 1);
-        assert.equal(result.input[0], input[0]);
-        assert.equal(result.input[1].call_id, 'read');
-        assert.equal(result.input[2], input[2]);
-      }
+    for (const structured of [false, true]) {
+      const text = 'Instruction and ordinary data\n'.repeat(3000);
+      const value = structured ? [{ type: 'input_text', text }] : text;
+      const input = [
+        { ...call('read', name), arguments: typeof args === 'string' ? args : JSON.stringify(args) },
+        output('read', value),
+        { type: 'message', role: 'assistant', content: 'Continue.' },
+      ];
+      let retained = 0;
+      const result = ageToolResults(input, {
+        frontier: 0, minBytes: 16384,
+        retain: () => { retained += 1; return 'Read archived output.'; },
+      });
+      assert.equal(result.input[1] === input[1], protectedRead);
+      assert.equal(retained, protectedRead ? 0 : 1);
+      assert.equal(result.input[0], input[0]);
+      assert.equal(result.input[1].call_id, 'read');
+      assert.equal(result.input[2], input[2]);
     }
   });
 }
@@ -149,18 +144,16 @@ test("instruction protection accepts normalized function and custom-call payload
     { type: 'custom_tool_call', name: 'exec_command', input: { cmd: 'Get-Content AGENTS.md' } },
   ];
   for (const invocation of calls) {
-    for (const denseShaping of [false, true]) {
-      const input = [
-        { ...invocation, call_id: 'instruction' },
-        { type: invocation.type === 'custom_tool_call' ? 'custom_tool_call_output' : 'function_call_output',
-          call_id: 'instruction', output: [{ type: 'input_text', text: 'Important instructions\n'.repeat(3000) }] },
-        { type: 'message', role: 'assistant', content: 'Continue.' },
-      ];
-      let retained = 0;
-      const result = ageToolResults(input, { frontier: 0, denseShaping, retain: () => { retained += 1; return 'Read archive.'; } });
-      assert.equal(result.input, input);
-      assert.equal(retained, 0);
-    }
+    const input = [
+      { ...invocation, call_id: 'instruction' },
+      { type: invocation.type === 'custom_tool_call' ? 'custom_tool_call_output' : 'function_call_output',
+        call_id: 'instruction', output: [{ type: 'input_text', text: 'Important instructions\n'.repeat(3000) }] },
+      { type: 'message', role: 'assistant', content: 'Continue.' },
+    ];
+    let retained = 0;
+    const result = ageToolResults(input, { frontier: 0, retain: () => { retained += 1; return 'Read archive.'; } });
+    assert.equal(result.input, input);
+    assert.equal(retained, 0);
   }
 });
 
@@ -190,7 +183,7 @@ test("ages a large consumed result while preserving its call pairing and recover
   );
 });
 
-test("ordinary aging keeps exact head and tail bytes without RTK shaping", () => {
+test("ordinary aging keeps exact head and tail bytes unchanged", () => {
   const value = [
     "progress 10%\rprogress 20%",
     ...Array.from({ length: 5_000 }, (_, index) => `distinct line ${index}`),
@@ -206,9 +199,8 @@ test("ordinary aging keeps exact head and tail bytes without RTK shaping", () =>
     ]).flat(),
   ];
 
-  const result = ageToolResults(input, { denseShaping: false });
+  const result = ageToolResults(input);
   assert.equal(result.stats.toolResultsAged, 1);
-  assert.equal(result.stats.toolResultsShaped, 0);
   assert.match(result.input[1].output, /progress 10%\rprogress 20%/u);
   assert.match(result.input[1].output, /tail old\rtail final/u);
 });
@@ -263,70 +255,6 @@ test("can be disabled without copying or changing the input", () => {
     toolResultBytesAfter: 0,
     toolResultBytesSaved: 0,
   });
-});
-
-test("dense compaction shapes a noisy newest result with a recoverable RTK receipt", () => {
-  const value = [
-    "starting build",
-    ...Array(1_000).fill("compiled unchanged dependency"),
-    "ERROR final link failed",
-  ].join("\n");
-  const input = [call("latest", "exec_command"), output("latest", value)];
-
-  const ordinary = ageToolResults(input);
-  assert.equal(ordinary.input, input, "the ordinary frontier remains byte-for-byte intact");
-
-  const compacted = ageToolResults(input, { denseShaping: true });
-  assert.notEqual(compacted.input, input);
-  assert.equal(compacted.stats.toolResultsAged, 0);
-  assert.equal(compacted.stats.toolResultsShaped, 1);
-  assert.equal(compacted.stats.toolResultShapeBytesSaved, compacted.stats.toolResultBytesSaved);
-  assert.match(compacted.input[1].output, /RTK-style compaction/u);
-  assert.match(compacted.input[1].output, /same line repeated 999 more times/u);
-  assert.match(compacted.input[1].output, /ERROR final link failed/u);
-  assert.match(compacted.input[1].output, /Read the exact archived result/u);
-  assert.match(
-    compacted.input[1].output,
-    new RegExp(createHash("sha256").update(value).digest("hex")),
-  );
-
-  const repeated = ageToolResults(compacted.input, { denseShaping: true });
-  assert.equal(repeated.input, compacted.input, "a shaped frontier is not wrapped again");
-  assert.equal(repeated.stats.toolResultsShaped, 0);
-});
-
-test("dense compaction does not wrap a receipt written by the former pressure mode", () => {
-  const legacy = [
-    "[Tool result shaped by Codex Router token maxxing: 10000 -> 100 bytes, sha256:abc.]",
-    ...Array(1_000).fill("repeated legacy output"),
-  ].join("\n");
-  const input = [call("latest", "exec_command"), output("latest", legacy)];
-  const result = ageToolResults(input, { denseShaping: true });
-  assert.equal(result.input, input);
-  assert.equal(result.stats.toolResultsShaped, 0);
-});
-
-test("the RTK-style shaper is deterministic and keeps error-bearing evidence", () => {
-  const value = [
-    "progress 10%\rprogress 20%\rWARNING retrying\rprogress 30%",
-    "",
-    "",
-    ...Array.from({ length: 9 }, (_, index) => `        boilerplate ${index}`),
-    "        ERROR nested failure stays visible",
-    ...Array.from({ length: 9 }, (_, index) => `        more boilerplate ${index}`),
-    ...Array(20).fill("same diagnostic"),
-  ].join("\n");
-  const once = shapeToolResult(value);
-  const twice = shapeToolResult(once);
-  assert.equal(twice, once);
-  assert.doesNotMatch(once, /\r/u);
-  assert.doesNotMatch(once, /progress 10%|progress 20%/u);
-  assert.match(once, /progress 30%/u);
-  assert.match(once, /WARNING retrying/u);
-  assert.match(once, /deeply indented lines omitted/u);
-  assert.match(once, /ERROR nested failure stays visible/u);
-  assert.match(once, /same line repeated 19 more times/u);
-  assert.ok(Buffer.byteLength(once, "utf8") < Buffer.byteLength(value, "utf8"));
 });
 
 test("does not split surrogate pairs at either preview boundary", () => {

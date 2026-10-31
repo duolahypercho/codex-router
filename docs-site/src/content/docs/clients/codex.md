@@ -49,10 +49,9 @@ Harness, and Gemini CLI decide when the whole conversation needs compaction.
 Ordinary routed turns only compact consumed old results, so the newest four
 results remain byte-for-byte exact regardless of context size.
 
-The whole-history compaction summarizer has no execution tools. It therefore
-receives exact tool results rather than receipts it could not read back. The
-RTK-style shaper can rewrite text only when a caller supplies a committed,
-usable readback path; it is not applied to tool-less summarization.
+The whole-history compaction summarizer has no execution tools and receives
+exact tool results. Other requests use the same aging policy and keep recent
+results intact.
 
 Native OpenAI traffic is unchanged by default. `./bin/control
 tool-result-aging native on` extends the same compaction to native GPT models;
@@ -61,7 +60,7 @@ to OpenAI's own endpoint, and an install that has never run it keeps the
 pre-existing behavior. Set `CODEX_ROUTER_TOOL_RESULT_AGING=0` for a hard
 environment-level override that disables both the routed and the native path.
 
-Before any old result is omitted or shaped, its exact received text is saved
+Before any old result is omitted, its exact received text is saved
 to an owner-private store at `<state dir>/retained-tool-results` (override with
 `MODEL_ROUTER_TOOL_RESULT_RETENTION_DIR`). A receipt includes a platform-specific
 local command with an opaque handle. It returns bounded JSON pages (`text`,
@@ -124,8 +123,7 @@ before and after aging; this is an estimate and spends no provider quota.
 `usage-events.jsonl` — measured turns rather than an estimate. For a
 live check, leave the setting on and inspect `usage-events.jsonl` after a routed
 turn; events that compacted history include `toolResultsAged` and
-`toolResultBytesSaved`. Pressure-shaped turns additionally include
-`toolResultsShaped` and `toolResultShapeBytesSaved`. Those counters measure
+`toolResultBytesSaved`. Those counters measure
 serialized context bytes, while provider-billed token counts remain the
 authoritative cost measurement.
 

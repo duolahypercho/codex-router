@@ -1,0 +1,1 @@
+- Remove heuristic tool-result shaping during compaction. Recent and unconsumed output stays exact; opted-in aging of consumed old output retains authenticated archive readback.
