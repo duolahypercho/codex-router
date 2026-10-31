@@ -114,9 +114,43 @@ export function toolResultRecoveryScope(threadId, payload) {
   return JSON.stringify([String(threadId || ""), sha256(JSON.stringify([payload.instructions, policy, payload.tool_choice]))]);
 }
 
-export function toolResultReadbackTools(payload) {
-  return payload.tool_choice === undefined || ["auto", "required"].includes(payload.tool_choice)
-    ? payload.tools : [];
+export function toolResultReadbackTools(payload, { native = false } = {}) {
+  if (payload.tool_choice !== undefined && !["auto", "required"].includes(payload.tool_choice)) return [];
+  // Explicit inventories, including empty/unavailable ones, remain authoritative.
+  // Routed callers keep their existing top-level-tools contract.
+  if (!native || Object.hasOwn(payload, "tools")) return payload.tools;
+  if (!Array.isArray(payload.input)) return [];
+
+  // Responses Lite supplies incremental developer-role additional_tools items.
+  // Preserve unchanged members and let the latest declaration of a member win.
+  // These are candidates for an archive/readback attempt, not proof of current
+  // filesystem access. Removal notices are developer text with configurable
+  // wording: the existing scope hashes them (and these declarations), so an old
+  // signed receipt cannot authorize omission after the permission context changes.
+  const declarations = new Map();
+  const remember = (tool, namespace) => {
+    if (!tool || typeof tool !== "object" || Array.isArray(tool)) return false;
+    const name = tool.name || tool.function?.name;
+    if (typeof name !== "string" || !name) {
+      return !["function", "custom", "namespace"].includes(tool.type);
+    }
+    declarations.set(JSON.stringify([namespace, name]), tool);
+    return true;
+  };
+  for (const item of payload.input) {
+    if (item?.type !== "additional_tools" || item.role !== "developer") continue;
+    if (!Array.isArray(item.tools)) return [];
+    for (const tool of item.tools) {
+      if (tool?.type === "namespace") {
+        if (typeof tool.name !== "string" || !tool.name || !Array.isArray(tool.tools)) return [];
+        for (const member of tool.tools) {
+          if (member?.type === "namespace" || !remember(member, tool.name)) return [];
+        }
+      } else if (!remember(tool, "functions")) return [];
+    }
+  }
+  // Return only the client's declarations; never inject or rewrite wire tools.
+  return [...declarations.values()];
 }
 
 // Harden an EMPTY file first: no output bytes ever inhabit an inherited Windows
