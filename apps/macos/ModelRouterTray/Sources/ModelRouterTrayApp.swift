@@ -10589,23 +10589,21 @@ func usageResetCaption(_ date: Date) -> String {
 // How long until a quota window reopens -- the number people actually scan
 // the reset list for. The absolute clock time is resetClockLabel's job.
 // Explicit language makes tests deterministic while other suites change the
-// process preference. The optional Bool preserves existing caller compatibility.
+// process preference.
 func resetCountdownLabel(
   _ date: Date,
   now: Date = Date(),
-  chinese: Bool? = nil,
   language: ResolvedTrayLanguage = RouterLanguage.resolution
 ) -> String {
-  let resolved = chinese.map { $0 ? ResolvedTrayLanguage.chinese : .english } ?? language
   let seconds = date.timeIntervalSince(now)
-  if seconds <= 0 { return routerMessage(.resetSoon, language: resolved) }
+  if seconds <= 0 { return routerMessage(.resetSoon, language: language) }
   let minutes = Int(seconds / 60)
-  if minutes < 60 { return routerMessage(.resetMinutes, ["minutes": "\(minutes)"], language: resolved) }
+  if minutes < 60 { return routerMessage(.resetMinutes, ["minutes": "\(minutes)"], language: language) }
   let hours = minutes / 60
   if hours < 24 {
-    return routerMessage(.resetHours, ["hours": "\(hours)", "minutes": "\(minutes % 60)"], language: resolved)
+    return routerMessage(.resetHours, ["hours": "\(hours)", "minutes": "\(minutes % 60)"], language: language)
   }
-  return routerMessage(.resetDays, ["days": "\(hours / 24)", "hours": "\(hours % 24)"], language: resolved)
+  return routerMessage(.resetDays, ["days": "\(hours / 24)", "hours": "\(hours % 24)"], language: language)
 }
 
 // Just enough calendar context for the countdown: time today, weekday inside

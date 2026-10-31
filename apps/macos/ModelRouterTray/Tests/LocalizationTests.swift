@@ -40,12 +40,16 @@ struct LocalizationTests {
     #expect(reloaded == .chinese)
   }
 
-  @Test("an untranslated string falls back to English rather than rendering empty")
-  func fallsBackToEnglish() {
+  @Test(
+    "untranslated strings and formats fall back to English",
+    arguments: [TrayLanguage.chinese, .traditionalChinese, .arabic, .hindi, .japanese, .korean]
+  )
+  func fallsBackToEnglish(language: TrayLanguage) {
     let original = RouterLanguage.selection
     defer { RouterLanguage.setSelection(original) }
-    RouterLanguage.setSelection(.chinese)
+    RouterLanguage.setSelection(language)
     #expect(routerLocalized("no translation exists for this") == "no translation exists for this")
+    #expect(routerFormat("untranslated count: %d", 2) == "untranslated count: 2")
   }
 
   @Test("each option is labelled in the language it selects")
@@ -87,8 +91,8 @@ struct LocalizationTests {
     #expect(translated == RouterLanguage.resolution.table?["Idle"])
   }
 
-  @Test("every language translates exactly the key set Chinese does")
-  func keyParityAcrossLanguages() {
+  @Test("partial language tables contain only known source keys")
+  func translationKeysAreKnown() {
     let reference = Set(RouterChineseText.values.keys)
     let tables: [(String, [String: String])] = [
       ("Traditional Chinese", RouterTraditionalChineseText.values),
@@ -100,8 +104,8 @@ struct LocalizationTests {
     for (name, table) in tables {
       let keys = Set(table.keys)
       #expect(
-        keys == reference,
-        "\(name): missing \(reference.subtracting(keys).sorted()), extra \(keys.subtracting(reference).sorted())"
+        keys.isSubset(of: reference),
+        "\(name): unknown source keys \(keys.subtracting(reference).sorted())"
       )
     }
   }

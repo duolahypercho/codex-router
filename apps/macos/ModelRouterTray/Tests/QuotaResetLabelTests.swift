@@ -13,11 +13,11 @@ struct QuotaResetLabelTests {
 
   @Test("countdowns collapse to the largest two useful units")
   func countdownUnits() {
-    #expect(resetCountdownLabel(now.addingTimeInterval(-5), now: now, chinese: false) == "resets soon")
-    #expect(resetCountdownLabel(now.addingTimeInterval(45 * 60), now: now, chinese: false) == "in 45m")
-    #expect(resetCountdownLabel(now.addingTimeInterval(2 * 3600 + 14 * 60), now: now, chinese: false) == "in 2h 14m")
-    #expect(resetCountdownLabel(now.addingTimeInterval(3 * 24 * 3600 + 5 * 3600), now: now, chinese: false) == "in 3d 5h")
-    #expect(resetCountdownLabel(now.addingTimeInterval(45 * 60), now: now, chinese: true) == "45 分钟后")
+    #expect(resetCountdownLabel(now.addingTimeInterval(-5), now: now, language: .english) == "resets soon")
+    #expect(resetCountdownLabel(now.addingTimeInterval(45 * 60), now: now, language: .english) == "in 45m")
+    #expect(resetCountdownLabel(now.addingTimeInterval(2 * 3600 + 14 * 60), now: now, language: .english) == "in 2h 14m")
+    #expect(resetCountdownLabel(now.addingTimeInterval(3 * 24 * 3600 + 5 * 3600), now: now, language: .english) == "in 3d 5h")
+    #expect(resetCountdownLabel(now.addingTimeInterval(45 * 60), now: now, language: .chinese) == "45 分钟后")
   }
 
   @Test("clock labels add calendar context only when the day is not obvious")
