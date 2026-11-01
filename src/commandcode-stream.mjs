@@ -19,12 +19,10 @@ const FINISH_REASONS = new Map([
   ["length", { openai: "length", anthropic: "max_tokens" }],
   ["tool-calls", { openai: "tool_calls", anthropic: "tool_use" }],
   ["content-filter", { openai: "content_filter", anthropic: "end_turn" }],
-  ["error", { openai: "stop", anthropic: "end_turn" }],
 ]);
 
 function finishReason(raw, protocol) {
-  const mapped = FINISH_REASONS.get(String(raw || "stop"));
-  return mapped ? mapped[protocol] : protocol === "anthropic" ? "end_turn" : "stop";
+  return FINISH_REASONS.get(raw)[protocol];
 }
 
 // `inputTokens` follows the Vercel AI SDK convention and already *includes*
@@ -64,9 +62,8 @@ function sse(data, event) {
  * Incremental translator from `/alpha/generate` events to one caller protocol.
  *
  * `push(event)` returns the SSE text to write for that event (possibly empty).
- * `finish()` closes whatever the stream left open -- a stream that ends with
- * neither `finish-step` nor `finish` still has to terminate cleanly, because a
- * caller waiting on a terminal event would otherwise hang on a dead socket.
+ * `finish()` emits a success terminal only after a supported upstream finish
+ * reason. A failed or missing terminal is reported by the relay's error path.
  */
 export class GenerateTranslator {
   constructor({ protocol = "openai", model = "", id, created = Math.floor(Date.now() / 1000) } = {}) {
@@ -77,7 +74,7 @@ export class GenerateTranslator {
     this.started = false;
     this.finished = false;
     this.usage = undefined;
-    this.finishReasonRaw = "stop";
+    this.finishReasonRaw = undefined;
     this.error = undefined;
     // Anthropic serialization state.
     this.blockIndex = -1;
@@ -123,7 +120,10 @@ export class GenerateTranslator {
       case "finish":
         if (event.usage) this.usage = event.usage;
         if (event.totalUsage) this.usage = event.totalUsage;
-        if (event.finishReason) this.finishReasonRaw = event.finishReason;
+        if (event.finishReason) {
+          this.finishReasonRaw = event.finishReason;
+          this.#validateTerminal();
+        }
         return "";
       case "error":
         this.error = event.error?.message || event.message || "Command Code stream error";
@@ -138,6 +138,7 @@ export class GenerateTranslator {
   finish() {
     if (this.finished) return "";
     this.finished = true;
+    if (!this.#validateTerminal()) return "";
     let out = this.started ? "" : this.#start();
     out += this.#closeOpenBlock();
     if (this.protocol === "anthropic") {
@@ -164,12 +165,20 @@ export class GenerateTranslator {
 
   /** The whole answer, for a caller that did not ask for a stream. */
   body() {
+    if (!this.#validateTerminal()) return undefined;
     if (this.protocol === "anthropic") {
       const content = [];
       if (this.reasoning) content.push({ type: "thinking", thinking: this.reasoning, signature: "" });
       if (this.text) content.push({ type: "text", text: this.text });
       for (const call of this.toolCalls) {
-        content.push({ type: "tool_use", id: call.id, name: call.name, input: safeJson(call.arguments) });
+        try {
+          const input = JSON.parse(call.arguments);
+          if (!input || typeof input !== "object" || Array.isArray(input)) throw new TypeError();
+          content.push({ type: "tool_use", id: call.id, name: call.name, input });
+        } catch {
+          this.error = "Command Code returned unreadable tool arguments.";
+          return undefined;
+        }
       }
       return {
         id: this.id,
@@ -202,6 +211,13 @@ export class GenerateTranslator {
       ],
       ...(usage ? { usage } : {}),
     };
+  }
+
+  #validateTerminal() {
+    if (!this.error && !FINISH_REASONS.has(this.finishReasonRaw)) {
+      this.error = "Command Code ended the generation without a supported finish reason.";
+    }
+    return !this.error;
   }
 
   #chunkShell() {
@@ -397,15 +413,6 @@ export class GenerateTranslator {
   }
 }
 
-function safeJson(raw) {
-  try {
-    const parsed = JSON.parse(raw || "{}");
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
 /**
  * Split a byte stream into `/alpha/generate` events.
  *
@@ -414,10 +421,15 @@ function safeJson(raw) {
  * parser that assumed whole lines would drop content at random under load.
  */
 export async function* readGenerateEvents(stream) {
-  const decoder = new TextDecoder();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
   let buffer = "";
   for await (const chunk of stream) {
-    buffer += decoder.decode(chunk, { stream: true });
+    try {
+      buffer += decoder.decode(chunk, { stream: true });
+    } catch {
+      yield unreadableEvent();
+      return;
+    }
     let newline = buffer.indexOf("\n");
     while (newline !== -1) {
       const line = buffer.slice(0, newline).trim();
@@ -429,11 +441,21 @@ export async function* readGenerateEvents(stream) {
       newline = buffer.indexOf("\n");
     }
   }
+  try {
+    buffer += decoder.decode();
+  } catch {
+    yield unreadableEvent();
+    return;
+  }
   const tail = buffer.trim();
   if (tail) {
     const event = parseEvent(tail);
     if (event) yield event;
   }
+}
+
+function unreadableEvent() {
+  return { type: "error", message: "Command Code sent an unreadable generation event." };
 }
 
 function parseEvent(line) {
@@ -443,8 +465,11 @@ function parseEvent(line) {
     // rather than turning every event into a parse failure.
     const payload = line.startsWith("data:") ? line.slice(5).trim() : line;
     if (!payload || payload === "[DONE]") return undefined;
-    return JSON.parse(payload);
+    const event = JSON.parse(payload);
+    return event && typeof event === "object" && !Array.isArray(event)
+      ? event
+      : unreadableEvent();
   } catch {
-    return undefined;
+    return unreadableEvent();
   }
 }

@@ -188,15 +188,17 @@ test("anthropic tool calls become a tool_use block with json deltas", () => {
   assert.equal(events.find((entry) => entry.event === "message_delta").data.delta.stop_reason, "tool_use");
 });
 
-test("a stream that stops without a terminal event still terminates cleanly", () => {
-  const { sse } = run([
+test("a stream that stops without a terminal event cannot manufacture success", () => {
+  const { sse, translator } = run([
     { type: "start" },
     { type: "text-start", id: "t" },
     { type: "text-delta", id: "t", text: "half" },
   ]);
   const chunks = openAiChunks(sse);
-  assert.equal(chunks.at(-1).choices[0].finish_reason, "stop");
-  assert.ok(sse.endsWith("data: [DONE]\n\n"));
+  assert.equal(chunks.at(-1).choices[0].finish_reason, null);
+  assert.doesNotMatch(sse, /\[DONE\]/);
+  assert.match(translator.error, /finish reason/);
+  assert.equal(translator.body(), undefined);
 });
 
 test("the whole answer is assembled for a caller that did not ask to stream", () => {
@@ -246,9 +248,68 @@ test("a data-prefixed line and a [DONE] sentinel are tolerated", async () => {
   const events = [];
   const body = Readable.from([
     Buffer.from('data: {"type":"start"}\n', "utf8"),
-    Buffer.from("not json\n", "utf8"),
     Buffer.from("[DONE]\n", "utf8"),
   ]);
   for await (const event of readGenerateEvents(body)) events.push(event);
   assert.deepEqual(events, [{ type: "start" }]);
+});
+
+test("malformed or invalid UTF-8 events become a safe explicit error", async () => {
+  for (const bytes of [Buffer.from("not json\n"), Buffer.from("[]\n"), Buffer.from([0xff]), Buffer.from([0xe4, 0xb8])]) {
+    const events = [];
+    for await (const event of readGenerateEvents(Readable.from([bytes]))) events.push(event);
+    assert.deepEqual(events, [{ type: "error", message: "Command Code sent an unreadable generation event." }]);
+  }
+});
+
+test("one-byte Unicode chunks and valid terminal reasons retain their meaning", async () => {
+  const event = { type: "text-delta", id: "t", text: "中文🙂" };
+  const bytes = Buffer.from(`${JSON.stringify(event)}\n`);
+  const events = [];
+  for await (const parsed of readGenerateEvents(Readable.from(Array.from(bytes, (byte) => Buffer.from([byte]))))) events.push(parsed);
+  assert.deepEqual(events, [event]);
+  for (const [reason, openai, anthropic] of [
+    ["stop", "stop", "end_turn"], ["tool-calls", "tool_calls", "tool_use"],
+    ["length", "length", "max_tokens"], ["content-filter", "content_filter", "end_turn"],
+  ]) {
+    for (const [protocol, expected] of [["openai", openai], ["anthropic", anthropic]]) {
+      const { translator } = run([{ type: "finish", finishReason: reason }], { protocol });
+      assert.equal(translator.error, undefined);
+      const body = translator.body();
+      assert.equal(protocol === "openai" ? body.choices[0].finish_reason : body.stop_reason, expected);
+    }
+  }
+});
+
+
+test("buffered Anthropic tool arguments are never repaired to an empty object", () => {
+  for (const raw of ['{"path":', "null", "[]", '"text"', ""]) {
+    const events = [
+      { type: "tool-input-start", id: "t", toolName: "read_file" },
+      { type: "tool-input-delta", id: "t", delta: raw },
+      { type: "tool-input-end", id: "t" },
+      { type: "finish-step", finishReason: "tool-calls" },
+    ];
+    const translator = new GenerateTranslator({ protocol: "anthropic" });
+    for (const event of events) translator.push(event);
+    assert.equal(translator.body(), undefined);
+    assert.match(translator.error, /unreadable tool arguments/);
+    assert.equal(translator.finish(), "");
+    // Streaming forwards the original argument fragments. It never parses and
+    // replaces them with an invented object on the caller's behalf.
+    const { sse } = run(events, { protocol: "anthropic" });
+    const args = anthropicEvents(sse)
+      .filter(({ data }) => data.delta?.type === "input_json_delta")
+      .map(({ data }) => data.delta.partial_json).join("");
+    assert.equal(args, raw);
+  }
+  for (const raw of ["{}", '{"path":"readme.md"}']) {
+    const translator = new GenerateTranslator({ protocol: "anthropic" });
+    for (const event of [
+      { type: "tool-input-start", id: "t", toolName: "read_file" },
+      { type: "tool-input-delta", id: "t", delta: raw },
+      { type: "finish-step", finishReason: "tool-calls" },
+    ]) translator.push(event);
+    assert.deepEqual(translator.body().content[0].input, JSON.parse(raw));
+  }
 });

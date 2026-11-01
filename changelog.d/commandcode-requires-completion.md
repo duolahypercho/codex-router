@@ -1,0 +1,1 @@
+- Stop turning missing, failed or interrupted Command Code finishes and unreadable buffered tool arguments into successful answers; report the existing protocol error without replaying a generation through another API key.
