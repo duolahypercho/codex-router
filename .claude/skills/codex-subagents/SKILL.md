@@ -11,19 +11,14 @@ models offered, proving they actually work, and fixing it when they don't.
 
 Run every command from the codex-router checkout.
 
-## Start here, always
+## Inspect a route
 
 ```bash
-node .claude/skills/codex-subagents/subagent-report.mjs
+./bin/control subagents explain <provider/model>
 ```
 
-This answers the only question that matters — *if I ask Codex to spawn a subagent
-right now, what can it pick?* — and it is the one question `control subagents status`
-does not answer. That command reports your **intent**. The merged catalog is what
-Codex actually **reads**. They drift apart silently, and the report catches the drift.
-
-If the report says a model is spawnable, it is offered to Codex. If it doesn't
-appear there, nothing else you do in Codex will surface it.
+This reports the route's selection, capability and agent-definition blockers.
+Codex decides which model overrides it offers in the current session.
 
 ## How a model becomes spawnable
 
@@ -58,16 +53,14 @@ node src/catalog.mjs
 ```
 
 then **fully quit and reopen Codex**. Not a new window — the whole app. Codex reads
-the catalog at startup and caches it. Skipping this is the single most common reason
-a change appears to do nothing, and the report flags it as `STALE`.
+the catalog at startup and caches it.
 
 ## Two traps that waste the most time
 
 **Codex advertises only a small priority-ordered subset.** Turning on twelve models
 does not give you twelve choices — it buries the ones you wanted behind ones you
-didn't. The report prints models in Codex's ranking order and marks where the cut
-probably falls. If a model you want sits far down that list, turn off the ones above
-it rather than adding more.
+didn't. If Codex omits a model you enabled, check its route with `subagents explain`
+and turn off higher-priority models you do not want.
 
 **`mode all` is not "make everything work".** It advertises every model as capable,
 including models that cannot drive Codex at all. A model that emits tool calls as
@@ -111,7 +104,7 @@ user's approval before running it, and say which provider it will bill.
 ## Spawning, once a model is offered
 
 Ask Codex in plain language: *"spawn a subagent on glm-5.2 to audit src/router.mjs
-for unhandled promise rejections."* Codex picks from the models the report listed.
+for unhandled promise rejections."* Codex picks from its offered model overrides.
 There is no router-side command that spawns an agent — the router only controls
 what Codex is allowed to choose.
 
@@ -133,15 +126,15 @@ a spawn call that omits the model inherits the parent.
 
 ## When it goes wrong
 
-**Model not offered in Codex.** Run the report. Not listed → `subagents set <slug> on`,
-rebuild, restart. Listed but far down → crowded out; turn off higher-priority models.
+**Model not offered in Codex.** Run `subagents explain <slug>` and resolve the
+reported blockers. Rebuild the catalog and restart Codex after changing selection.
 
 **Subagent starts, then fails or stalls.** Run the agent check. A `text-tool-calls`
 or `invents-tools` verdict means the model cannot do this job; turn it off rather
 than retrying.
 
-**Change had no effect.** Almost always a missed `node src/catalog.mjs` or a Codex
-that was never fully quit. The report's `STALE` line catches the first.
+**Change had no effect.** Rebuild with `node src/catalog.mjs`, then fully quit and
+reopen Codex so it reads the published catalog.
 
 **Everything fails at once, on every model.** Not a subagent problem. Check the
 router itself:

@@ -1,0 +1,1 @@
+- Remove the separate subagent readiness script and its mandatory skill step. Use the existing route explanation command; model publication and spawning are unchanged.

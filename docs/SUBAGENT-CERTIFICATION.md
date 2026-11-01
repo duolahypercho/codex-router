@@ -67,7 +67,8 @@ What is **not** a fourth way: the legacy diagnostic statuses in the proofs file
 > were inert and every selection an operator had made was silently discarded.
 > An install with twenty routes enabled had four spawnable and one agent
 > definition on disk. If you are changing that function, the modes are the
-> feature, not a formality — and `subagent-report.mjs` is how you check.
+> feature, not a formality. Verify promotion with the multi-agent state tests;
+> inspect an individual route with `control subagents explain <slug>`.
 
 ## Signed routing is not itself subagent certification
 
