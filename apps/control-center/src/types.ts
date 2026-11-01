@@ -72,7 +72,7 @@ export interface SubagentSettings {
   enabled: string[];
   disabled: string[];
   efforts?: Record<string, string>;
-  /** Machine-local v2 capability evidence, populated by the live probe. */
+  /** Machine-local diagnostics; these never grant subagent capabilities. */
   proofs?: Record<string, {
     status: "checking" | "candidate" | "experimental" | "proven" | "failed" | string;
     reason?: string;
@@ -877,17 +877,6 @@ export interface RouterControlApi {
   setSubagentMode(mode: "all" | "selected" | "proven"): Promise<unknown>;
   setSubagentModel(slug: string, enabled: boolean): Promise<unknown>;
   setSubagentEffort(slug: string, effort: string): Promise<unknown>;
-  /** Runs the five live checks for each route in parallel; a complete pass promotes that route here. */
-  certifySubagentModels(slugs: string[]): Promise<{
-    results?: Array<{
-      slug: string;
-      certified?: boolean;
-      /** The run never reached a verdict: rate limit, outage, or a harness refusal. */
-      deferred?: boolean;
-      failedLabel?: string;
-      reason?: string;
-    }>;
-  }>;
   setSubagentSelection(selectAll: boolean): Promise<unknown>;
   setPickerModel(slug: string, visible: boolean): Promise<unknown>;
   setPickerModels(showAll: boolean): Promise<unknown>;

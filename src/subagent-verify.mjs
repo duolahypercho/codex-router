@@ -51,7 +51,7 @@ export function subagentVerificationCandidates(slugs, { force = false, now = Dat
     if (model.multiAgentVersion === "v2" || model.multiAgentVersion === "v1") continue;
     const status = proofs[slug]?.status;
     if (!force) {
-      if (status === "candidate" || status === "experimental" || status === "proven") continue;
+      if (status === "candidate" || status === "experimental" || status === "proven" || status === "verified") continue;
       if (status === "checking" && !checkingIsStale(proofs[slug], now)) continue;
     }
     candidates.push(slug);

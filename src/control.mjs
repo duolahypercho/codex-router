@@ -343,15 +343,9 @@ async function emitProbe() {
     : [];
   // Local proof records are surfaced for status only. They never alter the
   // registry capability sent to Codex.
-  const { applySubagentProofs } = await import("./subagent-proofs.mjs");
-  const effectiveListedModels = applySubagentProofs(
-    LISTED_MODELS,
-    subagentSettings.proofs,
-    { hidden: hiddenModels },
-  );
   // The tray groups models by provider to build its rows, so protocol
   // variants report their canonical family id: one opencode Go row, not three.
-  const routedModels = effectiveListedModels.map((model) => ({
+  const routedModels = LISTED_MODELS.map((model) => ({
     slug: model.slug,
     displayName: model.displayName,
     provider: canonicalProviderId(model.provider),
@@ -516,17 +510,12 @@ async function routerCatalogSnapshot() {
   const { CHECKED_IN_MODELS, LOCAL_MODEL_SLUGS } = await import("./model-registry.mjs");
   const { modelPickerSnapshot } = await import("./model-picker-state.mjs");
   const { subagentSettingsSnapshot } = await import("./multi-agent-state.mjs");
-  const { applySubagentProofs } = await import("./subagent-proofs.mjs");
   const { routerDashboardState } = await import("./router-dashboard.mjs");
   const settings = subagentSettingsSnapshot();
   const picker = modelPickerSnapshot();
   const hidden = new Set(picker.hidden);
   const visible = new Set(picker.visible);
-  const models = applySubagentProofs(
-    selectedConfiguredListedModels(),
-    settings.proofs,
-    { hidden, disabled: settings.disabled },
-  ).map((model) => ({
+  const models = selectedConfiguredListedModels().map((model) => ({
     slug: model.slug,
     displayName: model.displayName,
     provider: canonicalProviderId(model.provider),
@@ -1730,125 +1719,6 @@ async function handleSubagents(action, value, flag, rest = []) {
     await refreshModelSettingsCatalog();
     process.stdout.write(`${JSON.stringify({ verified })}\n`);
     return;
-  } else if (action === "certify") {
-    // The whole five-check run, for one route or several. Unlike `verify`
-    // above, whose two-request probe is diagnostic, a complete pass here
-    // promotes the route on this machine. It spends real quota on each route's
-    // own provider and on the native parent that delegates to it.
-    //
-    // The runs go in parallel because nothing about one route's checks touches
-    // another's: separate credentials, separate ephemeral Codex homes,
-    // separate application artifacts. What they do share is the proofs file
-    // and the catalog, so the recording and the republish stay here, in one
-    // process, after the fan-out -- two control processes racing
-    // read-modify-write on the proofs file would silently drop a verdict.
-    const slugs = [...new Set([value, ...rest].map((slug) => String(slug || "").trim()).filter(Boolean))];
-    if (!slugs.length) throw new Error("Usage: control subagents certify <model-slug> [<model-slug> ...]");
-    for (const slug of slugs) {
-      if (!(await knownModelSlug(slug))) throw new Error(`Unknown model slug: ${slug}`);
-    }
-    const [
-      { verifySubagentRoute, firstFailure, recordApplicationEvidence, runDeferred },
-      { recordVerification, recordVerificationStarted, clearSubagentProof },
-      { assertCallerSecret, callerBaseUrl },
-      { CALLER_SECRET_PATH, PORTS },
-      { findCodexBinary },
-      { VERSION },
-    ] = await Promise.all([
-      import("./subagent-certify.mjs"),
-      import("./subagent-proofs.mjs"),
-      import("./caller-auth.mjs"),
-      import("./paths.mjs"),
-      import("./codex-binary.mjs"),
-      import("./version.mjs"),
-    ]);
-    const { existsSync, readFileSync } = await import("node:fs");
-    if (!existsSync(CALLER_SECRET_PATH)) {
-      throw new Error(
-        "The local router caller key is missing; run ./bin/doctor --fix (.\\codex-router.ps1 doctor --fix on Windows).",
-      );
-    }
-    const secret = assertCallerSecret(readFileSync(CALLER_SECRET_PATH, "utf8").trim());
-    const codexBin = findCodexBinary();
-    const baseUrl = callerBaseUrl(PORTS.router, secret);
-    const { CODEX_HOME, MERGED_CATALOG_PATH } = await import("./paths.mjs");
-    for (const slug of slugs) recordVerificationStarted(slug);
-    const outcomes = await Promise.all(
-      slugs.map(async (slug) => {
-        try {
-          return {
-            slug,
-            result: await verifySubagentRoute(slug, {
-              baseUrl,
-              secret,
-              codexBin,
-              codexHome: CODEX_HOME,
-              catalogPath: MERGED_CATALOG_PATH,
-              routerVersion: VERSION,
-            }),
-          };
-        } catch (error) {
-          // One route's crash is not a verdict on the others, and must not
-          // reject the whole fan-out.
-          return { slug, error: error instanceof Error ? error.message : String(error) };
-        }
-      }),
-    );
-    const results = [];
-    let promoted = false;
-    for (const { slug, result, error } of outcomes) {
-      if (!result) {
-        recordVerification(slug, { checks: {}, routerVersion: VERSION, reason: error });
-        results.push({ slug, certified: false, reason: error });
-        continue;
-      }
-      // A run that only met a rate limit, an outage, or a missing entitlement
-      // learned nothing about the route. Clearing the record leaves the switch
-      // retryable instead of leaving "No" next to a model that was never
-      // actually refused.
-      if (!result.ok && runDeferred(result.checks)) {
-        clearSubagentProof(slug);
-        const detail = firstFailure(result.checks)?.detail;
-        results.push({ slug, certified: false, deferred: true, reason: detail });
-        continue;
-      }
-      recordVerification(slug, {
-        checks: result.checks,
-        routerVersion: VERSION,
-        ...(result.ok ? {} : { reason: firstFailure(result.checks)?.detail }),
-      });
-      // A pass is evidence worth more than this machine. Filing it as a
-      // v2_agent application is what lets a review promote the route for every
-      // installer, so nobody -- including this operator on their next machine
-      // -- pays to measure it again.
-      let application;
-      if (result.ok) {
-        promoted = true;
-        try {
-          application = recordApplicationEvidence(slug, {
-            checks: result.checks,
-            routerVersion: VERSION,
-            at: new Date().toISOString(),
-          });
-        } catch {
-          // A read-only or relocated checkout must not turn a genuine pass
-          // into a failure; the machine-local record already stands on its own.
-        }
-      }
-      const failure = result.ok ? undefined : firstFailure(result.checks);
-      results.push({
-        slug,
-        certified: result.ok,
-        ...(application ? { application } : {}),
-        ...(failure ? { failed: failure.check, failedLabel: failure.label, reason: failure.detail } : {}),
-      });
-    }
-    // One republish for the whole fan-out, and only when something was
-    // promoted: publication rewrites the merged catalog and the agents
-    // directory, which is far too much work to repeat per failed route.
-    if (promoted) await refreshModelSettingsCatalog();
-    process.stdout.write(`${JSON.stringify({ results })}\n`);
-    return;
   } else if (action === "set") {
     if (!["on", "off"].includes(flag)) {
       throw new Error("Usage: control subagents set <model-slug> <on|off>");
@@ -1920,7 +1790,7 @@ async function handleSubagents(action, value, flag, rest = []) {
       "Usage: control subagents status|explain <model-slug> [--json]|select-all|unselect-all|" +
         "mode <all|selected|proven>|" +
         "set <model-slug> <on|off>|effort <model-slug> <level|default>|" +
-        "provider <provider-id> <on|off>|verify [model-slug ...]|certify <model-slug>|" +
+        "provider <provider-id> <on|off>|verify [model-slug ...]|" +
         "policy status|provider <provider-id> <on|off>|model <model-slug> <on|off>|family <name> <on|off>",
     );
   }

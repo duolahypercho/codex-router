@@ -12,7 +12,6 @@ process.env.MODEL_ROUTER_USER_MODELS = path.join(stateDir, "user-models.json");
 after(() => rmSync(stateDir, { recursive: true, force: true }));
 
 const {
-  applySubagentProofs,
   awaitingSpawnProof,
   clearSubagentProof,
   readSubagentProofs,
@@ -108,40 +107,14 @@ test("a proofs file that cannot be read promotes nothing", () => {
   assert.deepEqual(readSubagentProofs(invented).proofs, {});
 });
 
-test("local proof records never promote or demote repository claims", () => {
-  const models = [
-    { slug: "vendor/experimental" },
-    { slug: "vendor/proven" },
-    { slug: "vendor/failed" },
-    { slug: "vendor/checking" },
-    { slug: "vendor/hidden" },
-    { slug: "vendor/disabled" },
-    { slug: "vendor/reviewed-v1", multiAgentVersion: "v1" },
-    { slug: "vendor/registry", multiAgentVersion: "v2" },
-  ];
-  const proofs = {
-    "vendor/experimental": { status: "experimental" },
-    "vendor/proven": { status: "proven" },
-    "vendor/failed": { status: "failed" },
-    "vendor/checking": { status: "checking" },
-    "vendor/hidden": { status: "proven" },
-    "vendor/disabled": { status: "proven" },
-  };
-  const promoted = applySubagentProofs(models, proofs, {
-    hidden: new Set(["vendor/hidden"]),
-    disabled: ["vendor/disabled"],
-  });
-  const bySlug = new Map(promoted.map((model) => [model.slug, model.multiAgentVersion]));
-  assert.equal(bySlug.get("vendor/experimental"), undefined);
-  assert.equal(bySlug.get("vendor/proven"), undefined);
-  assert.equal(bySlug.get("vendor/failed"), undefined);
-  assert.equal(bySlug.get("vendor/checking"), undefined);
-  assert.equal(bySlug.get("vendor/hidden"), undefined);
-  assert.equal(bySlug.get("vendor/disabled"), undefined);
-  assert.equal(bySlug.get("vendor/reviewed-v1"), "v1");
-  assert.equal(bySlug.get("vendor/registry"), "v2");
-  // No proofs at all is a pass-through, not a rewrite.
-  assert.equal(applySubagentProofs(models, {}), models);
+test("historical verified records remain readable diagnostics without being re-probed", () => {
+  const slug = "deepseek/deepseek-v4-flash";
+  const record = { status: "verified", checks: { markerReturn: { outcome: "pass" } } };
+  writeFileSync(SUBAGENT_PROOFS_PATH, JSON.stringify({ version: 1, proofs: { [slug]: record } }));
+  assert.deepEqual(subagentProofSnapshot()[slug], record);
+  assert.deepEqual(subagentVerificationCandidates([slug]), []);
+  assert.deepEqual(subagentVerificationCandidates([slug], { force: true }), [slug]);
+  clearSubagentProof(slug);
 });
 
 test("verification skips reviewed v1/v2 models, unknown slugs, and settled candidates", () => {
