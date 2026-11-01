@@ -392,11 +392,9 @@ also uses ranking; this is a preference heuristic, not a live price comparison
 or a guarantee of the cheapest engine. A model on your own machine is never
 chosen automatically because its runtime may not be running.
 
-An explicitly selected engine that no longer resolves is reported rather than
-silently replaced. If a resolved remote engine fails during the read, bounded
-fallback can try other enabled vision engines and consume their quota; the
-output identifies the engine that actually answered. A pinned local engine
-does not fall back to a remote provider.
+Each image reading calls the resolved engine once. A failed read is included
+as an explicit failure for that image while the main turn continues. Choose a
+different engine if the current one is unavailable.
 
 Pin a specific engine, or choose Auto:
 

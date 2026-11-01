@@ -189,7 +189,7 @@ test("routed generation redirects do not replay a consumed request", { timeout: 
   }
 });
 
-test("local native and gateway vision redirects bypass transient retries", { timeout: 30_000 }, async t => {
+test("local native and gateway vision redirects submit once and refuse the target", { timeout: 30_000 }, async t => {
   const f = await fixture(t);
   for (const engine of [
     { slug: "local/redirect", gatewayModel: "local-redirect", local: true, baseUrl: `${f.origin}/v1` },
@@ -201,7 +201,7 @@ test("local native and gateway vision redirects bypass transient retries", { tim
       const before = f.observed.origin;
       await assert.rejects(describeImage({ engine, imageUrl: image, gatewayBase: `${f.origin}/v1`,
         nativeCall: { baseUrl: f.origin, headers: { authorization: "Bearer synthetic-native-session" } },
-        headers: { "content-type": "application/json" }, retryDelaysMs: [0, 0] }),
+        headers: { "content-type": "application/json" } }),
       error => error.code === "upstream_redirect_refused" && !/sensitive-location|synthetic-only/.test(error.message));
       assert.equal(f.observed.origin, before + 1, `${engine.slug}/${status}`);
       assert.equal(f.observed.target, 0);
@@ -230,7 +230,7 @@ test("a vision read does not repeat an API forwarder's encoded redirect refusal"
   const f = await fixture(t);
   const base = await f.start("api-forwarder");
   await assert.rejects(describeImage({ engine: f.models[0], imageUrl: image,
-    gatewayBase: base, headers: { authorization: `Bearer ${internal}`, "content-type": "application/json" }, retryDelaysMs: [0, 0] }),
+    gatewayBase: base, headers: { authorization: `Bearer ${internal}`, "content-type": "application/json" } }),
   error => {
     assert.equal(f.observed.origin, 1, "an encoded redirect refusal must not retry its origin");
     return error.code === "upstream_redirect_refused" && error.status === 400;

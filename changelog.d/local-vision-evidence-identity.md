@@ -1,0 +1,1 @@
+- Key local image readings by the selected model and endpoint so changing a local reader does not reuse evidence purchased from another one.

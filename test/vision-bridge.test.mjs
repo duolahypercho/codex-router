@@ -23,7 +23,6 @@ import {
   questionForImage,
   rankVisionEngines,
   resolveVisionEngine,
-  resolveVisionEngines,
   responseText,
   streamedResponseText,
   stripImages,
@@ -31,7 +30,6 @@ import {
   supportsImageInput,
   TRUNCATION_NOTICE,
   visionEngineEfforts,
-  VisionStreamError,
   VISION_EVIDENCE_MAX_CHARS,
   VISION_QUESTION_MAX_CHARS,
   VISION_RECORD_MAX_CHARS,
@@ -688,137 +686,21 @@ test("the question is the operator's words, not Codex's bookkeeping", () => {
 // a session lapsed, and a provider's endpoint answered 503. Either one used to
 // mean every pasted image degraded to "could not be read" until somebody
 // noticed.
-test("the reader is a list, so one unreachable engine does not cost the image", () => {
-  const candidates = () => [FLASH_VISION, FLAGSHIP_VISION, LOOPBACK_VISION];
-
-  // The operator's choice comes first, then the other credentialed models.
-  const pinned = resolveVisionEngines(candidates, { enabled: true, engine: FLAGSHIP_VISION.slug });
-  assert.deepEqual(pinned.map((engine) => engine.slug), [FLAGSHIP_VISION.slug, FLASH_VISION.slug]);
-
-  // Auto puts the cheapest first and still carries a spare.
-  const auto = resolveVisionEngines(candidates, { enabled: true, engine: null });
-  assert.deepEqual(auto.map((engine) => engine.slug), [FLASH_VISION.slug, FLAGSHIP_VISION.slug]);
-
-  // A machine-served engine is never a fallback: it is only there while the
-  // operator's own runtime is running, which is why auto never picks one.
-  assert.ok(!auto.some((engine) => engine.slug === LOOPBACK_VISION.slug));
-
-  // ...and pinning one means the operator named their machine on purpose, so
-  // nothing falls off it onto a provider's quota they did not choose to spend.
-  const local = resolveVisionEngines(candidates, {
-    enabled: true,
-    engine: LOCAL_ENGINE_SLUG,
-    local: { model: "moondream", baseUrl: "http://127.0.0.1:11434/v1" },
-  });
-  assert.equal(local.length, 1);
-  assert.equal(local[0].slug, LOCAL_ENGINE_SLUG);
-
-  // Off is still off, and an unresolvable pin is still an operator-visible
-  // problem rather than a silent switch to another model.
-  assert.deepEqual(resolveVisionEngines(candidates, { enabled: false }), []);
-  assert.deepEqual(resolveVisionEngines(candidates, { enabled: true, engine: "nobody/here" }), []);
-});
-
-// The credentialed list costs a synchronous credential probe per provider, so
-// asking for a fallback must not mean asking for that list twice.
-test("the candidate list is still built at most once, fallback or not", () => {
-  let built = 0;
-  const candidates = () => {
-    built += 1;
-    return [FLASH_VISION, FLAGSHIP_VISION];
-  };
-  assert.equal(resolveVisionEngines(candidates, { enabled: true, engine: null }).length, 2);
-  assert.equal(built, 1);
-
-  built = 0;
-  resolveVisionEngines(candidates, { enabled: false });
-  assert.equal(built, 0, "a switched-off bridge still consulted the credentialed model list");
-
-  assert.throws(
-    () => resolveVisionEngines([FLASH_VISION], { enabled: true, engine: null }),
-    /function returning the selected, credentialed candidates/,
-  );
-});
-
-test("a read that fails transiently is asked again; a refusal is not", async () => {
+test("each image reading submits once, including refused, empty and failed reads", async () => {
   const engine = localVisionEngine({ local: { model: "moondream" } });
-  const ok = () =>
-    new Response(JSON.stringify({ choices: [{ message: { content: "## Summary\nA chart." } }] }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
-
-  for (const status of [429, 503]) {
+  for (const status of [400, 401, 403, 404, 429, 502, 503, 200, "reset"]) {
     let calls = 0;
-    const text = await describeImage({
-      engine,
-      imageUrl: "data:image/png;base64,AAAA",
+    await assert.rejects(describeImage({
+      engine, imageUrl: "data:image/png;base64,AAAA", headers: {},
       gatewayBase: "http://unused/v1",
-      headers: {},
-      retryDelaysMs: [1, 1],
       fetchImpl: async () => {
         calls += 1;
-        return calls === 1 ? new Response("", { status }) : ok();
+        if (status === "reset") throw new Error("connection reset");
+        return new Response(status === 200 ? JSON.stringify({ choices: [] }) : "", { status });
       },
-    });
-    assert.equal(calls, 2, `HTTP ${status} should have been retried`);
-    assert.match(text, /A chart\./);
+    }), status === 200 ? /no description/ : status === "reset" ? /connection reset/ : new RegExp(`HTTP ${status}`));
+    assert.equal(calls, 1);
   }
-
-  // An empty reply is a hiccup, not a refusal.
-  let empty = 0;
-  await describeImage({
-    engine,
-    imageUrl: "data:image/png;base64,AAAA",
-    gatewayBase: "http://unused/v1",
-    headers: {},
-    retryDelaysMs: [1],
-    fetchImpl: async () => {
-      empty += 1;
-      return empty === 1
-        ? new Response(JSON.stringify({ choices: [] }), { status: 200 })
-        : ok();
-    },
-  });
-  assert.equal(empty, 2);
-
-  // A refusal is final: asking again buys the identical refusal.
-  for (const status of [400, 401, 403, 404]) {
-    let calls = 0;
-    await assert.rejects(
-      describeImage({
-        engine,
-        imageUrl: "data:image/png;base64,AAAA",
-        gatewayBase: "http://unused/v1",
-        headers: {},
-        retryDelaysMs: [1, 1],
-        fetchImpl: async () => {
-          calls += 1;
-          return new Response("", { status });
-        },
-      }),
-      new RegExp(`answered HTTP ${status}`),
-    );
-    assert.equal(calls, 1, `HTTP ${status} must not be retried`);
-  }
-
-  // Retries are bounded, and the last transient message is what the turn says.
-  let attempts = 0;
-  await assert.rejects(
-    describeImage({
-      engine,
-      imageUrl: "data:image/png;base64,AAAA",
-      gatewayBase: "http://unused/v1",
-      headers: {},
-      retryDelaysMs: [1, 1],
-      fetchImpl: async () => {
-        attempts += 1;
-        return new Response("", { status: 502 });
-      },
-    }),
-    /answered HTTP 502/,
-  );
-  assert.equal(attempts, 3);
 });
 
 test("a quota-window 429 is not retried and keeps only safe routing metadata", async () => {
@@ -830,7 +712,6 @@ test("a quota-window 429 is not retried and keeps only safe routing metadata", a
       imageUrl: "data:image/png;base64,AAAA",
       gatewayBase: "http://127.0.0.1:4100/v1",
       headers: {},
-      retryDelaysMs: [1, 1],
       fetchImpl: async () => {
         calls += 1;
         return new Response(
@@ -864,7 +745,6 @@ test("an explicit rate-limit reset is not retried on the same vision engine", as
       imageUrl: "data:image/png;base64,AAAA",
       gatewayBase: "http://127.0.0.1:4100/v1",
       headers: {},
-      retryDelaysMs: [1, 1],
       fetchImpl: async () => {
         calls += 1;
         return new Response(JSON.stringify({ error: { message: "Too many requests" } }), {
@@ -893,7 +773,6 @@ test("a timeout is reported rather than tried again", async () => {
       imageUrl: "data:image/png;base64,AAAA",
       gatewayBase: "http://unused/v1",
       headers: {},
-      retryDelaysMs: [1, 1],
       fetchImpl: async () => {
         calls += 1;
         const error = new Error("timed out");
@@ -1145,6 +1024,8 @@ test("describeImage sends a native engine to the Codex backend with the caller's
           "",
           'data: {"type":"response.output_text.delta","delta":"An invoice."}',
           "",
+          'data: {"type":"response.completed","response":{"status":"completed","output":[]}}',
+          "",
           "data: [DONE]",
           "",
         ].join("\n"),
@@ -1196,6 +1077,8 @@ test("a streamed reply is reassembled from deltas, and from the final envelope w
     "",
     'data: {"type":"response.output_text.delta","delta":"A chart."}',
     "",
+    'data: {"type":"response.completed","response":{"status":"completed","output":[]}}',
+    "",
     "data: [DONE]",
     "",
   ].join("\n");
@@ -1207,8 +1090,9 @@ test("a streamed reply is reassembled from deltas, and from the final envelope w
     'data: {"type":"response.completed","response":{"output":[{"content":[{"type":"output_text","text":"Only at the end."}]}]}}\n\n';
   assert.equal(streamedResponseText(envelope), "Only at the end.");
 
-  // Keep-alives and unparseable lines must not break reassembly.
-  assert.equal(streamedResponseText(": keep-alive\n\ndata: not json\n\n"), "");
+  // Inert or malformed frames do not hide a real terminal or certify one.
+  assert.equal(streamedResponseText(`: keep-alive\n\ndata: not json\n\n${envelope}`), "Only at the end.");
+  assert.throws(() => streamedResponseText(": keep-alive\n\ndata: not json\n\n"), /response stream failed before it finished/);
 });
 
 test("effort levels are read from both catalog spellings", () => {
@@ -1252,7 +1136,7 @@ test("a chosen effort rides along to the engine", async () => {
     effort: "xhigh",
     fetchImpl: async (url, init) => {
       body = JSON.parse(init.body);
-      return new Response('data: {"type":"response.output_text.delta","delta":"An invoice."}\n\n', {
+      return new Response('data: {"type":"response.output_text.delta","delta":"An invoice."}\n\ndata: {"type":"response.completed","response":{"status":"completed","output":[]}}\n\n', {
         status: 200,
       });
     },
@@ -1277,7 +1161,7 @@ test("an effort the engine never offered is dropped rather than sent", async () 
     effort: "max",
     fetchImpl: async (url, init) => {
       body = JSON.parse(init.body);
-      return new Response('data: {"type":"response.output_text.delta","delta":"An invoice."}\n\n', {
+      return new Response('data: {"type":"response.output_text.delta","delta":"An invoice."}\n\ndata: {"type":"response.completed","response":{"status":"completed","output":[]}}\n\n', {
         status: 200,
       });
     },
@@ -1298,7 +1182,7 @@ test("no chosen effort leaves the request exactly as it was", async () => {
     },
     fetchImpl: async (url, init) => {
       body = JSON.parse(init.body);
-      return new Response('data: {"type":"response.output_text.delta","delta":"An invoice."}\n\n', {
+      return new Response('data: {"type":"response.output_text.delta","delta":"An invoice."}\n\ndata: {"type":"response.completed","response":{"status":"completed","output":[]}}\n\n', {
         status: 200,
       });
     },
@@ -1335,7 +1219,7 @@ test("deltas followed by an error event throw instead of returning the partial t
     "data: [DONE]",
     "",
   ].join("\n");
-  assert.throws(() => streamedResponseText(body), VisionStreamError);
+  assert.throws(() => streamedResponseText(body), /response stream failed before it finished/);
   // Never echo an upstream error body: it can name credential state.
   assert.doesNotMatch(thrownMessage(body), /upstream overloaded/);
 });
@@ -1350,14 +1234,39 @@ test("a response.failed envelope is inspected even when deltas already arrived",
     'data: {"type":"response.failed","response":{"status":"failed","error":{"message":"boom"}}}',
     "",
   ].join("\n");
-  assert.throws(() => streamedResponseText(body), VisionStreamError);
+  assert.throws(() => streamedResponseText(body), /response stream failed before it finished/);
   assert.doesNotMatch(thrownMessage(body), /boom/);
 });
 
 test("a terminal response whose status is not completed is a failure", () => {
   const body =
     'data: {"type":"response.completed","response":{"status":"incomplete","output":[{"content":[{"type":"output_text","text":"half"}]}]}}\n\n';
-  assert.throws(() => streamedResponseText(body), VisionStreamError);
+  assert.throws(() => streamedResponseText(body), /response stream failed before it finished/);
+});
+
+test("image deltas need an actual successful terminal, not clean EOF or DONE text", () => {
+  for (const tail of [
+    "",
+    "data: [DONE]\n\n",
+    'data: {"type":"response.created","response":{"status":"completed"}}\n\n',
+    'data: {"type":"response.completed","response":[]}\n\n',
+    'data: {"type":"response.completed","response":{"status":"unknown"}}\n\n',
+    'data: {"type":"response.cancelled"}\n\n',
+    'data: {"type":"response.failed"}\n\ndata: {"type":"response.completed","response":{"status":"completed"}}\n\n',
+  ]) {
+    assert.throws(() => streamedResponseText(`${DELTA_LINES.join("\n")}\n${tail}`), /response stream failed before it finished/);
+  }
+});
+
+test("vision completion uses SSE data framing and retains a terminal-only reading", () => {
+  const terminal = [
+    ": keep-alive",
+    "event: response.completed",
+    'data: {"type":"response.completed",',
+    'data: "response":{"status":"completed","output_text":"A complete reading."}}',
+    "", "",
+  ].join("\r\n");
+  assert.equal(streamedResponseText(terminal), "A complete reading.");
 });
 
 test("the streamed shapes that already worked keep working", () => {
@@ -1384,37 +1293,44 @@ test("the streamed shapes that already worked keep working", () => {
 });
 
 test("a mid-stream failure degrades that one image instead of quoting a truncated read", async () => {
-  const result = await substituteImages(imageInput(), async (url) => ({
-    text: await describeImage({
-      engine: nativeVisionEngine(NATIVE_LUNA),
-      imageUrl: url,
-      gatewayBase: "http://127.0.0.1:4100/v1",
-      headers: {},
-      nativeCall: {
-        baseUrl: "https://chatgpt.com/backend-api/codex",
-        headers: { Authorization: "Bearer caller-session" },
-      },
-      fetchImpl: async () =>
-        new Response(
-          [
-            ...DELTA_LINES,
-            'data: {"type":"error","error":{"message":"upstream overloaded"}}',
-            "",
-          ].join("\n"),
-          { status: 200 },
-        ),
-    }),
-    engineName: "GPT-5.6 Luna",
-  }));
-  assert.equal(result.described, 0);
-  assert.equal(result.failed, 1);
-  const text = result.input[0].content[1].text;
-  // The degradation path already existed; it simply never fired here.
-  assert.match(text, /could not be read/);
-  assert.match(text, /stopped partway through/);
-  // The half-read transcript must not survive into the turn under any framing.
-  assert.doesNotMatch(text, /Invoice 4471/);
-  assert.doesNotMatch(text, /IMAGE EVIDENCE/);
+  for (const tail of [
+    ['data: {"type":"error","error":{"message":"upstream overloaded"}}', ""],
+    [],
+  ]) {
+    let reads = 0;
+    const result = await substituteImages(imageInput(), async (url) => ({
+      text: await describeImage({
+        engine: nativeVisionEngine(NATIVE_LUNA),
+        imageUrl: url,
+        gatewayBase: "http://127.0.0.1:4100/v1",
+        headers: {},
+        nativeCall: {
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          headers: { Authorization: "Bearer caller-session" },
+        },
+        fetchImpl: async () => {
+          reads += 1;
+          return new Response(
+            [
+              ...DELTA_LINES,
+              ...tail,
+            ].join("\n"),
+            { status: 200 },
+          );
+        },
+      }),
+      engineName: "GPT-5.6 Luna",
+    }));
+    assert.equal(reads, 1, "an indeterminate partial read must not buy another generation");
+    assert.equal(result.described, 0);
+    assert.equal(result.failed, 1);
+    const text = result.input[0].content[1].text;
+    // The degradation path already existed; it simply never fired here.
+    assert.match(text, /could not be read/);
+    // The half-read transcript must not survive into the turn under any framing.
+    assert.doesNotMatch(text, /Invoice 4471/);
+    assert.doesNotMatch(text, /IMAGE EVIDENCE/);
+  }
 });
 
 // --- one native gate, not three -------------------------------------------
@@ -1553,8 +1469,8 @@ test("the request path hands the engine resolver a list it has not built yet", a
   const body = routerFunctionBody(source, "async function bridgeVisionInput");
   assert.match(
     body,
-    /resolveVisionEngines\(\s*\(\)\s*=>/,
-    "bridgeVisionInput must pass resolveVisionEngines a thunk, not an assembled array",
+    /resolveVisionEngine\(\s*\(\)\s*=>/,
+    "bridgeVisionInput must pass resolveVisionEngine a thunk, not an assembled array",
   );
   // `selectedConfiguredListedModels()` is the synchronous credential scan. It
   // may only appear inside that thunk -- never on a line the handler runs before
@@ -1605,63 +1521,6 @@ test("a bridged read is recorded rather than spent silently", async () => {
     /if \(!QUIET\)/,
     "the vision-bridge line must not be gated on QUIET",
   );
-});
-
-// The list only helps if the read path actually walks it. Asserted against the
-// source because the loop lives inside the request handler, the same way the
-// QUIET and usage-event rules above are asserted.
-test("the router remembers provider quota evidence and skips sibling vision engines", async () => {
-  const source = await readFile(path.join(repoRoot, "src/router.mjs"), "utf8");
-  const evidence = source.slice(
-    source.indexOf("async function readVisionEvidence"),
-    source.indexOf("// DeepSeek thinking mode"),
-  );
-  assert.match(evidence, /const errorStatus = Number\(error\?\.status\)/);
-  assert.match(evidence, /recordProviderCooldown\(visionEngineProvider\(engine\)/);
-  assert.match(source, /const VISION_FAILURE_BACKOFF_MS = 60_000/);
-  assert.match(source, /const visionFailedReads = new Map\(\)/);
-  assert.match(source, /function visionFailureCacheKey\(readKey\)/);
-  assert.match(source, /createHash\("sha256"\)\.update\(readKey\)\.digest\("base64url"\)/);
-  const readPath = source.slice(
-    source.indexOf("async function visionEvidenceFor"),
-    source.indexOf("async function readVisionEvidence"),
-  );
-  assert.match(readPath, /cachedVisionFailure\(readKey\)/);
-  assert.match(readPath, /rememberVisionFailure\(readKey, error\)/);
-  assert.match(source, /error\?\.failureKind !== "out_of_usage"/);
-  const bridge = source.slice(
-    source.indexOf("async function bridgeVisionInput"),
-    source.indexOf("function isOpaqueEncryptedContent"),
-  );
-  assert.match(bridge, /const exhaustedProviders = new Set\(\)/);
-  assert.match(bridge, /providerCooldown\(provider\)/);
-  assert.match(bridge, /exhaustedProviders\.has\(provider\)/);
-  assert.match(
-    bridge,
-    /error\?\.failureKind === "out_of_usage"\) exhaustedProviders\.add\(provider\)/,
-  );
-});
-
-test("the read path tries every resolved engine before giving up on an image", async () => {
-  const source = await readFile(path.join(repoRoot, "src/router.mjs"), "utf8");
-  const bridge = source.slice(
-    source.indexOf("async function bridgeVisionInput"),
-    source.indexOf("function isOpaqueEncryptedContent"),
-  );
-  assert.match(bridge, /for \(const \[index, engine\] of engines\.entries\(\)\)/);
-  // A failure moves to the next engine rather than ending the image.
-  assert.match(bridge, /catch \(error\) \{\s*lastError = error;/);
-  // ...and when they all refuse, the turn says what the last one said.
-  assert.match(bridge, /throw lastError;/);
-  // A fallback is never silent: the engine that actually read it is named in
-  // the evidence, and the log line says a fallback happened.
-  assert.match(bridge, /engineName: engine\.displayName \|\| engine\.slug/);
-  assert.match(bridge, /fellBack/);
-  // Another provider beats another attempt: an engine is only retried when
-  // there is nothing else left to try, or a paste waits out a retry ladder
-  // against a dead endpoint while a working engine sits behind it.
-  assert.match(bridge, /const last = index === engines\.length - 1;/);
-  assert.match(bridge, /last \? undefined : \[\]/);
 });
 
 test("a cached native transcript is not replayed for a different account", () => {
