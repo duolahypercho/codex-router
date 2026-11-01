@@ -3641,84 +3641,97 @@ test("router inlines an external parent's plaintext task before replaying to nat
   }
 });
 
-test("native router recovers a deferred agents namespace from history", async () => {
-  const nativeRequests = [];
-  const native = await mockServer(async (request, response) => {
-    nativeRequests.push(await bodyJson(request));
-    json(response, 200, { id: "resp_native_close", output: [] });
-  });
-  const routerPort = await openPort();
-  const router = run("router.mjs", {
-    CODEX_ROUTER_PORT: String(routerPort),
-    CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${native.port}/backend-api/codex`,
-    CODEX_ROUTER_QUIET: "1",
-  });
-  const headers = {
-    Authorization: "Bearer native-session-token",
-    "chatgpt-account-id": "native-test-account",
-    "Content-Type": "application/json",
-  };
-  const finishedChild = {
-    type: "agent_message",
-    author: "/root/native_regression_probe",
-    recipient: "/root",
-    content: [{
-      type: "input_text",
-      text:
-        "Message Type: FINAL_ANSWER\n" +
-        "Task name: /root\n" +
-        "Sender: /root/native_regression_probe\n" +
-        "Payload:\nfinished",
-    }],
-  };
-
-  try {
-    await waitFor(`${routerBase(routerPort)}/models`, router);
-    const replay = await fetch(`${routerBase(routerPort)}/responses`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        model: "gpt-5.6-sol",
-        stream: false,
-        tools: [],
-        input: [
-          {
-            type: "function_call",
-            name: "spawn_agent",
-            namespace: "agents",
-            call_id: "call_spawn",
-            arguments: "{}",
-          },
-          {
-            type: "function_call",
-            name: "wait_agent",
-            namespace: "agents",
-            call_id: "call_wait",
-            arguments: "{}",
-          },
-          finishedChild,
-        ],
-      }),
+for (const { name, output } of [
+  {
+    name: "native completed agent history does not fabricate an interrupt call",
+    output: [],
+  },
+  {
+    name: "native router preserves explicit calls with deferred agents namespace history",
+    output: [
+      {
+        type: "function_call", id: "fc_explicit", call_id: "call_explicit",
+        name: "interrupt_agent", namespace: "agents", status: "completed",
+        arguments: '{ "target" : "/root/native_regression_probe" }',
+      },
+      {
+        type: "function_call", id: "fc_other", call_id: "call_other",
+        name: "interrupt_agent", namespace: "other", status: "completed",
+        arguments: '{ "target" : "/root/unrelated" }',
+      },
+      {
+        type: "function_call", id: "fc_plain", call_id: "call_plain",
+        name: "interrupt_agent", status: "completed",
+        arguments: '{ "target" : "/root/plain" }',
+      },
+    ],
+  },
+]) {
+  test(name, async () => {
+    const nativeResponse = { id: "resp_native_close", status: "completed", output };
+    const nativeRequests = [];
+    const native = await mockServer(async (request, response) => {
+      nativeRequests.push(await bodyJson(request));
+      json(response, 200, nativeResponse);
     });
-    const replayBody = await replay.text();
-    assert.equal(replay.status, 200, replayBody);
-    const replayed = JSON.parse(replayBody);
-    const injected = replayed.output.find((item) => item?.type === "function_call");
-    assert.deepEqual(
-      { name: injected?.name, namespace: injected?.namespace },
-      { name: "interrupt_agent", namespace: "agents" },
-    );
-    assert.deepEqual(JSON.parse(injected.arguments), {
-      target: "/root/native_regression_probe",
+    const routerPort = await openPort();
+    const router = run("router.mjs", {
+      CODEX_ROUTER_PORT: String(routerPort),
+      CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${native.port}/backend-api/codex`,
+      CODEX_ROUTER_QUIET: "1",
     });
+    const headers = {
+      Authorization: "Bearer native-session-token",
+      "chatgpt-account-id": "native-test-account",
+      "Content-Type": "application/json",
+    };
+    // These deferred tools are absent from this turn's definitions. Their
+    // history identifies a namespace; it does not authorize a new invocation.
+    const input = [
+      {
+        type: "function_call", name: "spawn_agent", namespace: "agents",
+        call_id: "call_spawn", arguments: "{}",
+      },
+      {
+        type: "function_call", name: "wait_agent", namespace: "agents",
+        call_id: "call_wait", arguments: "{}",
+      },
+      {
+        type: "agent_message",
+        author: "/root/native_regression_probe",
+        recipient: "/root",
+        content: [{
+          type: "input_text",
+          text:
+            "Message Type: FINAL_ANSWER\n" +
+            "Task name: /root\n" +
+            "Sender: /root/native_regression_probe\n" +
+            "Payload:\nfinished",
+        }],
+      },
+    ];
 
-    assert.equal(nativeRequests.length, 1);
-    assert.deepEqual(nativeRequests[0].tools, []);
-  } finally {
-    await stopChild(router);
-    await closeServer(native.server);
-  }
-});
+    try {
+      await waitFor(`${routerBase(routerPort)}/models`, router);
+      const replay = await fetch(`${routerBase(routerPort)}/responses`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ model: "gpt-5.6-sol", stream: false, tools: [], input }),
+      });
+      const replayBody = await replay.text();
+      assert.equal(replay.status, 200, replayBody);
+      // Empty completion stays empty. Explicit native calls retain their
+      // namespace (including its absence), identity and raw argument string.
+      assert.deepEqual(JSON.parse(replayBody), nativeResponse);
+      assert.equal(nativeRequests.length, 1);
+      assert.deepEqual(nativeRequests[0].tools, []);
+      assert.deepEqual(nativeRequests[0].input, input);
+    } finally {
+      await stopChild(router);
+      await closeServer(native.server);
+    }
+  });
+}
 
 // A routed subagent cannot mint an OpenAI Fernet token, so Codex stores its
 // readable handoff under `agent_message.content[].encrypted_content` regardless

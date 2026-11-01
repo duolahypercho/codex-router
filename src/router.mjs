@@ -210,7 +210,7 @@ import {
   GroqToolLimitError,
   GROQ_TOOL_LIMIT_CODE,
 } from "./chat-tool-surface.mjs";
-import { pendingInterruptPlan, subagentToolAvailable } from "./subagent-completion.mjs";
+import { subagentToolAvailable } from "./subagent-completion.mjs";
 import {
   FAILOVER_BUDGET_MS,
   MAX_FAILOVER_HOPS,
@@ -4094,10 +4094,6 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
   // Responses-to-Chat boundary so the bridge cannot retain an earlier effort.
   routed = grokBridgeRequest(routed, route, request);
   const usageDiagnostics = routedUsageDiagnostics(routed, route);
-  const interruptPlan = pendingInterruptPlan(
-    needsZenFreeToolCompatibility(route) ? agedInput : input,
-    { namespaces: flattenedNamespaces },
-  );
   return {
     body: Buffer.from(JSON.stringify(routed), "utf8"),
     usageDiagnostics,
@@ -4118,10 +4114,6 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
           ...(patchFeedback ? { mode: "client_feedback" } : patchHook ? { mode: "client_hook" } : {}),
         }
       : undefined,
-    // Close finished children the parent left Working, but only when this
-    // request identifies one unambiguous subagent lifecycle namespace.
-    pendingInterrupts: interruptPlan.targets,
-    pendingInterruptNamespace: interruptPlan.namespace,
   };
 }
 
@@ -4599,8 +4591,6 @@ async function handleResponses(request, response, requestUrl) {
   let estimatedInputTokens;
   let toolResultAging;
   let imageBudget;
-  let pendingInterrupts = [];
-  let pendingInterruptNamespace;
   let bufferNativeStream = false;
   let emptyCompletion = false;
   let emptyCompletionRetried = false;
@@ -4959,8 +4949,6 @@ async function handleResponses(request, response, requestUrl) {
       flattenedNamespaces = built.flattenedNamespaces;
       diagnostics.grokStructuredPatch = built.grokStructuredPatch;
       setRoutingDiagnostics(built);
-      pendingInterrupts = built.pendingInterrupts;
-      pendingInterruptNamespace = built.pendingInterruptNamespace;
       agedInput = built.agedInput;
       toolResultAging = built.toolResultAging;
       imageBudget = built.imageBudget;
@@ -5012,8 +5000,6 @@ async function handleResponses(request, response, requestUrl) {
       flattenedNamespaces = built.flattenedNamespaces;
       diagnostics.grokStructuredPatch = built.grokStructuredPatch;
       setRoutingDiagnostics(built);
-      pendingInterrupts = built.pendingInterrupts;
-      pendingInterruptNamespace = built.pendingInterruptNamespace;
       target = built.target;
       headers = built.headers;
       routedBody = built.body;
@@ -5127,17 +5113,11 @@ async function handleResponses(request, response, requestUrl) {
           toolResultAging = aged.stats;
         }
       }
-      // SF and other native multi-agent parents hit this path (model_provider
-      // openai). They have the same Working-badge bug, so inventory the tools
-      // and queue missing interrupt_agent closes the same way as routed turns.
+      // Native calls carry their own identity and are relayed without inference.
+      // Stored completion history does not authorize lifecycle invocations.
       flattenedNamespaces = flattenNamespaceTools(payload.tools, {
         bridgeToolSearch: false,
       }).namespaces;
-      const interruptPlan = pendingInterruptPlan(native.input ?? payload.input, {
-        namespaces: flattenedNamespaces,
-      });
-      pendingInterrupts = interruptPlan.targets;
-      pendingInterruptNamespace = interruptPlan.namespace;
       if (!compactV1) delete native.previous_response_id;
       if (substitutedCaller) {
         normalizeNativeForSubstitutedCaller(native, { compact: compactV1 });
@@ -5622,23 +5602,14 @@ async function handleResponses(request, response, requestUrl) {
       if (leakedToolCalls) transforms.push(leakedToolCalls);
       // Restore flattened namespace calls for routed chat-completions providers
       // and pin an omitted spawn_agent model to every routed parent, including
-      // providers that already speak Responses. Also inject missing finished-
-      // child interrupts for both routed and native multi-agent parents (San
-      // Francisco uses native GPT).
-      if (route || pendingInterrupts.length > 0) {
+      // providers that already speak Responses.
+      if (route) {
         transforms.push(
           new NamespaceToolCallTransform(
             flattenedNamespaces,
             contentType,
             route?.slug,
-            // A native stream is attached only for the injection, so it must
-            // not pick up the routed-provider rewrites on the way through.
-            {
-              pendingInterrupts,
-              interruptNamespace: pendingInterruptNamespace,
-              injectOnly: !route,
-              effortForModel: subagentEffort,
-            },
+            { effortForModel: subagentEffort },
           ),
         );
       }

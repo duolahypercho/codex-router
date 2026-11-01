@@ -3516,7 +3516,7 @@ test(
   },
 );
 
-test("inject-only responses preserve lossy decimal payloads without injecting", async () => {
+test("unchanged responses preserve lossy decimal payloads", async () => {
   const { namespaces } = flattenNamespaceTools([
     {
       type: "namespace",
@@ -3532,10 +3532,7 @@ test("inject-only responses preserve lossy decimal payloads without injecting", 
     );
     const streamed = await collectBuffer(
       Readable.from([sse]).pipe(
-        new NamespaceToolCallTransform(namespaces, "text/event-stream", undefined, {
-          injectOnly: true,
-          pendingInterrupts: ["/root/finished"],
-        }),
+        new NamespaceToolCallTransform(namespaces, "text/event-stream", undefined),
       ),
     );
     assert.deepEqual(streamed, sse, numberText);
@@ -3546,10 +3543,7 @@ test("inject-only responses preserve lossy decimal payloads without injecting", 
     );
     const jsonOutput = await collectBuffer(
       Readable.from([json]).pipe(
-        new NamespaceToolCallTransform(namespaces, "application/json", undefined, {
-          injectOnly: true,
-          pendingInterrupts: ["/root/finished"],
-        }),
+        new NamespaceToolCallTransform(namespaces, "application/json", undefined),
       ),
     );
     assert.deepEqual(jsonOutput, json, numberText);
@@ -3600,9 +3594,7 @@ test("conflicting SSE event and payload types disable terminal decisions", async
     const source = Buffer.from(mismatch + later, "utf8");
     const transformed = await collectBuffer(
       Readable.from([...source].map((byte) => Buffer.from([byte]))).pipe(
-        new NamespaceToolCallTransform(namespaces, "text/event-stream", undefined, {
-          pendingInterrupts: ["/root/finished"],
-        }),
+        new NamespaceToolCallTransform(namespaces, "text/event-stream", undefined),
       ),
     );
     assert.deepEqual(transformed, source);
@@ -3624,7 +3616,7 @@ test("raw SSE framing handles CR, LF, and CRLF across one-byte chunks", async ()
   assert.deepEqual(output, source);
 });
 
-test("headerless bare-CR streams rewrite and generated interrupts adopt CR", async () => {
+test("headerless bare-CR streams preserve framing when rewritten", async () => {
   const { namespaces } = flattenNamespaceTools([
     {
       type: "namespace",
@@ -3654,15 +3646,13 @@ test("headerless bare-CR streams rewrite and generated interrupts adopt CR", asy
       'data: {"type":"response.completed","response":{"output":[]}}\r\r',
     "utf8",
   );
-  const injected = await collectBuffer(
+  const preservedTerminal = await collectBuffer(
     Readable.from([...terminal].map((byte) => Buffer.from([byte]))).pipe(
-      new NamespaceToolCallTransform(namespaces, "text/event-stream", undefined, {
-        pendingInterrupts: ["/root/finished"],
-      }),
+      new NamespaceToolCallTransform(namespaces, "text/event-stream", undefined),
     ),
   );
-  assert.match(injected.toString("utf8"), /"name":"interrupt_agent"/u);
-  assert.equal(injected.includes(0x0a), false);
+  assert.deepEqual(preservedTerminal, terminal);
+  assert.equal(preservedTerminal.includes(0x0a), false);
 });
 
 test("an initial SSE BOM is ignored for parsing and preserved in output", async () => {
@@ -3704,9 +3694,7 @@ test("an initial SSE BOM is ignored for parsing and preserved in output", async 
   ]);
   const preserved = await collectBuffer(
     Readable.from([...disagreement].map((byte) => Buffer.from([byte]))).pipe(
-      new NamespaceToolCallTransform(namespaces, "text/event-stream", undefined, {
-        pendingInterrupts: ["/root/finished"],
-      }),
+      new NamespaceToolCallTransform(namespaces, "text/event-stream", undefined),
     ),
   );
   assert.deepEqual(preserved, disagreement);
@@ -3737,7 +3725,7 @@ test("colonless event and data fields participate in repeated-field ambiguity", 
   }
 });
 
-test("duplicate embedded interrupt arguments cannot steer terminal injection state", async () => {
+test("duplicate embedded lifecycle arguments remain verbatim", async () => {
   const { namespaces } = flattenNamespaceTools([
     {
       type: "namespace",
@@ -3754,7 +3742,6 @@ test("duplicate embedded interrupt arguments cannot steer terminal injection sta
     call_id: "call_ambiguous",
     arguments: ambiguousArguments,
   };
-  const pendingInterrupts = ["/root/first", "/root/second"];
 
   const events = [
     {
@@ -3776,9 +3763,7 @@ test("duplicate embedded interrupt arguments cannot steer terminal injection sta
   );
   const streamed = await collectBuffer(
     Readable.from([...sse].map((byte) => Buffer.from([byte]))).pipe(
-      new NamespaceToolCallTransform(namespaces, "text/event-stream", undefined, {
-        pendingInterrupts,
-      }),
+      new NamespaceToolCallTransform(namespaces, "text/event-stream", undefined),
     ),
   );
   assert.deepEqual(streamed, sse);
@@ -3789,9 +3774,7 @@ test("duplicate embedded interrupt arguments cannot steer terminal injection sta
   );
   const jsonOutput = await collectBuffer(
     Readable.from([jsonBody]).pipe(
-      new NamespaceToolCallTransform(namespaces, "application/json", undefined, {
-        pendingInterrupts,
-      }),
+      new NamespaceToolCallTransform(namespaces, "application/json", undefined),
     ),
   );
   assert.deepEqual(jsonOutput, jsonBody);
@@ -3826,7 +3809,7 @@ test("changed SSE retains provider CRLF framing", async () => {
   }
 });
 
-test("interrupt injection adopts the provider's CRLF framing", async () => {
+test("unchanged terminal events retain provider CRLF framing", async () => {
   const { namespaces } = flattenNamespaceTools([
     {
       type: "namespace",
@@ -3842,18 +3825,16 @@ test("interrupt injection adopts the provider's CRLF framing", async () => {
   );
   const output = await collectBuffer(
     Readable.from([source]).pipe(
-      new NamespaceToolCallTransform(namespaces, "text/event-stream", undefined, {
-        pendingInterrupts: ["/root/finished"],
-      }),
+      new NamespaceToolCallTransform(namespaces, "text/event-stream", undefined),
     ),
   );
-  assert.match(output.toString("utf8"), /"name":"interrupt_agent"/);
+  assert.deepEqual(output, source);
   for (let index = 0; index < output.length; index += 1) {
     if (output[index] === 0x0a) assert.equal(output[index - 1], 0x0d);
   }
 });
 
-test("EOF interrupt injection separates an unterminated final SSE frame", async () => {
+test("unterminated final SSE frames remain unchanged", async () => {
   const { namespaces } = flattenNamespaceTools([
     {
       type: "namespace",
@@ -3868,21 +3849,10 @@ test("EOF interrupt injection separates an unterminated final SSE frame", async 
     );
     const output = await collectBuffer(
       Readable.from([source]).pipe(
-        new NamespaceToolCallTransform(namespaces, "text/event-stream", undefined, {
-          pendingInterrupts: ["/root/finished"],
-        }),
+        new NamespaceToolCallTransform(namespaces, "text/event-stream", undefined),
       ),
     );
-    const separator = lineEnding || "\n\n";
-    assert.deepEqual(output.subarray(0, source.length), source, JSON.stringify(lineEnding));
-    assert.ok(
-      output
-        .subarray(source.length)
-        .toString("utf8")
-        .startsWith(`${separator}event: response.output_item.added${lineEnding || "\n"}`),
-      JSON.stringify(lineEnding),
-    );
-    assert.match(output.toString("utf8"), /"name":"interrupt_agent"/u);
+    assert.deepEqual(output, source, JSON.stringify(lineEnding));
   }
 });
 
@@ -4077,7 +4047,7 @@ test("post-rewrite ambiguity errors without leaking raw custom lifecycle bytes",
   }
 });
 
-test("suppression and injection also commit the SSE safety boundary", async () => {
+test("suppression commits the SSE safety boundary", async () => {
   const marker = "post-commit-ambiguity-must-not-leak";
   const ambiguous = Buffer.from(
     'event: response.output_item.done\n' +
@@ -4103,23 +4073,6 @@ test("suppression and injection also commit the SSE safety boundary", async () =
     suppressed.output.toString("utf8"),
     /response\.function_call_arguments\.delta/u,
   );
-
-  const { namespaces } = flattenNamespaceTools([
-    {
-      type: "namespace",
-      name: "collaboration",
-      tools: [{ type: "function", name: "interrupt_agent" }],
-    },
-  ]);
-  const injected = await collectUntilPipelineError(
-    [Buffer.from("data: [DONE]\n\n", "utf8"), ambiguous],
-    new NamespaceToolCallTransform(namespaces, "text/event-stream", undefined, {
-      pendingInterrupts: ["/root/finished"],
-    }),
-  );
-  assert.equal(injected.error.code, "ERR_NAMESPACE_RELAY_COMMITTED_STREAM");
-  assert.match(injected.output.toString("utf8"), /"name":"interrupt_agent"/u);
-  assert.doesNotMatch(injected.output.toString("utf8"), new RegExp(marker, "u"));
 });
 
 test("response transform leaves ambiguous and ordinary calls alone", async () => {
