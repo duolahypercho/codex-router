@@ -22,7 +22,8 @@ const FINISH_REASONS = new Map([
 ]);
 
 function finishReason(raw, protocol) {
-  return FINISH_REASONS.get(raw)[protocol];
+  const mapped = FINISH_REASONS.get(String(raw || "stop"));
+  return mapped ? mapped[protocol] : protocol === "anthropic" ? "end_turn" : "stop";
 }
 
 // `inputTokens` follows the Vercel AI SDK convention and already *includes*
@@ -62,8 +63,8 @@ function sse(data, event) {
  * Incremental translator from `/alpha/generate` events to one caller protocol.
  *
  * `push(event)` returns the SSE text to write for that event (possibly empty).
- * `finish()` emits a success terminal only after a supported upstream finish
- * reason. A failed or missing terminal is reported by the relay's error path.
+ * `finish()` requires a received finish event and preserves legacy reason
+ * fallback. Explicit failure or absent finish is reported by the relay.
  */
 export class GenerateTranslator {
   constructor({ protocol = "openai", model = "", id, created = Math.floor(Date.now() / 1000) } = {}) {
@@ -75,6 +76,7 @@ export class GenerateTranslator {
     this.finished = false;
     this.usage = undefined;
     this.finishReasonRaw = undefined;
+    this.finishSeen = false;
     this.error = undefined;
     // Anthropic serialization state.
     this.blockIndex = -1;
@@ -118,6 +120,7 @@ export class GenerateTranslator {
         return this.#toolComplete(event);
       case "finish-step":
       case "finish":
+        this.finishSeen = true;
         if (event.usage) this.usage = event.usage;
         if (event.totalUsage) this.usage = event.totalUsage;
         if (event.finishReason) {
@@ -207,16 +210,18 @@ export class GenerateTranslator {
   }
 
   #validateTerminal() {
-    // A legal SDK enum is not origin completion evidence: EOF flush can emit
-    // unknown/other (and text-end) without receiving an upstream finish reason.
-    if (!this.error && !FINISH_REASONS.has(this.finishReasonRaw)) {
-      this.error = "Command Code ended the generation without a supported finish reason.";
+    // Preserve main's reason fallback on received finish events. This is
+    // compatibility, not proof that the gateway observed origin completion.
+    if (!this.error && (!this.finishSeen || this.finishReasonRaw === "error")) {
+      this.error = "Command Code ended without a finish event or reported an error finish reason.";
     }
     // Both protocols may relay incremental fragments, but neither may report
     // a successful terminal or buffered call whose assembled input is invalid.
     if (!this.error) {
       for (const call of this.toolCalls) {
         try {
+          // Keep main's argument-free call convention; reject nonempty damage.
+          if (call.arguments === "") call.arguments = "{}";
           const input = JSON.parse(call.arguments);
           if (!input || typeof input !== "object" || Array.isArray(input)) throw new TypeError();
         } catch {
@@ -412,7 +417,7 @@ export class GenerateTranslator {
     if (id && this.toolIndexes.has(id)) {
       this.completedTools.add(id);
       const call = this.toolCalls.find((entry) => entry.id === id);
-      // No deltas is not evidence of {}, but the final explicit input can be.
+      // Preserve a final explicit empty input without duplicating the call.
       // Do not replace malformed/nonempty fragments or emit a second tool call.
       if (call?.arguments === "" && event.input && typeof event.input === "object" &&
           !Array.isArray(event.input) && Object.keys(event.input).length === 0) {
@@ -430,7 +435,7 @@ export class GenerateTranslator {
       this.completedTools.add(id);
       return "";
     }
-    const args = JSON.stringify(event.input);
+    const args = JSON.stringify(event.input ?? {});
     let out = this.#toolStart(id, event.toolName);
     out += this.#toolDelta(id, args);
     out += this.#toolEnd(id);

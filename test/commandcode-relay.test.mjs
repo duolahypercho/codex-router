@@ -230,9 +230,6 @@ test("incomplete Command Code generations cannot become successful answers or de
     Buffer.from(prefix),
     Buffer.from(`${prefix}${JSON.stringify({ type: "finish-step", finishReason: "error" })}\n`),
     Buffer.from(`${prefix}${JSON.stringify({ type: "finish-step", finishReason: "error" })}\n${JSON.stringify(TURN.at(-1))}\n`),
-    Buffer.from(`${prefix}${JSON.stringify({ type: "finish", finishReason: "unsupported-reason" })}\n`),
-    Buffer.from(`${prefix}${JSON.stringify({ type: "finish", finishReason: "unknown" })}\n`),
-    Buffer.from(`${prefix}${JSON.stringify({ type: "finish", finishReason: "other" })}\n`),
     Buffer.from(`${prefix}{"type":"text-delta","text":"PRIVATE_BAD_EVENT"\n${JSON.stringify(TURN.at(-1))}\n`),
     Buffer.concat([Buffer.from(prefix), Buffer.from([0xe4, 0xb8])]),
   ];
@@ -507,5 +504,36 @@ test("partial resets and actual caller cancellation cannot advance a Command Cod
     assert.equal(JSON.parse(response.captured.body).choices[0].message.content, "OK");
   } finally {
     rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+
+test("legacy ambiguous finishes and empty tool shapes retain relay compatibility without replay", async () => {
+  const turns = [
+    ...["unknown", "other", "future-reason", undefined].map((reason) => [
+      { type: "text-delta", id: "t", text: "OK" }, { type: "finish", finishReason: reason },
+    ]),
+    [{ type: "tool-call", toolCallId: "c", toolName: "ping" }, { type: "finish", finishReason: "tool-calls" }],
+    [{ type: "tool-call", toolCallId: "c", toolName: "ping", input: null }, { type: "finish", finishReason: "tool-calls" }],
+    [{ type: "tool-input-start", id: "c", toolName: "ping" }, { type: "tool-input-end", id: "c" },
+      { type: "finish", finishReason: "tool-calls" }],
+  ];
+  for (const provider of [OPENAI_PROVIDER, ANTHROPIC_PROVIDER]) {
+    for (const stream of [false, true]) {
+      for (const turn of turns) {
+        const response = fakeResponse();
+        let submissions = 0;
+        await relayCommandCodeGenerate({
+          payload: { model: "x", stream, messages: [] }, model: MODEL, provider,
+          apiKey: "synthetic_key", baseUrl: "https://fixture.invalid/provider/v1", response, at: AT,
+          fetchImpl: async () => { submissions += 1; return upstreamOk(turn); },
+        });
+        assert.equal(response.captured.status, 200);
+        assert.equal(response.captured.ended, true);
+        assert.equal(submissions, 1);
+        assert.doesNotMatch(response.captured.body, /commandcode_generate_error|unreadable tool arguments/);
+        if (stream) assert.match(response.captured.body, provider === OPENAI_PROVIDER ? /data: \[DONE\]/ : /event: message_stop/);
+      }
+    }
   }
 });
