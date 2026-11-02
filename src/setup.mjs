@@ -33,6 +33,7 @@ import {
   writeProviderSelection,
 } from "./provider-selection.mjs";
 import { writeDiscoveryMode } from "./discovery-mode.mjs";
+import { spawnableCommand } from "./spawnable-command.mjs";
 import { trayDecision, traySetupError } from "./tray-install.mjs";
 import { resolveVisionEngine } from "./vision-bridge.mjs";
 import {
@@ -322,7 +323,9 @@ function guidedModelSelection(providers) {
 }
 
 function run(command, commandArgs, options = {}) {
-  const result = spawnSync(command, commandArgs, {
+  const target = spawnableCommand(command, commandArgs);
+  const result = spawnSync(target.command, target.args, {
+    ...target.options,
     cwd: SOURCE_ROOT,
     env: process.env,
     stdio: "inherit",
