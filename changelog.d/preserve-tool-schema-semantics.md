@@ -1,0 +1,1 @@
+- **Keep valid tool operations available without weakening reference constraints.** Object-root projections preserve every branch property alternative instead of choosing the first mode, while the client retains its original execution schema. Unsafe object-reference sibling merges remain intact, and existing scalar UUID repair is preserved.

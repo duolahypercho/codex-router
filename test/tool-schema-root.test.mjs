@@ -604,10 +604,9 @@ test("a sibling-property ref is inlined with the target's constraints", () => {
 });
 
 // A foreign `$ref` plus a validation sibling is a conjunction. Blind object
-// spread is only lossless when overlapping keywords agree: replacing the
-// target's tighter maxLength with the sibling's looser value would widen what
-// the caller's tool accepts. When that conjunction cannot be represented by a
-// simple inline, keep the original ref and let the strict provider fail closed.
+// spread can change both overlapping and interacting keywords. Keep assertion
+// siblings intact and let the strict provider fail closed rather than changing
+// what the caller's tool accepts.
 test("a conflicting foreign ref validation sibling is not widened", () => {
   const schema = {
     type: "object",
@@ -1235,4 +1234,33 @@ test("untyped recursive unions remain open rather than guessing a target type", 
 test("null options preserve default cycle blanking", () => {
   const schema = { type: "array", items: { $ref: "#" } };
   assert.deepEqual(nonRecursiveToolSchema(schema, null), { type: "array", items: {} });
+});
+
+test("foreign and decorated definition refs preserve closed-object conjunctions", () => {
+  for (const definitions of [false, true]) {
+    for (const reverse of [false, true]) {
+      const base = reverse
+        ? { type: "object", properties: { extra: { type: "string" } } }
+        : { type: "object", additionalProperties: false };
+      const alias = { $ref: definitions ? "#/$defs/base" : "#/properties/base",
+        ...(reverse ? { additionalProperties: false } : { properties: { extra: { type: "string" } } }) };
+      const schema = { type: "object", properties: { ...(!definitions ? { base } : {}), alias },
+        ...(definitions ? { $defs: { base } } : {}) };
+      assert.equal(inlineForeignRefs(schema), schema);
+    }
+  }
+});
+
+test("object projections keep every conflicting property alternative", () => {
+  const schema = { oneOf: [
+    { type: "object", properties: { mode: { const: "view" }, value: { type: "string", minLength: 3 } }, required: ["mode"], additionalProperties: false },
+    { type: "object", properties: { mode: { enum: ["update", "delete"] }, value: { type: "integer", minimum: 1 } }, required: ["mode"], additionalProperties: false },
+  ] };
+  const original = structuredClone(schema);
+  const projected = objectRootToolSchema(schema);
+  assert.deepEqual(projected.properties.mode, { type: "string", enum: ["view", "update", "delete"] });
+  assert.deepEqual(projected.properties.value, { anyOf: [{ type: "string", minLength: 3 }, { type: "integer", minimum: 1 }] });
+  assert.deepEqual(projected.required, ["mode"]);
+  assert.equal(projected.additionalProperties, false);
+  assert.deepEqual(schema, original);
 });

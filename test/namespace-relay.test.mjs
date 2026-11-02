@@ -6456,3 +6456,20 @@ test("the kimi route still copies nothing when no tool carries a foreign ref", (
   ];
   assert.equal(repairToolSchemaRoots(tools, { inlineForeignRefs: true }), tools);
 });
+
+test("Moonshot tool repair preserves closed reference conjunctions in namespaces", () => {
+  for (const definitions of [false, true]) {
+    const base = { type: "object", additionalProperties: false };
+    const schema = { type: "object", properties: {
+      ...(!definitions ? { base } : {}),
+      alias: { $ref: definitions ? "#/$defs/base" : "#/properties/base", properties: { extra: { type: "string" } } },
+    }, ...(definitions ? { $defs: { base } } : {}) };
+    const tools = [{ type: "namespace", name: "mcp__fixture", tools: [
+      { type: "function", name: "closed", inputSchema: schema },
+    ] }];
+    const flat = flattenNamespaceTools(tools);
+    const repaired = repairToolSchemaRoots(flat.tools, { inlineForeignRefs: true, declareTypes: true });
+    assert.equal(repaired[0].parameters.properties.alias.$ref, schema.properties.alias.$ref);
+    assert.deepEqual(repaired[0].inputSchema, schema, "the client's execution schema stays intact");
+  }
+});
