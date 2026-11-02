@@ -109,6 +109,39 @@ test("reassembles an envelope split across chunk boundaries", async () => {
   assert.deepEqual(seen, ["split"]);
 });
 
+test("a Connect turn requires a readable end-of-stream envelope", async (t) => {
+  const message = envelope(encodeMessage(SCHEMA, { text: "partial" }));
+  const end = (text) => envelope(new TextEncoder().encode(text), 2);
+  for (const [name, chunks, code] of [
+    ["empty EOF", [], "devin_incomplete_stream"],
+    ["message-only EOF", [message], "devin_incomplete_stream"],
+    ["partial header", [message, new Uint8Array([0, 0])], "devin_incomplete_stream"],
+    ["partial payload", [message, message.subarray(0, message.length - 1)], "devin_incomplete_stream"],
+    ["malformed JSON", [message, end("<unreadable>")], "devin_malformed_end_stream"],
+    ["array terminal", [message, end("[]")], "devin_malformed_end_stream"],
+    ["invalid error field", [message, end('{"error":"unreadable"}')], "devin_malformed_end_stream"],
+  ]) {
+    await t.test(name, async () => {
+      const seen = [];
+      let submissions = 0;
+      await assert.rejects(async () => {
+        for await (const value of connectServerStream({
+          baseUrl: "https://fixture.invalid", service: "S", method: "M", token: "synthetic",
+          requestSchema: SCHEMA, responseSchema: SCHEMA, message: {},
+          fetchImpl: async () => { submissions += 1; return streamResponse(chunks); },
+        })) seen.push(value.text);
+      }, (error) => {
+        assert.equal(error.status, 502);
+        assert.equal(error.code, code);
+        assert.doesNotMatch(error.message, /<unreadable>/);
+        return true;
+      });
+      assert.deepEqual(seen, name === "empty EOF" ? [] : ["partial"]);
+      assert.equal(submissions, 1);
+    });
+  }
+});
+
 // Connect reports stream failures inside the terminator with HTTP 200 already
 // sent. Ignoring it would turn a refused turn into a silently empty answer.
 test("raises the error carried by the end-of-stream envelope", async () => {

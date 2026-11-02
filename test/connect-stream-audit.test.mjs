@@ -138,6 +138,13 @@ test("a terminator that is not JSON is malformed, which is not the same as succe
   assert.match(parsed.text, /502 Bad Gateway/);
 });
 
+test("a terminal must be an object with an optional object-valued error", () => {
+  for (const value of [[], null, false, { error: "unreadable" }, { error: [] }, { error: false }]) {
+    assert.equal(parseEndStreamPayload(utf8(JSON.stringify(value))).malformed, true);
+  }
+  assert.equal(parseEndStreamPayload(utf8('{"error":null}')).malformed, false);
+});
+
 test("a terminator error with an unrecognised code is reported as unknown rather than silently mapped", () => {
   const parsed = parseEndStreamPayload(utf8(JSON.stringify({ error: { code: "teapot" } })));
   assert.equal(parsed.error.known, false);

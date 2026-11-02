@@ -1,0 +1,1 @@
+- Reject Devin Connect streams that end without a readable end-of-stream envelope, so clean truncation and malformed terminators cannot certify partial generations as successful.
