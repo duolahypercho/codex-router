@@ -1526,16 +1526,20 @@ try {
     const publishHint = `Run ./bin/control client-setup ${harness.id} to republish.`;
     try {
       const status = childJson("routed-harness-manager.mjs", [harness.id, "status"]);
+      const configUnknown = status.configValid === null;
       add(
-        status.installed && status.providerInstalled && status.baseUrlManaged && status.configValid
-          ? "ok"
+        status.installed && status.providerInstalled && status.baseUrlManaged &&
+          (status.configValid === true || configUnknown)
+          ? (configUnknown ? "warn" : "ok")
           : "fail",
         `${harness.displayName} routing config`,
         status.configError
           ? status.configError
-          : status.providerInstalled
-            ? `${status.publishedModels} models in ${harness.providerPath.join(".")}; ${status.baseUrl || "unmanaged endpoint"}`
-            : `the router-owned provider is missing from ${status.document}`,
+          : configUnknown
+            ? "managed endpoint is current; YAML protocol and model contents are not validated"
+            : status.providerInstalled
+              ? `${status.publishedModels} models in ${harness.providerPath.join(".")}; ${status.baseUrl || "unmanaged endpoint"}`
+              : `the router-owned provider is missing from ${status.document}`,
         publishHint,
       );
       add(
@@ -1557,7 +1561,9 @@ try {
       add(
         status.catalogFresh ? "ok" : "warn",
         `${harness.displayName} catalog freshness`,
-        `published ${status.publishedModels}, routable ${status.routableModels}`,
+        status.catalogFresh === null
+          ? "unknown; the publication marker does not verify live YAML model contents"
+          : `published ${status.publishedModels}, routable ${status.routableModels}`,
         publishHint,
       );
     } catch (error) {
