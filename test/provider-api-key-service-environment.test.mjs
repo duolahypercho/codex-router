@@ -54,3 +54,18 @@ test("service rendering refuses control characters in a referenced secret", () =
     /unsupported control characters/,
   );
 });
+
+test("discovery-off service rendering does not inspect pooled environment values", async () => {
+  await addEnvironmentCredentialToPool("opencode-go", "OPENCODE_API_KEY", { credentialStorePath, poolStatePath });
+  const previous = process.env.CODEX_ROUTER_NO_DISCOVERY;
+  process.env.CODEX_ROUTER_NO_DISCOVERY = "1";
+  let reads = 0;
+  try {
+    const environment = new Proxy({}, { get() { reads += 1; return "POOLED_SYNTHETIC_SECRET"; } });
+    assert.deepEqual(providerApiKeyServiceEnvironment({ credentialStorePath, poolStatePath, environment }), {});
+    assert.equal(reads, 0);
+  } finally {
+    if (previous === undefined) delete process.env.CODEX_ROUTER_NO_DISCOVERY;
+    else process.env.CODEX_ROUTER_NO_DISCOVERY = previous;
+  }
+});

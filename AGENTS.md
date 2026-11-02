@@ -1934,13 +1934,12 @@ runs against the real `CODEX_HOME`, and traffic gets a local
    capture and the doctor's staleness probe use only `debug models --bundled`
    while the switch is set. `test/doctor-idle.test.mjs` proves the bare form
    never spawns.
-5. A corrupt `discovery-mode.json` deliberately reads as discovery **on** —
-   the opposite direction of the vision-bridge precedent, which fails toward
-   off. There the risk is spending quota nobody approved; here the marker
-   only ever exists on a machine that installed with `--no-provider`, where
-   resuming reads finds no credentials to spend, while failing toward "off"
-   on a credentialed install would silently blind every provider over one
-   damaged file. `test/discovery-mode.test.mjs` pins the choice.
+5. An unreadable, corrupt or unrecognized `discovery-mode.json` keeps discovery
+   **off** and reports how to choose the mode again. Other CLIs' credentials
+   and retained router keys may already exist on an idle installation; damage
+   to its policy cannot authorize reading them. A missing marker retains the
+   legacy default, and explicit environment overrides remain authoritative.
+   `test/discovery-mode.test.mjs` pins these distinctions.
 
 ## The `codex` shim is opt-in and must never break `codex`
 

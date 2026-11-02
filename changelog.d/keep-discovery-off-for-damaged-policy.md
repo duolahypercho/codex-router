@@ -1,0 +1,1 @@
+- **Keep credential discovery disabled when its policy is damaged.** Invalid, incompatible or unreadable discovery markers now produce a repair diagnostic instead of resuming credential reads. Missing-marker compatibility, valid enabled/disabled choices and explicit environment overrides retain their existing behavior.

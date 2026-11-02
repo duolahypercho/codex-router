@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { discoveryDisabled } from "./discovery-mode.mjs";
 import { readFileSync } from "node:fs";
 
 import {
@@ -29,6 +30,7 @@ function expirationMilliseconds(value) {
 }
 
 function readSession() {
+  if (discoveryDisabled()) throw oauthError("Credential discovery is disabled; re-run setup to enable it.");
   let auth;
   try {
     auth = JSON.parse(readFileSync(grokAuthPath(), "utf8"));
@@ -54,11 +56,13 @@ function isHardExpired(session, now) {
 }
 
 export function refreshWithOfficialCli({
-  executable = grokCliPath() || "grok",
+  executable,
   platform = process.platform,
   preflightOptions,
   spawnImpl = spawn,
 } = {}) {
+  if (discoveryDisabled()) return Promise.reject(oauthError("Credential discovery is disabled; re-run setup to enable it."));
+  if (executable === undefined) executable = grokCliPath() || "grok";
   const preflight = grokCliPreflight({ executable, platform, ...preflightOptions });
   if (!preflight.runnable) {
     return Promise.reject(oauthError(grokCliFailureMessage(preflight)));

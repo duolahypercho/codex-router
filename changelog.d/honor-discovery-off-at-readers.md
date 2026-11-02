@@ -1,0 +1,1 @@
+- Honor discovery-off before direct Kimi, Grok and Devin credential reads/refreshes and before copying pooled environment keys into managed service definitions.
