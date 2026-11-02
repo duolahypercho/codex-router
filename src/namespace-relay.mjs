@@ -13,13 +13,6 @@ import {
   nonRecursiveToolSchema,
   providerToolSchema,
 } from "./tool-schema-root.mjs";
-import {
-  buildInterruptAgentCall,
-  filterAlreadyInterrupted,
-  interruptTargetFromCall,
-  isSupportedSubagentNamespace,
-  subagentToolNamespace,
-} from "./subagent-completion.mjs";
 
 // The Codex client ships most of its toolset as `type: "namespace"` entries:
 // the collaboration runtime, the app toolset (threads, automations,
@@ -2935,39 +2928,6 @@ export function rewriteNamespaceResponsePayload(payload, lookups, sessionModel, 
   return changed ? rewritten : undefined;
 }
 
-// Inject missing collaboration.interrupt_agent calls for children that already
-// finished (FINAL_ANSWER in the request input) when the model forgot to close
-// them. Codex 0.147 keeps those children Working until interrupt_agent runs or
-// the user opens the child. Sequence numbers continue after the last model
-// event so Codex accepts the spliced calls as part of the same response.
-function nextSequence(event, lastSequence) {
-  const value = Number(event?.sequence_number);
-  return Number.isFinite(value) ? value : lastSequence;
-}
-
-function trackInterruptFromItem(item, interrupted) {
-  if (!item) return;
-  const target = interruptTargetFromCall(item);
-  if (target) interrupted.add(target);
-}
-
-function appendInterruptCallsToOutput(output, pending, interrupted, namespace) {
-  if (typeof namespace !== "string" || !namespace) {
-    return { output, injected: 0, remaining: [] };
-  }
-  const remaining = filterAlreadyInterrupted(pending, interrupted);
-  if (!remaining.length) return { output, injected: 0, remaining: [] };
-  const base = Array.isArray(output) ? [...output] : [];
-  for (const item of base) trackInterruptFromItem(item, interrupted);
-  const still = filterAlreadyInterrupted(remaining, interrupted);
-  for (const target of still) {
-    const call = buildInterruptAgentCall(target, { namespace });
-    base.push(call);
-    interrupted.add(target);
-  }
-  return { output: base, injected: still.length, remaining: still };
-}
-
 const CUSTOM_TOOL_OPENING_LIMIT = 1024;
 const LITELLM_CUSTOM_TOOL_INPUT_PROPERTY = "content";
 const CUSTOM_TOOL_OPENING_PATTERNS = Object.freeze({
@@ -3095,8 +3055,6 @@ export class NamespaceToolCallTransform extends Transform {
   #ssePendingCr = false;
   #ssePendingLineWasBlank = false;
   #sseAtStreamStart = true;
-  #sseLineEnding = "\n";
-  #sseLineEndingObserved = false;
   #maxJsonCaptureBytes;
   #maxSseFrameBytes;
   #maxCommittedSseFrameBytes;
@@ -3108,14 +3066,6 @@ export class NamespaceToolCallTransform extends Transform {
   #lookups;
   #sessionModel;
   #effortForModel;
-  #pendingInterrupts;
-  #injectOnly = false;
-  #interruptedTargets = new Set();
-  #interruptNamespace;
-  #lastSequence = 0;
-  #injectQueue = [];
-  #injectionsDone = false;
-  #lastInjectedCalls = [];
   // Every observed output-item identity reserves both ids. Special relays keep
   // their source and native shapes here until terminal validation so a stream
   // cannot change owners or fall back to raw function-call events after its
@@ -3128,26 +3078,11 @@ export class NamespaceToolCallTransform extends Transform {
   constructor(namespaces, contentType = "", sessionModel, options = {}) {
     super();
     this.#lookups = buildNamespaceLookups(namespaces);
-    const toolNamespace = subagentToolNamespace(namespaces);
-    const hasToolInventory = namespaces instanceof Map && namespaces.size > 0;
-    this.#interruptNamespace =
-      toolNamespace ??
-      (!hasToolInventory && isSupportedSubagentNamespace(options.interruptNamespace)
-        ? options.interruptNamespace
-        : undefined);
     this.#sessionModel = sessionModel;
     this.#effortForModel =
       typeof options.effortForModel === "function" ? options.effortForModel : undefined;
-    this.#pendingInterrupts = Array.isArray(options.pendingInterrupts)
-      ? [...options.pendingInterrupts]
-      : [];
-    // Native turns attach this transform only to close finished children. A
-    // native stream is otherwise relayed byte-identical, so inject-only mode
-    // must not run the namespace rewrites (they exist for routed providers)
-    // or re-serialize model-authored events it did not change.
-    this.#injectOnly = Boolean(options.injectOnly);
-    this.#requiresCodec = !this.#injectOnly &&
-      (this.#lookups.customCodecs?.size > 0 || this.#lookups.historicalCustomTools?.size > 0);
+    this.#requiresCodec =
+      this.#lookups.customCodecs?.size > 0 || this.#lookups.historicalCustomTools?.size > 0;
     this.#maxJsonCaptureBytes =
       Number.isInteger(options.maxJsonCaptureBytes) && options.maxJsonCaptureBytes > 0
         ? options.maxJsonCaptureBytes
@@ -3262,16 +3197,13 @@ export class NamespaceToolCallTransform extends Transform {
         this.push(body);
         return;
       }
-      let payload = original;
-      if (!this.#injectOnly) {
-        const rewritten = rewriteNamespaceResponsePayload(
-          payload,
-          this.#lookups,
-          this.#sessionModel,
-          { effortForModel: this.#effortForModel },
-        );
-        if (rewritten) payload = rewritten;
-      }
+      const rewritten = rewriteNamespaceResponsePayload(
+        original,
+        this.#lookups,
+        this.#sessionModel,
+        { effortForModel: this.#effortForModel },
+      );
+      const payload = rewritten || original;
       if (this.#requiresCodec) {
         const reason = this.#validateOutputItems(original, payload, { allowAtomic: true });
         if (reason) this.#rejectCodecPassthrough(reason);
@@ -3280,7 +3212,6 @@ export class NamespaceToolCallTransform extends Transform {
           if (itemReason) this.#rejectCodecPassthrough(itemReason);
         }
       }
-      payload = this.#injectJsonInterrupts(payload);
       // Parsing is only permission to inspect. A response the transform did
       // not semantically change retains its exact original representation.
       if (payload !== original) this.#commitSemanticMutation();
@@ -3293,24 +3224,15 @@ export class NamespaceToolCallTransform extends Transform {
       this.#ssePendingLineWasBlank = false;
       this.#completeSseLine(blankLine);
     }
-    let tailSeparator;
     if (!this.#rewriteDisabled && this.#sseBytes) {
       const tail = this.#takeSseFrame();
       this.#emitSseFrame(tail);
-      tailSeparator = this.#separatorAfterSseTail(tail);
     }
     if (!this.#rewriteDisabled && this.#hasOpenSpecialCalls()) {
       if (this.#semanticMutationCommitted || this.#requiresCodec) {
         throw new NamespaceRelayCommittedStreamError("unterminated special tool call");
       }
       this.#disableSseRewriting();
-    }
-    // Streams that omit response.completed / [DONE] still need the closes,
-    // unless an ambiguous frame made observing prior calls unsafe.
-    if (!this.#rewriteDisabled) {
-      const blocks = this.#drainInterruptBlocks();
-      if (blocks.length && tailSeparator?.length) this.push(tailSeparator);
-      for (const piece of blocks) this.push(piece);
     }
   }
 
@@ -3371,13 +3293,6 @@ export class NamespaceToolCallTransform extends Transform {
     this.#pendingBytes = 0;
     this.#pendingTailBytes = 0;
     return body;
-  }
-
-  #separatorAfterSseTail(frame) {
-    if (!frame.length) return Buffer.alloc(0);
-    const last = frame[frame.length - 1];
-    const missingLineEndings = last === CARRIAGE_RETURN || last === LINE_FEED ? 1 : 2;
-    return Buffer.from(this.#sseLineEnding.repeat(missingLineEndings), "utf8");
   }
 
   #consumeSseChunk(chunk) {
@@ -3529,7 +3444,6 @@ export class NamespaceToolCallTransform extends Transform {
   #sseFields(frame, atStreamStart) {
     let eventLine;
     let dataLine;
-    let lineEndingLine;
     let repeated = false;
     let start = 0;
     let firstLine = true;
@@ -3557,7 +3471,6 @@ export class NamespaceToolCallTransform extends Transform {
       }
       firstLine = false;
       const line = { start, parseStart, contentEnd, end };
-      if (!lineEndingLine && end > contentEnd) lineEndingLine = line;
       const lineLength = contentEnd - parseStart;
       const fieldLine = (name) =>
         lineLength >= name.length &&
@@ -3574,17 +3487,7 @@ export class NamespaceToolCallTransform extends Transform {
       if (repeated || contentEnd === frame.length) break;
       start = end;
     }
-    return { eventLine, dataLine, lineEndingLine, repeated };
-  }
-
-  #rememberSseLineEnding(frame, line) {
-    if (this.#sseLineEndingObserved || !line || line.end === line.contentEnd) return;
-    const terminator = frame.subarray(line.contentEnd, line.end);
-    if (terminator.equals(Buffer.from("\r\n"))) this.#sseLineEnding = "\r\n";
-    else if (terminator.equals(Buffer.from("\n"))) this.#sseLineEnding = "\n";
-    else if (terminator.equals(Buffer.from("\r"))) this.#sseLineEnding = "\r";
-    else return;
-    this.#sseLineEndingObserved = true;
+    return { eventLine, dataLine, repeated };
   }
 
   #emitSseFrame(frame) {
@@ -3625,8 +3528,6 @@ export class NamespaceToolCallTransform extends Transform {
 
   #disableSseRewriting() {
     this.#rewriteDisabled = true;
-    this.#injectionsDone = true;
-    this.#lastInjectedCalls = [];
     this.#callsByItemId.clear();
     this.#callsByCallId.clear();
     this.#trackedCallCount = 0;
@@ -4315,11 +4216,10 @@ export class NamespaceToolCallTransform extends Transform {
     if (!isUtf8(frame)) {
       return this.#unsafeSseFrame(frame, "invalid UTF-8");
     }
-    const { eventLine, dataLine, lineEndingLine, repeated } = this.#sseFields(
+    const { eventLine, dataLine, repeated } = this.#sseFields(
       frame,
       atStreamStart,
     );
-    this.#rememberSseLineEnding(frame, lineEndingLine);
     // SSE formally concatenates multiple data fields and gives repeated event
     // fields ordering semantics. Rewriting just one field would create bytes
     // whose EventSource meaning differs from the JSON we inspected. The
@@ -4348,12 +4248,11 @@ export class NamespaceToolCallTransform extends Transform {
           "non-generic SSE event without a matching JSON type",
         );
       }
-      // Inject before the stream terminator so Codex still executes the calls.
       if (dataText === "[DONE]") {
         if (this.#hasOpenSpecialCalls()) {
           return this.#unsafeSseFrame(frame, "stream ended before special tool call close");
         }
-        return [...this.#drainInterruptBlocks(), frame];
+        return [frame];
       }
       return [frame];
     }
@@ -4392,7 +4291,6 @@ export class NamespaceToolCallTransform extends Transform {
         if (conflict) return this.#unsafeSseFrame(frame, conflict);
       }
       if (
-        !this.#injectOnly &&
         (sourceEvent?.type === "response.custom_tool_call_input.delta" ||
           sourceEvent?.type === "response.custom_tool_call_input.done")
       ) {
@@ -4406,7 +4304,6 @@ export class NamespaceToolCallTransform extends Transform {
         }
       }
       if (
-        !this.#injectOnly &&
         event?.type === "response.function_call_arguments.delta"
       ) {
         const matched = this.#specialCallForArgumentsEvent(event);
@@ -4458,7 +4355,6 @@ export class NamespaceToolCallTransform extends Transform {
         }
       }
       if (
-        !this.#injectOnly &&
         event?.type === "response.function_call_arguments.done"
       ) {
         const matched = this.#specialCallForArgumentsEvent(event);
@@ -4531,14 +4427,12 @@ export class NamespaceToolCallTransform extends Transform {
           }
         }
       }
-      if (!this.#injectOnly) {
-        const next = rewriteNamespaceResponsePayload(event, this.#lookups, this.#sessionModel, {
-          effortForModel: this.#effortForModel,
-        });
-        if (next) {
-          event = next;
-          changed = true;
-        }
+      const namespaceRewrite = rewriteNamespaceResponsePayload(event, this.#lookups, this.#sessionModel, {
+        effortForModel: this.#effortForModel,
+      });
+      if (namespaceRewrite) {
+        event = namespaceRewrite;
+        changed = true;
       }
       if (sourceEvent?.type === "response.output_item.added") {
         const reason = this.#registerCall(sourceEvent.item, event.item);
@@ -4562,7 +4456,6 @@ export class NamespaceToolCallTransform extends Transform {
           return this.#unsafeSseFrame(frame, "terminal event before special tool call close");
         }
       }
-      this.#observeEvent(event);
       const replacements = [];
       if (
         eventLine &&
@@ -4570,33 +4463,6 @@ export class NamespaceToolCallTransform extends Transform {
         event.type !== originalEventType
       ) {
         replacements.push([eventLine, `event: ${event.type}`]);
-      }
-      // Inject finished-child interrupts before the response closes so Codex
-      // still executes them as ordinary tool calls in this turn.
-      if (event?.type === "response.completed" || eventName === "response.completed") {
-        const interruptBlocks = this.#drainInterruptBlocks();
-        const withOutput = this.#mergeInjectedIntoCompleted(event);
-        if (withOutput !== event) {
-          event = withOutput;
-          changed = true;
-        }
-        if (!changed) return [...interruptBlocks, frame];
-        this.#commitSemanticMutation();
-        replacements.push([dataLine, `data: ${JSON.stringify(event)}`]);
-        return [
-          ...interruptBlocks,
-          this.#rewrittenSseFrame(frame, replacements),
-        ];
-      }
-      if (event?.type === "response.done" || eventName === "response.done") {
-        const interruptBlocks = this.#drainInterruptBlocks();
-        if (!changed) return [...interruptBlocks, frame];
-        this.#commitSemanticMutation();
-        replacements.push([dataLine, `data: ${JSON.stringify(event)}`]);
-        return [
-          ...interruptBlocks,
-          this.#rewrittenSseFrame(frame, replacements),
-        ];
       }
       if (!changed) return [frame];
       this.#commitSemanticMutation();
@@ -4606,148 +4472,5 @@ export class NamespaceToolCallTransform extends Transform {
       if (error instanceof NamespaceRelayCommittedStreamError) throw error;
       return this.#unsafeSseFrame(frame, "event rewrite failure");
     }
-  }
-
-  #observeEvent(event) {
-    if (!event || typeof event !== "object") return;
-    this.#lastSequence = nextSequence(event, this.#lastSequence);
-    trackInterruptFromItem(event.item, this.#interruptedTargets);
-    if (Array.isArray(event.output)) {
-      for (const item of event.output) trackInterruptFromItem(item, this.#interruptedTargets);
-    }
-    if (Array.isArray(event.response?.output)) {
-      for (const item of event.response.output) {
-        trackInterruptFromItem(item, this.#interruptedTargets);
-      }
-    }
-  }
-
-  #remainingInterrupts() {
-    return filterAlreadyInterrupted(this.#pendingInterrupts, this.#interruptedTargets);
-  }
-
-  #drainInterruptBlocks() {
-    if (this.#injectionsDone) return [];
-    if (!this.#interruptNamespace) {
-      this.#injectionsDone = true;
-      this.#lastInjectedCalls = [];
-      return [];
-    }
-    const remaining = this.#remainingInterrupts();
-    if (!remaining.length) {
-      this.#injectionsDone = true;
-      this.#lastInjectedCalls = [];
-      return [];
-    }
-    this.#commitSemanticMutation();
-    const blocks = [];
-    const injectedCalls = [];
-    for (const target of remaining) {
-      // Each transform is request-scoped, so a local counter would restart on
-      // every turn and reuse call IDs that remain in Codex conversation history.
-      // Use the same fresh-ID helper as the non-stream injection path instead.
-      const call = buildInterruptAgentCall(target, {
-        namespace: this.#interruptNamespace,
-      });
-      this.#interruptedTargets.add(target);
-      injectedCalls.push(call);
-      const addedSeq = this.#lastSequence + 1;
-      const doneSeq = this.#lastSequence + 2;
-      this.#lastSequence = doneSeq;
-      const added = {
-        type: "response.output_item.added",
-        sequence_number: addedSeq,
-        item: {
-          type: "function_call",
-          name: call.name,
-          namespace: call.namespace,
-          call_id: call.call_id,
-          arguments: "",
-        },
-      };
-      const done = {
-        type: "response.output_item.done",
-        sequence_number: doneSeq,
-        item: {
-          type: "function_call",
-          name: call.name,
-          namespace: call.namespace,
-          call_id: call.call_id,
-          arguments: call.arguments,
-        },
-      };
-      blocks.push(
-        Buffer.from(
-          `event: response.output_item.added${this.#sseLineEnding}` +
-            `data: ${JSON.stringify(added)}${this.#sseLineEnding}${this.#sseLineEnding}`,
-          "utf8",
-        ),
-      );
-      blocks.push(
-        Buffer.from(
-          `event: response.output_item.done${this.#sseLineEnding}` +
-            `data: ${JSON.stringify(done)}${this.#sseLineEnding}${this.#sseLineEnding}`,
-          "utf8",
-        ),
-      );
-    }
-    this.#lastInjectedCalls = injectedCalls;
-    this.#injectionsDone = true;
-    return blocks;
-  }
-
-  #mergeInjectedIntoCompleted(event) {
-    // drainInterruptBlocks already marked targets interrupted and emitted the
-    // SSE tool calls. Mirror those calls into response.completed.output so
-    // non-incremental consumers still see them.
-    if (!event || typeof event !== "object") return event;
-    const injected = this.#lastInjectedCalls;
-    if (!Array.isArray(injected) || !injected.length) return event;
-    if (Array.isArray(event.response?.output)) {
-      return {
-        ...event,
-        response: {
-          ...event.response,
-          output: [...event.response.output, ...injected],
-        },
-      };
-    }
-    if (Array.isArray(event.output)) {
-      return { ...event, output: [...event.output, ...injected] };
-    }
-    return event;
-  }
-
-  #injectJsonInterrupts(payload) {
-    if (!payload || typeof payload !== "object") return payload;
-    // Non-streaming Responses put completed function calls in `output`.
-    if (Array.isArray(payload.output)) {
-      for (const item of payload.output) trackInterruptFromItem(item, this.#interruptedTargets);
-      const result = appendInterruptCallsToOutput(
-        payload.output,
-        this.#pendingInterrupts,
-        this.#interruptedTargets,
-        this.#interruptNamespace,
-      );
-      if (result.injected) payload = { ...payload, output: result.output };
-    }
-    if (payload.response && Array.isArray(payload.response.output)) {
-      for (const item of payload.response.output) {
-        trackInterruptFromItem(item, this.#interruptedTargets);
-      }
-      const result = appendInterruptCallsToOutput(
-        payload.response.output,
-        this.#pendingInterrupts,
-        this.#interruptedTargets,
-        this.#interruptNamespace,
-      );
-      if (result.injected) {
-        payload = {
-          ...payload,
-          response: { ...payload.response, output: result.output },
-        };
-      }
-    }
-    return payload;
   }
 }

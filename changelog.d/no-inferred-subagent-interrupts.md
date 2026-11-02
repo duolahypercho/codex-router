@@ -1,0 +1,1 @@
+- **The router no longer interrupts children inferred to be finished from conversation history.** Explicit model-authored lifecycle calls and native subagent failover constraints remain intact.
