@@ -11,6 +11,7 @@ const dbPath = path.join(root, "Cursor", "User", "globalStorage", "state.vscdb")
 const launcherPath = path.join(root, "bin", "cursor-router-agent");
 mkdirSync(path.dirname(dbPath), { recursive: true });
 process.env.MODEL_ROUTER_TARGET = "cursor";
+process.env.CODEX_HOME = path.join(root, "codex");
 process.env.MODEL_ROUTER_STATE_DIR = stateDir;
 process.env.MODEL_ROUTER_CURSOR_STATE_DB = dbPath;
 process.env.MODEL_ROUTER_CURSOR_LAUNCHER = launcherPath;
