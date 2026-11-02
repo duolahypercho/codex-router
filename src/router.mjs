@@ -1,7 +1,7 @@
 import { AGENT_PAYLOAD_RELAY_TOOL, agentRelayHeaders, agentRelayError, parseAgentRelayResponse } from "./agent-payload-relay.mjs";
 import { compatibilityLayerError } from "./compatibility-layer-state.mjs";
 import { rejectGenerationRedirect } from "./generation-redirect.mjs";
-import { resolveGenerationOutcome } from "./response-outcome.mjs";
+import { resolveGenerationOutcome, responseOutcomeFromPayload, ResponseOutcomeObserver } from "./response-outcome.mjs";
 import { createGrokRequestTiming, setGrokTimingRequestId } from "./grok-request-timing.mjs";
 import { grokBridgeRequest } from "./grok-request-compat.mjs";
 import { readFileSync } from "node:fs";
@@ -2825,12 +2825,10 @@ function extractUserMessages(input) {
 //
 // The parser follows SSE framing rather than trusting one-line JSON: a data
 // payload is every `data:` line since the last blank line joined with "\n",
-// CRLF is tolerated, and comment/id/retry lines are ignored. Gateways in the
-// wild end their stream without a terminal event, so
-// `response.output_text.delta` text accumulates as a fallback answer — never
-// after a failed or incomplete terminal, whose partial output must not
-// masquerade as a summary. The observed event mix rides back to the caller
-// for its failure log either way.
+// CRLF is tolerated, and comment/id/retry lines are ignored. Partial text is
+// not proof that the summarizer completed: only a successful terminal permits
+// replacing the caller's history. The observed event mix rides back to the
+// caller for its failure log either way.
 function responsesSseToResponse(bytes) {
   const payloads = [];
   let dataLines = [];
@@ -2848,9 +2846,8 @@ function responsesSseToResponse(bytes) {
   flush();
 
   let completed;
-  let terminalFailed = false;
-  const deltas = [];
-  let usage;
+  let reportedUsage;
+  const outcome = new ResponseOutcomeObserver();
   const events = new Map();
   for (const payload of payloads) {
     let event;
@@ -2861,30 +2858,27 @@ function responsesSseToResponse(bytes) {
     }
     const type = typeof event?.type === "string" ? event.type : "unknown";
     events.set(type, (events.get(type) || 0) + 1);
-    if (type === "response.completed" && event.response && typeof event.response === "object") {
-      completed = event.response;
-      if (event.response.usage && typeof event.response.usage === "object") usage = event.response.usage;
-    } else if (type === "response.failed" || type === "response.incomplete") {
-      // A failed or incomplete terminal means the summarizer never finished;
-      // the caller must classify this as a failed attempt, never accept it.
-      terminalFailed = true;
+    outcome.observe(event);
+    const eventUsage = event?.response?.usage ?? event?.usage;
+    if (eventUsage && typeof eventUsage === "object" && !Array.isArray(eventUsage)) {
+      reportedUsage = eventUsage;
     }
-    if (type === "response.output_text.delta" && typeof event.delta === "string") deltas.push(event.delta);
-    if (event?.usage && typeof event.usage === "object") usage = event.usage;
+    if (
+      (type === "response.completed" || type === "response.done")
+      && event.response && typeof event.response === "object"
+      && !Array.isArray(event.response)
+    ) {
+      completed = event.response;
+    }
   }
   const summary = [...events].map(([type, count]) => `${type}x${count}`).join(",") || "no-events";
-  // A failed or incomplete terminal poisons the whole attempt: even a later
-  // completed event cannot be trusted as a finished summary, so the caller
-  // classifies the attempt as failed instead of checkpointing it.
-  if (completed && !terminalFailed) return { response: completed, summary, terminalFailed };
-  if (deltas.length && !terminalFailed) {
-    return {
-      response: { output_text: deltas.join(""), ...(usage ? { usage } : {}) },
-      summary: `${summary} (rebuilt from deltas)`,
-      terminalFailed,
-    };
-  }
-  return { response: undefined, summary, terminalFailed };
+  const terminalFailed = ["failed", "incomplete", "canceled"].includes(outcome.outcome());
+  return {
+    response: outcome.outcome() === "completed" ? completed : undefined,
+    reportedUsage,
+    summary,
+    terminalFailed,
+  };
 }
 
 // The v1 compact response shape follows Codex's replacement-history contract.
@@ -3267,32 +3261,32 @@ async function summarize(request, payload, route, signal, { allowFailover = true
     }
     const contentType = String(sent.upstream.headers.get("content-type") || "");
     let parsed;
-    // A streamed attempt that yields nothing usable, or ends failed or
-    // incomplete, is classified exactly like an ordinary upstream rejection:
-    // it must reach the same failover, cooldown, and metering handling rather
-    // than short-circuiting into a synthetic terminal result.
+    let usagePayload;
+    // An unsuccessful generation terminal is different from an HTTP refusal.
+    // Its observed bytes cannot authorize another paid attempt.
     let upstreamOk = sent.upstream.ok;
     let upstreamStatus = sent.upstream.status;
-    let failureBodyText;
+    let incompleteGeneration = false;
     if (contentType.includes("text/event-stream")) {
       const unwrapped = responsesSseToResponse(bytes);
       parsed = unwrapped.response;
+      // Billing evidence survives even when partial output cannot be used.
+      usagePayload = parsed ?? { usage: unwrapped.reportedUsage };
       if (!parsed) {
+        incompleteGeneration = sent.upstream.ok;
         console.error(
           `[codex-router] compaction stream ended without a usable response model=${attemptRoute.slug}` +
             ` events=${unwrapped.summary}${unwrapped.terminalFailed ? " terminal=failed" : ""}`,
         );
         upstreamOk = false;
-        upstreamStatus = 502;
+        if (incompleteGeneration) upstreamStatus = 502;
         parsed = {
           error: {
             message: unwrapped.terminalFailed
               ? "Compact stream ended with a failed or incomplete response."
               : "Compact stream ended without a completed response.",
-            events: unwrapped.summary,
           },
         };
-        failureBodyText = JSON.stringify(parsed);
       }
     } else {
       parsed = JSON.parse(bytes.toString("utf8"));
@@ -3301,10 +3295,18 @@ async function summarize(request, payload, route, signal, { allowFailover = true
     // provider sends one) is already in hand. `tokenUsageFromPayload` returns
     // undefined when it is absent, and `recordUsageEvent` then omits the token
     // fields entirely rather than metering an invented zero.
-    const usage = tokenUsageFromPayload(parsed, {
+    const usage = tokenUsageFromPayload(usagePayload ?? parsed, {
       grokServiceTier: offersGrokServiceTier(attemptRoute),
       grokContextUsage: attemptRoute.provider === GROK_OAUTH_PROVIDER,
     });
+    if (upstreamOk && parsed?.status !== undefined && responseOutcomeFromPayload({
+      type: "response.completed", response: parsed,
+    }) !== "completed") {
+      incompleteGeneration = true;
+      upstreamOk = false;
+      upstreamStatus = 502;
+      parsed = { error: { message: "Compact response did not complete successfully." } };
+    }
     if (upstreamOk) {
       clearProviderCooldown(attemptRoute.provider);
       const answer = extractResponseText(parsed);
@@ -3332,8 +3334,17 @@ async function summarize(request, payload, route, signal, { allowFailover = true
     // metered on its own row exactly as on the turn path -- otherwise a
     // compaction the router rescued would leave no trace of the provider that
     // could not serve it.
-    const bodyText = failureBodyText ?? bytes.toString("utf8");
     failed.push({ route: attemptRoute, status: upstreamStatus, usage });
+    if (incompleteGeneration) {
+      return {
+        ...(last ?? {
+          ok: false, status: 502, payload: parsed, usage,
+          toolResultAging: aged.stats, route: attemptRoute,
+        }),
+        failed,
+      };
+    }
+    const bodyText = bytes.toString("utf8");
     // A provider that still refuses the image content gets the same model again
     // with half of it. A refused compaction is retried by the client before
     // every following turn, so leaving it refused stalls the session for good.
