@@ -133,6 +133,19 @@ test("OpenCode curation keeps each endpoint family on its documented protocol", 
     /Google's native protocol/,
   );
   assert.equal(curatedModelBlockReason("opencode-go", "grok-4.5"), undefined);
+  // #1131: each id's OpenCode Go catalog `api` object names exactly one wire.
+  // minimax-m3 is Messages while minimax-m3.1-flash is Chat, so these stay
+  // explicit per-id entries rather than a family prefix.
+  for (const [model, provider] of [
+    ["gpt-6-luna", "opencode-go-responses"],
+    ["claude-haiku-5-5", "opencode-go-messages"],
+    ["minimax-m3.1-flash", "opencode-go"],
+    ["kimi-k3.1-pro", "opencode-go"],
+    ["minimax-m3", "opencode-go-messages"],
+  ]) {
+    assert.equal(curatedModelBlockReason("opencode-go", model), undefined, model);
+    assert.equal(curatedModelProviderId("opencode-go", model), provider, model);
+  }
   assert.equal(curatedModelBlockReason("opencode-go", "gemini-4-argon-contributor"), undefined);
   assert.equal(
     curatedModelProviderId("opencode-go", "gemini-4-argon-contributor"),
