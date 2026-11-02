@@ -894,7 +894,7 @@ export async function removeAntigravityToken() {
     }
     removeAntigravityRefreshState();
     // Disconnect never needs to inspect the credential it is deleting. Clear
-    // the small in-memory project cache wholesale so this explicit removal is
+    // pending in-memory project discoveries so this explicit removal is
     // also safe while --no-discovery is active.
     invalidateAntigravityProjectCache();
     return existed;

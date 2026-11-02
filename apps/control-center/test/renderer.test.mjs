@@ -1757,10 +1757,39 @@ test(`${language} covers every page, dialogs, raw values, English round trips an
     const page = await browser.newPage({ viewport: { width: 1280, height: 840 }, locale: "en-US" });
     page.setDefaultTimeout(10_000);
     page.on("pageerror", error => errors.push(error.message));
+    page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
+    await page.addInitScript(() => {
+      window.__localeSelectionEvents = [];
+      for (const type of ["input", "change"]) document.addEventListener(type, event => {
+        if (event.target instanceof HTMLSelectElement) {
+          window.__localeSelectionEvents.push({ type, value: event.target.value });
+        }
+      }, true);
+    });
     await page.goto(url);
     await page.getByRole("button", { name: "Settings", exact: true }).click();
-    await page.getByRole("combobox", { name: "Interface language" }).selectOption(language);
-    await page.getByRole("heading", { level: 1, name: copy.settings }).waitFor();
+    const selected = await page.getByRole("combobox", { name: "Interface language" }).selectOption(language);
+    try {
+      await page.getByRole("heading", { level: 1, name: copy.settings }).waitFor();
+    } catch (error) {
+      const state = await page.evaluate(() => ({
+        language: document.documentElement.lang,
+        visibility: document.visibilityState,
+        storedLanguage: localStorage.getItem("codex-router-language"),
+        headings: [...document.querySelectorAll("h1")].map(element => ({
+          text: element.textContent,
+          width: element.getBoundingClientRect().width,
+          height: element.getBoundingClientRect().height,
+        })),
+        selects: [...document.querySelectorAll("select")].map(element => ({
+          label: element.getAttribute("aria-label"), value: element.value,
+        })),
+        events: window.__localeSelectionEvents,
+        healthReads: window.routerControlTest.healthReads(),
+      }));
+      console.error("Locale transition state:", JSON.stringify({ selected, errors, ...state }));
+      throw error;
+    }
     const ids = ["dashboard", "usage", "status", "models", "local", "harness", "context", "settings"];
     const names = copy.nav;
     for (const [index, id] of ids.entries()) {
