@@ -1,0 +1,1 @@
+- **Remove the unconnected credential migration API.** Credential metadata retains the schema, validation, private writes and reference operations used by the running router. API-key routing tests create references through the same API as production.
