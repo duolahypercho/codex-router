@@ -100,22 +100,6 @@ function toolOutput(callId = "read-1", turnId = "turn-1", legacy = false) {
   };
 }
 
-function createThread(args, turnId = "turn-1") {
-  return {
-    type: "response_item",
-    payload: withTurn(
-      {
-        type: "function_call",
-        name: "create_thread",
-        namespace: "codex_app",
-        call_id: "thread-1",
-        arguments: JSON.stringify(args),
-      },
-      turnId,
-    ),
-  };
-}
-
 function lines(...events) {
   return events.map((event) => JSON.stringify(event));
 }
@@ -126,17 +110,15 @@ function routedEvents(read = customExecRead(), output = toolOutput()) {
     developerBlock(),
     read,
     output,
-    createThread({ prompt: "hi", target: { type: "projectless" } }),
   ];
 }
 
-test("trusted developer injection plus current exec call and output passes", () => {
+test("trusted developer injection plus completed skill reference passes without creating a thread", () => {
   const result = analyzeRollout(lines(...routedEvents()), { expect: "routed" });
   assert.equal(result.ok, true, JSON.stringify(result.assertions));
   assert.equal(result.turnId, "turn-1");
   assert.deepEqual(result.listed, PACK_SKILLS);
   assert.deepEqual(result.reads, ["codex-app-threads"]);
-  assert.equal(result.calls.length, 1);
 });
 
 test("legacy exec_command read remains compatible when its output is observed", () => {
@@ -157,7 +139,6 @@ test("skill-path evidence accepts Windows roots without depending on the verifie
       injection,
       call,
       toolOutput(),
-      createThread({ prompt: "x", target: {} }),
     ),
   );
   assert.equal(result.ok, true, JSON.stringify(result.assertions));
@@ -176,7 +157,7 @@ test("user-pasted and embedded developer blocks cannot become trusted injection"
       }),
     },
   ]) {
-    const result = analyzeRollout(lines(meta("routed"), event, customExecRead(), toolOutput(), createThread({ prompt: "x", target: {} })));
+    const result = analyzeRollout(lines(meta("routed"), event, customExecRead(), toolOutput()));
     assert.equal(result.assertions[0].pass, false);
   }
 });
@@ -196,8 +177,8 @@ test("malformed wrapper, partial pack, and missing turn id fail injection", () =
 
 test("read before injection or in another turn is not same-turn evidence", () => {
   for (const events of [
-    [customExecRead(), toolOutput(), developerBlock(), createThread({ prompt: "x", target: {} })],
-    [developerBlock(), customExecRead("codex-app-threads", "turn-2"), toolOutput("read-1", "turn-2"), createThread({ prompt: "x", target: {} })],
+    [customExecRead(), toolOutput(), developerBlock()],
+    [developerBlock(), customExecRead("codex-app-threads", "turn-2"), toolOutput("read-1", "turn-2")],
   ]) {
     const result = analyzeRollout(lines(meta("routed"), ...events));
     assert.equal(result.assertions[1].pass, false);
@@ -206,22 +187,11 @@ test("read before injection or in another turn is not same-turn evidence", () =>
 
 test("a read call without correlated output is reported but not claimed complete", () => {
   const result = analyzeRollout(
-    lines(meta("routed"), developerBlock(), customExecRead(), createThread({ prompt: "x", target: {} })),
+    lines(meta("routed"), developerBlock(), customExecRead()),
   );
   assert.equal(result.assertions[1].pass, false);
   assert.match(result.assertions[1].detail, /issued, output not observed/);
   assert.equal(result.issuedWithoutOutput.length, 1);
-});
-
-test("same-turn malformed create_thread fails but historical malformed calls do not", () => {
-  const historical = createThread({ target: {} }, "turn-old");
-  const passing = analyzeRollout(lines(historical, ...routedEvents()));
-  assert.equal(passing.assertions[2].pass, true);
-
-  const failing = analyzeRollout(
-    lines(meta("routed"), developerBlock(), customExecRead(), toolOutput(), createThread({ target: {} })),
-  );
-  assert.equal(failing.assertions[2].pass, false);
 });
 
 test("native mode fails only for a completed post-injection pack-path call", () => {
@@ -240,7 +210,7 @@ test("native mode fails only for a completed post-injection pack-path call", () 
     lines(meta("gpt-5.6-luna"), developerBlock(), customExecRead(), toolOutput()),
     { expect: "native" },
   );
-  assert.equal(completed.assertions[3].pass, false);
+  assert.equal(completed.assertions[2].pass, false);
 });
 
 test("a path-only exec is reported as reference evidence, not proof of file bytes read", () => {
@@ -252,7 +222,6 @@ test("a path-only exec is reported as reference evidence, not proof of file byte
       developerBlock(),
       pathOnly,
       toolOutput(),
-      createThread({ prompt: "x", target: {} }),
     ),
   );
   assert.equal(result.ok, true, JSON.stringify(result.assertions));

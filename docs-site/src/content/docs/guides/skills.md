@@ -55,8 +55,8 @@ node scripts/verify-skill-injection.mjs --latest --expect routed
 ```
 
 It accepts only a standalone app-injected developer block with a turn ID, then
-correlates a same-turn tool call referencing the skill path with its output and
-checks same-turn `create_thread` arguments. With `--expect native`, that
+correlates a same-turn tool call referencing the skill path with its output.
+Thread creation is not required. With `--expect native`, that
 completed pack-path call is an error. Because arbitrary exec code is opaque,
 the rollout proves a completed path-referencing call, not that the command read
 specific bytes. Browser and computer-use execution remains live-only.

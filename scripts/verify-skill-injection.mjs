@@ -171,33 +171,6 @@ function modelPackReads(events, injection) {
   };
 }
 
-function createThreadCalls(events, injection) {
-  if (!injection) return [];
-  const calls = [];
-  for (const { index, event } of events) {
-    if (index <= injection.index || eventTurnId(event) !== injection.turnId) continue;
-    const item = eventItem(event);
-    if (item?.type !== "function_call") continue;
-    const flat = item.name === "codex_app__create_thread";
-    const native = item.name === "create_thread" && item.namespace === "codex_app";
-    if (!flat && !native) continue;
-    let args = {};
-    try {
-      args = typeof item.arguments === "string" ? JSON.parse(item.arguments) : item.arguments || {};
-    } catch {
-      args = {};
-    }
-    calls.push({
-      flat,
-      native,
-      hasPrompt: Object.hasOwn(args, "prompt"),
-      hasTarget: Object.hasOwn(args, "target"),
-      args,
-    });
-  }
-  return calls;
-}
-
 function sessionModel(events) {
   const parsed = events.map(({ event }) => event);
   const meta = parsed.find((event) => event?.type === "session_meta");
@@ -216,9 +189,7 @@ export function analyzeRollout(lines, { expect = "routed" } = {}) {
   const listed = injection?.listed || [];
   const readEvidence = modelPackReads(events, injection);
   const reads = readEvidence.completed;
-  const calls = createThreadCalls(events, injection);
   const model = sessionModel(events);
-  const malformed = calls.filter((call) => !call.hasPrompt || !call.hasTarget);
   const packComplete = listed.length === PACK_SKILLS.length;
 
   const assertions = [
@@ -244,17 +215,7 @@ export function analyzeRollout(lines, { expect = "routed" } = {}) {
               : "no same-turn completed tool call referenced pack SKILL.md after injection",
     },
     {
-      name: "(c) same-turn create_thread calls carry prompt and target",
-      pass: expect === "native" ? true : calls.length > 0 && malformed.length === 0,
-      detail:
-        expect === "native"
-          ? "skipped for native expectation"
-          : calls.length === 0
-            ? "no same-turn create_thread calls after injection"
-            : `${calls.length} call(s), ${malformed.length} missing prompt and/or target`,
-    },
-    {
-      name: "(d) native sessions do not complete a same-turn pack-path tool call",
+      name: "(c) native sessions do not complete a same-turn pack-path tool call",
       pass: expect === "native" ? reads.length === 0 : true,
       detail:
         expect === "native"
@@ -264,7 +225,7 @@ export function analyzeRollout(lines, { expect = "routed" } = {}) {
           : "skipped for routed expectation",
     },
     {
-      name: "(e) browser and computer-use bootstraps execute (live-only)",
+      name: "(d) browser and computer-use bootstraps execute (live-only)",
       pass: undefined,
       detail: "not provable from a rollout; exercise them in a live routed session",
     },
@@ -278,7 +239,6 @@ export function analyzeRollout(lines, { expect = "routed" } = {}) {
     reads,
     readCalls: readEvidence.issued,
     issuedWithoutOutput: readEvidence.issuedWithoutOutput,
-    calls,
     assertions,
     failed,
     ok: failed.length === 0,
