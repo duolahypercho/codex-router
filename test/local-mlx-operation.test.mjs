@@ -233,13 +233,17 @@ test("Ollama controllers re-check MLX under the shared claim before seeding stat
   const installStart = source.indexOf('if (action === "install" || action === "install-and-use")');
   const installEnd = source.indexOf('if (action === "finalize-uninstall")', installStart);
   const install = source.slice(installStart, installEnd);
-  assert.ok(install.indexOf("const claim = claimLocalOperation") < install.indexOf("readLocalMlxOperation()"));
+  const installClaim = install.indexOf("const claim = await claimLocalOperation");
+  assert.ok(installClaim >= 0, "install must await the shared gate");
+  assert.ok(installClaim < install.indexOf("readLocalMlxOperation()"));
   assert.ok(install.indexOf("readLocalMlxOperation()") < install.indexOf('writePhase("Checking model'));
 
   const uninstallStart = source.indexOf('if (action === "uninstall")', installEnd);
   const uninstallEnd = source.indexOf('} else if (action === "set")', uninstallStart);
   const uninstall = source.slice(uninstallStart, uninstallEnd);
-  assert.ok(uninstall.indexOf("const claim = claimLocalOperation") < uninstall.indexOf("readLocalMlxOperation()"));
+  const uninstallClaim = uninstall.indexOf("const claim = await claimLocalOperation");
+  assert.ok(uninstallClaim >= 0, "uninstall must await the shared gate");
+  assert.ok(uninstallClaim < uninstall.indexOf("readLocalMlxOperation()"));
   assert.ok(uninstall.indexOf("readLocalMlxOperation()") < uninstall.indexOf("writeLocalDownload({"));
 });
 
