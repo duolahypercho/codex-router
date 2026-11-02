@@ -51,11 +51,10 @@ struct TraditionalChineseTests {
     #expect(routerMessage(.runningChats, ["count": "2"], language: .english) == "2 running chats")
   }
 
-  @Test("countdowns use the explicit Traditional locale and retain the legacy override")
-  func countdownCompatibility() {
+  @Test("countdowns use the explicit Traditional locale")
+  func countdownLanguage() {
     let now = Date(timeIntervalSince1970: 1_700_000_000)
     #expect(resetCountdownLabel(now, now: now, language: .traditionalChinese) == "即將重置")
     #expect(resetCountdownLabel(now.addingTimeInterval(120), now: now, language: .traditionalChinese) == "2 分鐘後")
-    #expect(resetCountdownLabel(now, now: now, chinese: false, language: .traditionalChinese) == "resets soon")
   }
 }

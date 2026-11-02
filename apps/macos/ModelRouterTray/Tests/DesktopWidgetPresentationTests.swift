@@ -54,4 +54,20 @@ struct DesktopWidgetPresentationTests {
         == "ChatGPT，5 小时限制，剩余 42%，2 小时 12 分后"
     )
   }
+
+  @Test("quota accessibility preserves Traditional Chinese countdowns")
+  func quotaAccessibilityInTraditionalChinese() {
+    let now = Date(timeIntervalSince1970: 1_770_000_000)
+    let row = DesktopQuotaRow(
+      id: "openai-primary",
+      providerID: "openai",
+      providerName: "ChatGPT",
+      label: "5-hour limit",
+      remainingPercent: 42,
+      resetAt: now.addingTimeInterval(120).timeIntervalSince1970
+    )
+    let label = DesktopWidgetPresentation.quotaAccessibilityLabel(row, now: now, language: .traditionalChinese)
+    #expect(label.hasSuffix("2 分鐘後"))
+    #expect(!label.contains("in 2m"))
+  }
 }

@@ -1,0 +1,1 @@
+- **Use the selected language for quota accessibility countdowns.** Remove the obsolete Chinese Boolean override so Traditional Chinese and other selected languages reach the same countdown formatter as visible labels.
