@@ -19,6 +19,8 @@ const FINISH_REASONS = new Map([
   ["length", { openai: "length", anthropic: "max_tokens" }],
   ["tool-calls", { openai: "tool_calls", anthropic: "tool_use" }],
   ["content-filter", { openai: "content_filter", anthropic: "end_turn" }],
+  ["unknown", { openai: "stop", anthropic: "end_turn" }],
+  ["other", { openai: "stop", anthropic: "end_turn" }],
 ]);
 
 function finishReason(raw, protocol) {
@@ -171,14 +173,7 @@ export class GenerateTranslator {
       if (this.reasoning) content.push({ type: "thinking", thinking: this.reasoning, signature: "" });
       if (this.text) content.push({ type: "text", text: this.text });
       for (const call of this.toolCalls) {
-        try {
-          const input = JSON.parse(call.arguments);
-          if (!input || typeof input !== "object" || Array.isArray(input)) throw new TypeError();
-          content.push({ type: "tool_use", id: call.id, name: call.name, input });
-        } catch {
-          this.error = "Command Code returned unreadable tool arguments.";
-          return undefined;
-        }
+        content.push({ type: "tool_use", id: call.id, name: call.name, input: JSON.parse(call.arguments) });
       }
       return {
         id: this.id,
@@ -197,7 +192,7 @@ export class GenerateTranslator {
       message.tool_calls = this.toolCalls.map((call) => ({
         id: call.id,
         type: "function",
-        function: { name: call.name, arguments: call.arguments || "{}" },
+        function: { name: call.name, arguments: call.arguments },
       }));
     }
     const usage = openAiUsage(this.usage);
@@ -216,6 +211,19 @@ export class GenerateTranslator {
   #validateTerminal() {
     if (!this.error && !FINISH_REASONS.has(this.finishReasonRaw)) {
       this.error = "Command Code ended the generation without a supported finish reason.";
+    }
+    // Both protocols may relay incremental fragments, but neither may report
+    // a successful terminal or buffered call whose assembled input is invalid.
+    if (!this.error) {
+      for (const call of this.toolCalls) {
+        try {
+          const input = JSON.parse(call.arguments);
+          if (!input || typeof input !== "object" || Array.isArray(input)) throw new TypeError();
+        } catch {
+          this.error = "Command Code returned unreadable tool arguments.";
+          break;
+        }
+      }
     }
     return !this.error;
   }
@@ -459,6 +467,7 @@ function unreadableEvent() {
 }
 
 function parseEvent(line) {
+  if (line.startsWith(":")) return undefined;
   try {
     // The gateway answers `text/event-stream` for this route but sends bare
     // JSON lines. Should it ever start prefixing them, the prefix is stripped

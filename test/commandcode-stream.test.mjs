@@ -313,3 +313,52 @@ test("buffered Anthropic tool arguments are never repaired to an empty object", 
     assert.deepEqual(translator.body().content[0].input, JSON.parse(raw));
   }
 });
+
+test("explicit unknown and other SDK finishes preserve a completed answer", () => {
+  for (const reason of ["unknown", "other"]) {
+    for (const protocol of ["openai", "anthropic"]) {
+      const { translator, sse } = run([
+        { type: "text-start", id: "answer" },
+        { type: "text-delta", id: "answer", text: "Complete answer." },
+        { type: "text-end", id: "answer" },
+        { type: "finish", finishReason: reason },
+      ], { protocol });
+      assert.equal(translator.error, undefined);
+      const body = translator.body();
+      assert.equal(protocol === "openai" ? body.choices[0].message.content : body.content[0].text, "Complete answer.");
+      assert.equal(protocol === "openai" ? body.choices[0].finish_reason : body.stop_reason,
+        protocol === "openai" ? "stop" : "end_turn");
+      assert.match(sse, protocol === "openai" ? /data: \[DONE\]/ : /event: message_stop/);
+    }
+  }
+});
+
+test("SSE comment lines are ignored across byte boundaries without hiding malformed data", async () => {
+  const expected = [{ type: "text-delta", id: "t", text: "完整" }, { type: "finish", finishReason: "stop" }];
+  const bytes = Buffer.from(`: keepalive\r\ndata: ${JSON.stringify(expected[0])}\r\n\r\n:\r\n` +
+    `data: ${JSON.stringify(expected[1])}\n\n: trailing comment`);
+  const parsed = [];
+  for await (const event of readGenerateEvents(Readable.from(Array.from(bytes, (byte) => Buffer.from([byte]))))) parsed.push(event);
+  assert.deepEqual(parsed, expected);
+  const malformed = [];
+  for await (const event of readGenerateEvents(Readable.from([Buffer.from(": keepalive\ndata: {bad\n")]))) malformed.push(event);
+  assert.deepEqual(malformed, [{ type: "error", message: "Command Code sent an unreadable generation event." }]);
+});
+
+test("both caller protocols reject malformed tool arguments before any successful terminal", () => {
+  for (const protocol of ["openai", "anthropic"]) {
+    for (const raw of ['{"path":', "null", "[]", '"text"', ""]) {
+      const events = [
+        { type: "tool-input-start", id: "call", toolName: "read_file" },
+        { type: "tool-input-delta", id: "call", delta: raw },
+        { type: "tool-input-end", id: "call" },
+        { type: "finish", finishReason: "tool-calls" },
+      ];
+      const { translator, sse } = run(events, { protocol });
+      assert.equal(translator.body(), undefined);
+      assert.match(translator.error, /unreadable tool arguments/);
+      assert.doesNotMatch(sse, /data: \[DONE\]|event: message_stop/);
+      assert.equal(translator.finish(), "");
+    }
+  }
+});

@@ -230,7 +230,7 @@ test("incomplete Command Code generations cannot become successful answers or de
     Buffer.from(prefix),
     Buffer.from(`${prefix}${JSON.stringify({ type: "finish-step", finishReason: "error" })}\n`),
     Buffer.from(`${prefix}${JSON.stringify({ type: "finish-step", finishReason: "error" })}\n${JSON.stringify(TURN.at(-1))}\n`),
-    Buffer.from(`${prefix}${JSON.stringify({ type: "finish", finishReason: "unknown" })}\n`),
+    Buffer.from(`${prefix}${JSON.stringify({ type: "finish", finishReason: "unsupported-reason" })}\n`),
     Buffer.from(`${prefix}{"type":"text-delta","text":"PRIVATE_BAD_EVENT"\n${JSON.stringify(TURN.at(-1))}\n`),
     Buffer.concat([Buffer.from(prefix), Buffer.from([0xe4, 0xb8])]),
   ];
@@ -261,6 +261,56 @@ test("incomplete Command Code generations cannot become successful answers or de
         }
         assert.doesNotMatch(response.captured.body, /PRIVATE_BAD_EVENT/);
       }
+    }
+  }
+});
+
+test("SDK fallback finish reasons and SSE comments preserve successful relay replies", async () => {
+  for (const provider of [OPENAI_PROVIDER, ANTHROPIC_PROVIDER]) {
+    for (const stream of [false, true]) {
+      for (const finishReason of ["unknown", "other"]) {
+        const response = fakeResponse();
+        const events = [...TURN.slice(0, -1), { ...TURN.at(-1), finishReason }];
+        const bytes = Buffer.from(": keepalive\r\n" + events.map((event) => `data: ${JSON.stringify(event)}\r\n\r\n`).join(""));
+        let submissions = 0;
+        const outcome = await relayCommandCodeGenerate({
+          payload: { model: "x", stream, messages: [] }, model: MODEL, provider,
+          apiKey: "synthetic_key", baseUrl: "https://fixture.invalid/provider/v1", response, at: AT,
+          fetchImpl: async () => { submissions += 1; return { ...upstreamOk([]), body: Readable.from([bytes]) }; },
+        });
+        assert.equal(outcome.status, 200);
+        assert.equal(response.captured.status, 200);
+        assert.equal(response.captured.ended, true);
+        assert.equal(submissions, 1);
+        assert.match(response.captured.body, /OK/);
+        assert.doesNotMatch(response.captured.body, /commandcode_generate_error/);
+        if (stream) assert.match(response.captured.body, provider.protocol === "anthropic" ? /message_stop/ : /\[DONE\]/);
+      }
+    }
+  }
+});
+
+test("malformed tool arguments fail both streamed and buffered relay protocols without replay", async () => {
+  for (const provider of [OPENAI_PROVIDER, ANTHROPIC_PROVIDER]) {
+    for (const stream of [false, true]) {
+      const response = fakeResponse();
+      let submissions = 0;
+      const outcome = await relayCommandCodeGenerate({
+        payload: { model: "x", stream, messages: [] }, model: MODEL, provider,
+        apiKey: "synthetic_key", baseUrl: "https://fixture.invalid/provider/v1", response, deferErrors: true, at: AT,
+        fetchImpl: async () => { submissions += 1; return upstreamOk([
+          { type: "tool-input-start", id: "call", toolName: "read_file" },
+          { type: "tool-input-delta", id: "call", delta: "{bad" },
+          { type: "tool-input-end", id: "call" },
+          { type: "finish", finishReason: "tool-calls" },
+        ]); },
+      });
+      assert.equal(outcome.committed, true);
+      assert.equal(response.captured.ended, true);
+      assert.equal(submissions, 1);
+      assert.match(response.captured.body, /unreadable tool arguments/);
+      assert.doesNotMatch(response.captured.body, /\[DONE\]|message_stop/);
+      assert.equal(response.captured.status, stream ? 200 : 502);
     }
   }
 });
