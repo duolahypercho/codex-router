@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -681,6 +681,70 @@ test("uninstall gives back a default the router took over", () => {
     // The sandbox document has no default of its own, so taking ours out
     // leaves none -- not one pointing at a route that was just removed.
     assert.doesNotMatch(settingsOf(box), /provider: "codex-router"/);
+  } finally {
+    rmSync(box.dshHome, { recursive: true, force: true });
+    rmSync(box.stateDir, { recursive: true, force: true });
+  }
+});
+
+test("repeated default takeover preserves the first snapshot and each new ownership period", () => {
+  const box = sandbox();
+  const settingsPath = path.join(box.dshHome, "settings.yaml");
+  const chosen = 'agent-default-model:\n  provider: "my-provider"\n  model: "my-model"\n';
+  try {
+    writeFileSync(settingsPath, USER_SETTINGS);
+    manage("install --set-default-model", box);
+    const firstSnapshot = readFileSync(path.join(box.stateDir, "dsh-default-model.json"), "utf8");
+    manage("install --set-default-model", box);
+    assert.equal(readFileSync(path.join(box.stateDir, "dsh-default-model.json"), "utf8"), firstSnapshot);
+    manage("uninstall", box);
+    assert.match(settingsOf(box), /provider: deepseek-official/);
+    assert.doesNotMatch(settingsOf(box), /provider: "codex-router"/);
+
+    manage("install --set-default-model", box);
+    writeFileSync(settingsPath, settingsOf(box).replace(/agent-default-model:\n(?:  .*\n)+/, chosen));
+    manage("install --set-default-model", box);
+    manage("uninstall", box);
+    assert.ok(settingsOf(box).includes(chosen));
+  } finally {
+    rmSync(box.dshHome, { recursive: true, force: true });
+    rmSync(box.stateDir, { recursive: true, force: true });
+  }
+});
+
+test("failed uninstall retains its default snapshot for retry", () => {
+  const box = sandbox();
+  const credentialsPath = path.join(box.dshHome, ".credentials.yaml");
+  const snapshotPath = path.join(box.stateDir, "dsh-default-model.json");
+  try {
+    writeFileSync(path.join(box.dshHome, "settings.yaml"), USER_SETTINGS);
+    manage("install --set-default-model", box);
+    const before = readFileSync(snapshotPath, "utf8");
+    rmSync(credentialsPath);
+    mkdirSync(credentialsPath);
+    assert.throws(() => manage("uninstall", box));
+    assert.equal(readFileSync(snapshotPath, "utf8"), before);
+    rmSync(credentialsPath, { recursive: true });
+    writeFileSync(credentialsPath, "");
+    manage("uninstall", box);
+    assert.equal(existsSync(snapshotPath), false);
+    assert.match(settingsOf(box), /provider: deepseek-official/);
+  } finally {
+    rmSync(box.dshHome, { recursive: true, force: true });
+    rmSync(box.stateDir, { recursive: true, force: true });
+  }
+});
+
+test("a corrupt default snapshot is preserved instead of overwritten on repeat install", () => {
+  const box = sandbox();
+  const snapshotPath = path.join(box.stateDir, "dsh-default-model.json");
+  try {
+    manage("install --set-default-model", box);
+    const before = settingsOf(box);
+    writeFileSync(snapshotPath, "{");
+    assert.throws(() => manage("install --set-default-model", box), /snapshot is unreadable/);
+    assert.equal(settingsOf(box), before);
+    assert.equal(readFileSync(snapshotPath, "utf8"), "{");
   } finally {
     rmSync(box.dshHome, { recursive: true, force: true });
     rmSync(box.stateDir, { recursive: true, force: true });

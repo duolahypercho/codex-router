@@ -1,0 +1,1 @@
+- **Keep Gemini default-model opt-outs across catalog publication.** Reuse the saved publication policy on refresh, including legacy opt-outs, while keeping the first-install default and explicit policy changes.

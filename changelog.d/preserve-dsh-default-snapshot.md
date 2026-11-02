@@ -1,0 +1,1 @@
+- **Keep the original DSH default during repeated routed-default publication.** Capture a new snapshot only for a new ownership period and retain recovery evidence until uninstall succeeds.

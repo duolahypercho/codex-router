@@ -88,6 +88,38 @@ test("opting out of the default model omits the key rather than blanking it", ()
   assert.ok(document.includes("GEMINI_API_KEY="));
 });
 
+test("catalog refresh preserves the opt-out and explicit publication can change it", () => {
+  publishGeminiIntegration({ routedModels: routedModels(), setDefaultModel: false });
+  publishGeminiIntegration({ routedModels: routedModels() });
+  assert.ok(!readFileSync(envPath, "utf8").includes("GEMINI_MODEL="));
+  assert.equal(JSON.parse(readFileSync(GEMINI_CATALOG_PATH, "utf8")).setDefaultModel, false);
+  publishGeminiIntegration({ routedModels: routedModels(), setDefaultModel: true });
+  assert.match(readFileSync(envPath, "utf8"), /GEMINI_MODEL=vendor\/large/);
+});
+
+test("a legacy opt-out survives refresh and an empty catalog does not turn off an opt-in", () => {
+  publishGeminiIntegration({ routedModels: routedModels(), setDefaultModel: false });
+  const legacy = JSON.parse(readFileSync(GEMINI_CATALOG_PATH, "utf8"));
+  delete legacy.setDefaultModel;
+  writePrivateFile(GEMINI_CATALOG_PATH, JSON.stringify(legacy));
+  publishGeminiIntegration({ routedModels: routedModels() });
+  assert.ok(!readFileSync(envPath, "utf8").includes("GEMINI_MODEL="));
+  publishGeminiIntegration({ routedModels: routedModels([]), setDefaultModel: true });
+  publishGeminiIntegration({ routedModels: routedModels() });
+  assert.match(readFileSync(envPath, "utf8"), /GEMINI_MODEL=vendor\/large/);
+});
+
+test("an unreadable saved policy cannot silently re-enable the default", () => {
+  const before = readFileSync(envPath, "utf8");
+  writePrivateFile(GEMINI_CATALOG_PATH, "{");
+  assert.throws(() => publishGeminiIntegration({ routedModels: routedModels() }), /policy is unreadable/);
+  assert.equal(readFileSync(envPath, "utf8"), before);
+  writePrivateFile(GEMINI_CATALOG_PATH, JSON.stringify({ setDefaultModel: "false", defaultModel: "vendor/large" }));
+  assert.throws(() => publishGeminiIntegration({ routedModels: routedModels() }), /policy is invalid/);
+  assert.equal(readFileSync(envPath, "utf8"), before);
+  removeGeminiIntegration();
+});
+
 test("a user's own lines survive a publish and come back on removal", () => {
   removeGeminiIntegration();
   const mine = ["# my notes", "", "MY_TOOL=1", ""].join("\n");
