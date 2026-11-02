@@ -63,8 +63,8 @@ function sse(data, event) {
  * Incremental translator from `/alpha/generate` events to one caller protocol.
  *
  * `push(event)` returns the SSE text to write for that event (possibly empty).
- * `finish()` requires a received finish event and preserves legacy reason
- * fallback. Explicit failure or absent finish is reported by the relay.
+ * `finish()` preserves legacy EOF/reason fallback. Explicit failures are
+ * reported by the relay; a clean EOF alone does not establish failure.
  */
 export class GenerateTranslator {
   constructor({ protocol = "openai", model = "", id, created = Math.floor(Date.now() / 1000) } = {}) {
@@ -76,7 +76,6 @@ export class GenerateTranslator {
     this.finished = false;
     this.usage = undefined;
     this.finishReasonRaw = undefined;
-    this.finishSeen = false;
     this.error = undefined;
     // Anthropic serialization state.
     this.blockIndex = -1;
@@ -120,7 +119,6 @@ export class GenerateTranslator {
         return this.#toolComplete(event);
       case "finish-step":
       case "finish":
-        this.finishSeen = true;
         if (event.usage) this.usage = event.usage;
         if (event.totalUsage) this.usage = event.totalUsage;
         if (event.finishReason) {
@@ -210,10 +208,10 @@ export class GenerateTranslator {
   }
 
   #validateTerminal() {
-    // Preserve main's reason fallback on received finish events. This is
-    // compatibility, not proof that the gateway observed origin completion.
-    if (!this.error && (!this.finishSeen || this.finishReasonRaw === "error")) {
-      this.error = "Command Code ended without a finish event or reported an error finish reason.";
+    // Preserve main's clean-EOF/reason fallback. Neither EOF nor an SDK
+    // finish alone distinguishes origin success from an ambiguous truncation.
+    if (!this.error && this.finishReasonRaw === "error") {
+      this.error = "Command Code reported an error finish reason.";
     }
     // Both protocols may relay incremental fragments, but neither may report
     // a successful terminal or buffered call whose assembled input is invalid.

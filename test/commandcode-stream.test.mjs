@@ -188,17 +188,18 @@ test("anthropic tool calls become a tool_use block with json deltas", () => {
   assert.equal(events.find((entry) => entry.event === "message_delta").data.delta.stop_reason, "tool_use");
 });
 
-test("a stream that stops without a terminal event cannot manufacture success", () => {
-  const { sse, translator } = run([
-    { type: "start" },
-    { type: "text-start", id: "t" },
-    { type: "text-delta", id: "t", text: "half" },
-  ]);
-  const chunks = openAiChunks(sse);
-  assert.equal(chunks.at(-1).choices[0].finish_reason, null);
-  assert.doesNotMatch(sse, /\[DONE\]/);
-  assert.match(translator.error, /finish reason/);
-  assert.equal(translator.body(), undefined);
+test("clean EOF without a finish event retains main's compatibility convention", () => {
+  for (const protocol of ["openai", "anthropic"]) {
+    const { sse, translator } = run([
+      { type: "start" }, { type: "text-start", id: "t" },
+      { type: "text-delta", id: "t", text: "half" },
+    ], { protocol });
+    assert.equal(translator.error, undefined);
+    const body = translator.body();
+    assert.equal(protocol === "openai" ? body.choices[0].finish_reason : body.stop_reason,
+      protocol === "openai" ? "stop" : "end_turn");
+    assert.match(sse, protocol === "openai" ? /data: \[DONE\]/ : /event: message_stop/);
+  }
 });
 
 test("the whole answer is assembled for a caller that did not ask to stream", () => {

@@ -224,10 +224,9 @@ test("a mid-stream failure is reported inside the stream and still terminates", 
   assert.doesNotMatch(response.captured.body, /\[DONE\]|"finish_reason":"stop"/);
 });
 
-test("incomplete Command Code generations cannot become successful answers or deferred retries", async () => {
+test("explicit Command Code generation errors cannot become successful answers or deferred retries", async () => {
   const prefix = TURN.slice(0, -1).map((event) => `${JSON.stringify(event)}\n`).join("");
   const cases = [
-    Buffer.from(prefix),
     Buffer.from(`${prefix}${JSON.stringify({ type: "finish-step", finishReason: "error" })}\n`),
     Buffer.from(`${prefix}${JSON.stringify({ type: "finish-step", finishReason: "error" })}\n${JSON.stringify(TURN.at(-1))}\n`),
     Buffer.from(`${prefix}{"type":"text-delta","text":"PRIVATE_BAD_EVENT"\n${JSON.stringify(TURN.at(-1))}\n`),
@@ -349,7 +348,7 @@ test("explicit empty tool input survives both relay protocols with one submissio
   }
 });
 
-test("a truncated generation commits its failure before a second pooled key can run", async () => {
+test("a failed generation read commits its failure before a second pooled key can run", async () => {
   const { mkdtempSync, rmSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
@@ -369,7 +368,7 @@ test("a truncated generation commits its failure before a second pooled key can 
         send: ({ apiKey }) => relayCommandCodeGenerate({
           payload: { model: "x", stream, messages: [] }, model: MODEL, provider: OPENAI_PROVIDER,
           apiKey, baseUrl: "https://fixture.invalid/provider/v1", response, deferErrors: true, at: AT,
-          fetchImpl: async () => { submissions += 1; return upstreamOk(TURN.slice(0, -1)); },
+          fetchImpl: async () => { submissions += 1; return resetAfterPartial(); },
         }),
       });
       assert.equal(submissions, 1);
@@ -510,6 +509,7 @@ test("partial resets and actual caller cancellation cannot advance a Command Cod
 
 test("legacy ambiguous finishes and empty tool shapes retain relay compatibility without replay", async () => {
   const turns = [
+    [], TURN.slice(0, -1),
     ...["unknown", "other", "future-reason", undefined].map((reason) => [
       { type: "text-delta", id: "t", text: "OK" }, { type: "finish", finishReason: reason },
     ]),
