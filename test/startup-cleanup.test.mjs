@@ -233,8 +233,8 @@ test("the foreground supervisor boots past the Windows service-process record", 
 });
 
 test("a gateway spawn error cleans up forwarders that are already listening", { timeout: 120_000 }, async () => {
-  const [routerPort, gatewayPort, oauthPort, apiPort, grokOauthPort] =
-    await Promise.all(Array.from({ length: 5 }, () => freePort()));
+  const [routerPort, gatewayPort, oauthPort, apiPort, grokOauthPort, antigravityPort] =
+    await Promise.all(Array.from({ length: 6 }, () => freePort()));
   const rootDir = mkdtempSync(path.join(os.tmpdir(), "model-router-spawn-cleanup-"));
   const stateDir = path.join(rootDir, "state");
   const codexHome = path.join(rootDir, "codex-home");
@@ -261,6 +261,7 @@ test("a gateway spawn error cleans up forwarders that are already listening", { 
       MODEL_ROUTER_OAUTH_PORT: String(oauthPort),
       MODEL_ROUTER_API_PORT: String(apiPort),
       MODEL_ROUTER_GROK_OAUTH_PORT: String(grokOauthPort),
+      MODEL_ROUTER_ANTIGRAVITY_OAUTH_PORT: String(antigravityPort),
       MODEL_ROUTER_LITELLM_BIN: process.execPath,
     },
     stdio: ["ignore", "ignore", "pipe"],
@@ -278,7 +279,7 @@ test("a gateway spawn error cleans up forwarders that are already listening", { 
     assert.match(errors, /startup failed: LiteLLM gateway exited before becoming healthy/);
     assert.doesNotMatch(errors, /Unhandled 'error' event/);
     assert.match(errors, /\[api-forwarder\] listening/);
-    for (const port of [oauthPort, apiPort, grokOauthPort]) {
+    for (const port of [oauthPort, apiPort, grokOauthPort, antigravityPort]) {
       assert.equal(await portIsClosed(port), true, `orphaned forwarder still owns port ${port}`);
     }
     forwardersStopped = true;

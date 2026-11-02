@@ -722,28 +722,19 @@ function serveRenderer() {
   return new Promise((resolve) => {
     server.listen(0, "127.0.0.1", () => {
       const address = server.address();
-      resolve({
-        url: `http://127.0.0.1:${address.port}/`,
-        close: () => new Promise((done) => {
-          server.close(done);
-          server.closeAllConnections?.();
-        }),
+      const close = () => new Promise((done) => {
+        server.close(done);
+        server.closeAllConnections?.();
       });
+      // Launch may reject before a test reaches its browser try/finally.
+      // Register cleanup at the one point that owns the listening server.
+      test.after(close);
+      resolve({ url: `http://127.0.0.1:${address.port}/`, close });
     });
   });
 }
 
-const chromiumPath = [
-  process.env.CODEX_ROUTER_TEST_CHROMIUM,
-  chromium.executablePath(),
-  "/usr/bin/google-chrome",
-  "/usr/bin/chromium",
-  "/usr/bin/chromium-browser",
-  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-  process.env.PROGRAMFILES && path.join(process.env.PROGRAMFILES, "Google", "Chrome", "Application", "chrome.exe"),
-  process.env["PROGRAMFILES(X86)"] && path.join(process.env["PROGRAMFILES(X86)"], "Google", "Chrome", "Application", "chrome.exe"),
-  process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, "Google", "Chrome", "Application", "chrome.exe"),
-].find((candidate) => candidate && existsSync(candidate));
+const chromiumPath = process.env.CODEX_ROUTER_TEST_CHROMIUM;
 
 async function newEnglishTestPage(browser, options) {
   const page = await browser.newPage(options);
@@ -755,7 +746,6 @@ async function newEnglishTestPage(browser, options) {
 
 test("the production renderer exposes model discovery and picker actions", { timeout: 120_000 }, async () => {
   assert.equal(existsSync(path.join(dist, "index.html")), true, "npm test must build the renderer first");
-  assert.ok(chromiumPath, "No Chromium executable is available for the Control Center renderer test.");
 
   const { url, close } = await serveRenderer();
   const browser = await chromium.launch({
@@ -1248,7 +1238,6 @@ test("the production renderer exposes model discovery and picker actions", { tim
 
 test("the Usage page shows the free/auto pool: members, drains, and the backend that served", { timeout: 120_000 }, async () => {
   assert.equal(existsSync(path.join(dist, "index.html")), true, "npm test must build the renderer first");
-  assert.ok(chromiumPath, "No Chromium executable is available for the Control Center renderer test.");
 
   const { url, close } = await serveRenderer();
   const browser = await chromium.launch({
@@ -1291,7 +1280,6 @@ test("the Usage page shows the free/auto pool: members, drains, and the backend 
 });
 
 test("dashboard retry totals match the billed token breakdown", { timeout: 120_000 }, async () => {
-  assert.ok(chromiumPath, "No Chromium executable is available for the Control Center renderer test.");
   const { url, close } = await serveRenderer();
   const browser = await chromium.launch({
     executablePath: chromiumPath,
@@ -1321,7 +1309,6 @@ test("dashboard retry totals match the billed token breakdown", { timeout: 120_0
 
 test("fallback-only splits do not claim account breakdown or a complete range mix", { timeout: 120_000 }, async () => {
   assert.equal(existsSync(path.join(dist, "index.html")), true, "npm test must build the renderer first");
-  assert.ok(chromiumPath, "No Chromium executable is available for the Control Center renderer test.");
 
   const { url, close } = await serveRenderer();
   const browser = await chromium.launch({
@@ -1374,7 +1361,6 @@ test("fallback-only splits do not claim account breakdown or a complete range mi
 
 test("independent control-center reads reveal each ready page region", { timeout: 120_000 }, async () => {
   assert.equal(existsSync(path.join(dist, "index.html")), true, "npm test must build the renderer first");
-  assert.ok(chromiumPath, "No Chromium executable is available for the Control Center renderer test.");
 
   const { url, close } = await serveRenderer();
   const browser = await chromium.launch({
@@ -1426,7 +1412,6 @@ test("independent control-center reads reveal each ready page region", { timeout
 
 test("only a locally curated route offers to be deleted, and only after confirmation", { timeout: 120_000 }, async () => {
   assert.equal(existsSync(path.join(dist, "index.html")), true, "npm test must build the renderer first");
-  assert.ok(chromiumPath, "No Chromium executable is available for the Control Center renderer test.");
 
   const { url, close } = await serveRenderer();
   const browser = await chromium.launch({
@@ -1495,7 +1480,6 @@ test("only a locally curated route offers to be deleted, and only after confirma
 
 test("saving a provider key shows the connection being made before it lands", { timeout: 120_000 }, async () => {
   assert.equal(existsSync(path.join(dist, "index.html")), true, "npm test must build the renderer first");
-  assert.ok(chromiumPath, "No Chromium executable is available for the Control Center renderer test.");
 
   const { url, close } = await serveRenderer();
   const browser = await chromium.launch({
@@ -1577,7 +1561,6 @@ test("saving a provider key shows the connection being made before it lands", { 
 
 test("usage polling surfaces current rejections, recovers, and ignores older results", { timeout: 120_000 }, async () => {
   assert.equal(existsSync(path.join(dist, "index.html")), true, "npm test must build the renderer first");
-  assert.ok(chromiumPath, "No Chromium executable is available for the Control Center renderer test.");
 
   const { url, close } = await serveRenderer();
   const browser = await chromium.launch({
@@ -1619,7 +1602,6 @@ test("usage polling surfaces current rejections, recovers, and ignores older res
 
 test("an older rejected usage read cannot replace a newer success with a warning", { timeout: 120_000 }, async () => {
   assert.equal(existsSync(path.join(dist, "index.html")), true, "npm test must build the renderer first");
-  assert.ok(chromiumPath, "No Chromium executable is available for the Control Center renderer test.");
 
   const { url, close } = await serveRenderer();
   const browser = await chromium.launch({
@@ -1652,7 +1634,6 @@ test("an older rejected usage read cannot replace a newer success with a warning
 
 test("health polling and core refresh share latest-wins ordering", { timeout: 120_000 }, async () => {
   assert.equal(existsSync(path.join(dist, "index.html")), true, "npm test must build the renderer first");
-  assert.ok(chromiumPath, "No Chromium executable is available for the Control Center renderer test.");
 
   const { url, close } = await serveRenderer();
   const browser = await chromium.launch({

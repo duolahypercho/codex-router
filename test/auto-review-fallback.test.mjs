@@ -1,3 +1,4 @@
+import "./helpers/isolated-runtime-environment.mjs";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -8,6 +9,7 @@ import { privateFileIsProtected } from "../src/file-security.mjs";
 
 const stateDir = mkdtempSync(path.join(os.tmpdir(), "auto-review-fallback-test-"));
 process.env.CODEX_ROUTER_STATE_DIR = stateDir;
+process.env.MODEL_ROUTER_STATE_DIR = stateDir;
 // model-failover imports paths.mjs: initialize the fixture before that module
 // captures STATE_DIR, otherwise this test writes into the real installation.
 const { classifyRoutedFailure } = await import("../src/model-failover.mjs");

@@ -1,0 +1,1 @@
+- **Renderer tests release their local server when browser startup fails.** Register cleanup where the server is created so a missing or restricted browser produces a bounded test failure instead of leaving the test worker open.
