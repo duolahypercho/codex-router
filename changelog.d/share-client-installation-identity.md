@@ -1,0 +1,1 @@
+- **Keep the shared router available for every connected client.** Presence and service retirement now share published-client identity, including an owned Cursor Agent-only launcher; disconnecting Codex no longer retires another client’s plane.

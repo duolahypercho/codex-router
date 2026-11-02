@@ -7,6 +7,7 @@ import path from "node:path";
 import { writePrivateJson } from "./file-security.mjs";
 import { DSH_CATALOG_PATH, STATE_DIR } from "./paths.mjs";
 import { commandOnPath } from "./spawnable-command.mjs";
+import { installedTargets } from "./client-installation-state.mjs";
 
 export const PRESENCE_ALWAYS = "always";
 export const PRESENCE_FOLLOW_CODEX = "follow-codex";
@@ -38,7 +39,8 @@ export function readPresenceMode() {
 // not exist at request latency. A client the tray cannot see therefore pins the
 // router on.
 //
-// Two of them qualify, for the same reason by two different signals.
+// Every published non-Codex client qualifies; terminal Codex has a separate
+// PATH signal because its managed desktop configuration does not identify CLI use.
 
 // The harness, by its published route. `dsh` is a CLI, and the route existing
 // means it is configured to reach this router.
@@ -67,7 +69,7 @@ export function terminalCodexInstalled() {
 export function effectivePresenceMode() {
   const mode = readPresenceMode();
   if (mode !== PRESENCE_FOLLOW_CODEX) return mode;
-  if (harnessPublished() || terminalCodexInstalled()) return PRESENCE_ALWAYS;
+  if (installedTargets().some((target) => target !== "codex") || terminalCodexInstalled()) return PRESENCE_ALWAYS;
   return mode;
 }
 
