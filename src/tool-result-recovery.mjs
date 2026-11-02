@@ -114,9 +114,19 @@ export function toolResultRecoveryScope(threadId, payload) {
   return JSON.stringify([String(threadId || ""), sha256(JSON.stringify([payload.instructions, policy, payload.tool_choice]))]);
 }
 
+// Responses Lite omits top-level tools and declares them in developer-role
+// `additional_tools` input items instead. An explicit top-level list, even an
+// empty one, still wins; tool_choice restrictions apply to either inventory.
+function declaredTools(payload) {
+  if (payload.tools !== undefined || !Array.isArray(payload.input)) return payload.tools;
+  const declared = payload.input.filter(item => item?.type === "additional_tools" &&
+    item.role === "developer" && Array.isArray(item.tools));
+  return declared.length ? declared.flatMap(item => item.tools) : undefined;
+}
+
 export function toolResultReadbackTools(payload) {
   return payload.tool_choice === undefined || ["auto", "required"].includes(payload.tool_choice)
-    ? payload.tools : [];
+    ? declaredTools(payload) : [];
 }
 
 // Harden an EMPTY file first: no output bytes ever inhabit an inherited Windows
