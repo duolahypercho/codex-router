@@ -314,21 +314,19 @@ test("buffered Anthropic tool arguments are never repaired to an empty object", 
   }
 });
 
-test("explicit unknown and other SDK finishes preserve a completed answer", () => {
+test("SDK EOF flush with unknown or other cannot certify generation completion", () => {
   for (const reason of ["unknown", "other"]) {
     for (const protocol of ["openai", "anthropic"]) {
       const { translator, sse } = run([
         { type: "text-start", id: "answer" },
-        { type: "text-delta", id: "answer", text: "Complete answer." },
+        { type: "text-delta", id: "answer", text: "Partial answer" },
+        // SDK flush can synthesize both events without an origin finish reason.
         { type: "text-end", id: "answer" },
         { type: "finish", finishReason: reason },
       ], { protocol });
-      assert.equal(translator.error, undefined);
-      const body = translator.body();
-      assert.equal(protocol === "openai" ? body.choices[0].message.content : body.content[0].text, "Complete answer.");
-      assert.equal(protocol === "openai" ? body.choices[0].finish_reason : body.stop_reason,
-        protocol === "openai" ? "stop" : "end_turn");
-      assert.match(sse, protocol === "openai" ? /data: \[DONE\]/ : /event: message_stop/);
+      assert.equal(translator.body(), undefined);
+      assert.match(translator.error, /finish reason/);
+      assert.doesNotMatch(sse, /data: \[DONE\]|event: message_stop/);
     }
   }
 });

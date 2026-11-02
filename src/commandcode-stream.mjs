@@ -19,8 +19,6 @@ const FINISH_REASONS = new Map([
   ["length", { openai: "length", anthropic: "max_tokens" }],
   ["tool-calls", { openai: "tool_calls", anthropic: "tool_use" }],
   ["content-filter", { openai: "content_filter", anthropic: "end_turn" }],
-  ["unknown", { openai: "stop", anthropic: "end_turn" }],
-  ["other", { openai: "stop", anthropic: "end_turn" }],
 ]);
 
 function finishReason(raw, protocol) {
@@ -209,6 +207,8 @@ export class GenerateTranslator {
   }
 
   #validateTerminal() {
+    // A legal SDK enum is not origin completion evidence: EOF flush can emit
+    // unknown/other (and text-end) without receiving an upstream finish reason.
     if (!this.error && !FINISH_REASONS.has(this.finishReasonRaw)) {
       this.error = "Command Code ended the generation without a supported finish reason.";
     }

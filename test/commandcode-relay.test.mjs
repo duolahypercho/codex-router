@@ -231,6 +231,8 @@ test("incomplete Command Code generations cannot become successful answers or de
     Buffer.from(`${prefix}${JSON.stringify({ type: "finish-step", finishReason: "error" })}\n`),
     Buffer.from(`${prefix}${JSON.stringify({ type: "finish-step", finishReason: "error" })}\n${JSON.stringify(TURN.at(-1))}\n`),
     Buffer.from(`${prefix}${JSON.stringify({ type: "finish", finishReason: "unsupported-reason" })}\n`),
+    Buffer.from(`${prefix}${JSON.stringify({ type: "finish", finishReason: "unknown" })}\n`),
+    Buffer.from(`${prefix}${JSON.stringify({ type: "finish", finishReason: "other" })}\n`),
     Buffer.from(`${prefix}{"type":"text-delta","text":"PRIVATE_BAD_EVENT"\n${JSON.stringify(TURN.at(-1))}\n`),
     Buffer.concat([Buffer.from(prefix), Buffer.from([0xe4, 0xb8])]),
   ];
@@ -265,10 +267,10 @@ test("incomplete Command Code generations cannot become successful answers or de
   }
 });
 
-test("SDK fallback finish reasons and SSE comments preserve successful relay replies", async () => {
+test("SSE comments preserve relay replies with known terminal reasons", async () => {
   for (const provider of [OPENAI_PROVIDER, ANTHROPIC_PROVIDER]) {
     for (const stream of [false, true]) {
-      for (const finishReason of ["unknown", "other"]) {
+      for (const finishReason of ["stop", "length"]) {
         const response = fakeResponse();
         const events = [...TURN.slice(0, -1), { ...TURN.at(-1), finishReason }];
         const bytes = Buffer.from(": keepalive\r\n" + events.map((event) => `data: ${JSON.stringify(event)}\r\n\r\n`).join(""));
