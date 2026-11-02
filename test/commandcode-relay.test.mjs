@@ -317,6 +317,41 @@ test("malformed tool arguments fail both streamed and buffered relay protocols w
   }
 });
 
+test("explicit empty tool input survives both relay protocols with one submission", async () => {
+  for (const provider of [OPENAI_PROVIDER, ANTHROPIC_PROVIDER]) {
+    for (const stream of [false, true]) {
+      const response = fakeResponse();
+      let submissions = 0;
+      const outcome = await relayCommandCodeGenerate({
+        payload: { model: "x", stream, messages: [] }, model: MODEL, provider,
+        apiKey: "synthetic_key", baseUrl: "https://fixture.invalid/provider/v1", response, at: AT,
+        fetchImpl: async () => { submissions += 1; return upstreamOk([
+          { type: "tool-input-start", id: "clock", toolName: "get_time" },
+          { type: "tool-input-end", id: "clock" },
+          { type: "tool-call", toolCallId: "clock", toolName: "get_time", input: {} },
+          { type: "finish", finishReason: "tool-calls" },
+        ]); },
+      });
+      assert.equal(outcome.status, 200);
+      assert.equal(response.captured.status, 200);
+      assert.equal(response.captured.ended, true);
+      assert.equal(submissions, 1);
+      assert.doesNotMatch(response.captured.body, /unreadable tool arguments/);
+      if (stream) {
+        assert.match(response.captured.body, provider === OPENAI_PROVIDER ? /data: \[DONE\]/ : /event: message_stop/);
+      } else {
+        const body = JSON.parse(response.captured.body);
+        if (provider === OPENAI_PROVIDER) {
+          assert.equal(body.choices[0].message.tool_calls.length, 1);
+          assert.equal(body.choices[0].message.tool_calls[0].function.arguments, "{}");
+        } else {
+          assert.deepEqual(body.content, [{ type: "tool_use", id: "clock", name: "get_time", input: {} }]);
+        }
+      }
+    }
+  }
+});
+
 test("a truncated generation commits its failure before a second pooled key can run", async () => {
   const { mkdtempSync, rmSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");

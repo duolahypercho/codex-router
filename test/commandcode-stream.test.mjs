@@ -360,3 +360,60 @@ test("both caller protocols reject malformed tool arguments before any successfu
     }
   }
 });
+
+test("an explicit empty tool-call input completes an argument-free incremental call once", () => {
+  for (const protocol of ["openai", "anthropic"]) {
+    const { translator, sse } = run([
+      { type: "tool-input-start", id: "clock", toolName: "get_time" },
+      { type: "tool-input-end", id: "clock" },
+      { type: "tool-call", toolCallId: "clock", toolName: "get_time", input: {} },
+      { type: "finish", finishReason: "tool-calls" },
+    ], { protocol });
+    assert.equal(translator.error, undefined);
+    const body = translator.body();
+    if (protocol === "openai") {
+      assert.equal(body.choices[0].message.tool_calls.length, 1);
+      assert.equal(body.choices[0].message.tool_calls[0].function.arguments, "{}");
+      const calls = openAiChunks(sse).flatMap((part) => part.choices[0].delta.tool_calls || []);
+      assert.equal(calls.filter((call) => call.id).length, 1);
+      assert.equal(calls.map((call) => call.function?.arguments || "").join(""), "{}");
+      assert.match(sse, /data: \[DONE\]/);
+    } else {
+      assert.deepEqual(body.content, [{ type: "tool_use", id: "clock", name: "get_time", input: {} }]);
+      const events = anthropicEvents(sse);
+      const starts = events.filter(({ data }) => data.content_block?.type === "tool_use");
+      assert.equal(starts.length, 1);
+      assert.deepEqual(starts[0].data.content_block.input, {});
+      // The start already carries {}, so no delta may target its closed block.
+      assert.equal(events.filter(({ data }) => data.delta?.type === "input_json_delta").length, 0);
+      assert.equal(events.filter(({ event }) => event === "content_block_stop").length, 1);
+      assert.match(sse, /event: message_stop/);
+    }
+  }
+});
+
+test("empty-tool compatibility never invents missing input or repairs malformed deltas", () => {
+  for (const protocol of ["openai", "anthropic"]) {
+    for (const input of [undefined, null, [], "{}", 0]) {
+      const { translator, sse } = run([
+        { type: "tool-call", toolCallId: "bad", toolName: "run", input },
+        { type: "finish", finishReason: "tool-calls" },
+      ], { protocol });
+      assert.equal(translator.body(), undefined);
+      assert.match(translator.error, /unreadable tool arguments/);
+      assert.doesNotMatch(sse, /data: \[DONE\]|event: message_stop/);
+    }
+    for (const raw of ["{bad", " ", "null", "[]"]) {
+      const { translator, sse } = run([
+        { type: "tool-input-start", id: "bad", toolName: "run" },
+        { type: "tool-input-delta", id: "bad", delta: raw },
+        { type: "tool-input-end", id: "bad" },
+        { type: "tool-call", toolCallId: "bad", toolName: "run", input: {} },
+        { type: "finish", finishReason: "tool-calls" },
+      ], { protocol });
+      assert.equal(translator.body(), undefined);
+      assert.match(translator.error, /unreadable tool arguments/);
+      assert.doesNotMatch(sse, /data: \[DONE\]|event: message_stop/);
+    }
+  }
+});

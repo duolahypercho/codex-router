@@ -409,11 +409,28 @@ export class GenerateTranslator {
   // events already delivered the same call.
   #toolComplete(event) {
     const id = event.toolCallId || event.id;
+    if (id && this.toolIndexes.has(id)) {
+      this.completedTools.add(id);
+      const call = this.toolCalls.find((entry) => entry.id === id);
+      // No deltas is not evidence of {}, but the final explicit input can be.
+      // Do not replace malformed/nonempty fragments or emit a second tool call.
+      if (call?.arguments === "" && event.input && typeof event.input === "object" &&
+          !Array.isArray(event.input) && Object.keys(event.input).length === 0) {
+        if (this.protocol === "anthropic") {
+          // Its tool_use start already carried {}; tool-input-end may have
+          // closed that block, so do not append a delta to the closed block.
+          call.arguments = "{}";
+          return "";
+        }
+        return this.#toolDelta(id, "{}");
+      }
+      return "";
+    }
     if (!id || this.completedTools.has(id) || this.toolIndexes.has(id)) {
       this.completedTools.add(id);
       return "";
     }
-    const args = JSON.stringify(event.input ?? {});
+    const args = JSON.stringify(event.input);
     let out = this.#toolStart(id, event.toolName);
     out += this.#toolDelta(id, args);
     out += this.#toolEnd(id);
