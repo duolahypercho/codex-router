@@ -1400,6 +1400,11 @@ route a free model, but `defaultProviderIds()`, the no-argument setup path,
 operator did not ask. Never check in a paid model ID or silently turn on an
 anonymous endpoint during installation.
 
+A present provider-selection file that cannot be read or interpreted selects
+no built-in providers and reports the existing repair diagnostic. Unknown IDs
+grant no additional routes; pruning must retain an explicit empty selection
+rather than deleting it into the older no-file compatibility default.
+
 Which free IDs a reseller gateway serves is decided by `anonymousModelAllowed`
 in `src/model-registry.mjs`, never by the registry fragment alone, and the
 `ANONYMOUS_ENDPOINTS` table beside it is the reason a fragment edit cannot

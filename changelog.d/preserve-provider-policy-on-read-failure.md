@@ -1,0 +1,1 @@
+- **Keep damaged provider policy from enabling unrelated routes.** An unreadable, incompatible or unknown-only provider selection exposes no built-in providers and retains a diagnostic. Pruning an unknown-only selection now keeps an explicit empty policy, while legacy installations without a file and explicit show-all overrides retain their existing behavior.

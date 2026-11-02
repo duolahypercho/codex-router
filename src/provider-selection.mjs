@@ -2,9 +2,9 @@ import { COMPATIBILITY_LAYER } from "./model-registry.mjs";
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
-  unlinkSync,
 } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -159,44 +159,47 @@ export function readProviderSelectionDetail() {
   ) {
     return { providers: providerIds(), ignored: [], degraded: undefined };
   }
-  if (!existsSync(PROVIDER_SELECTION_PATH)) {
-    return { providers: providerIds(), ignored: [], degraded: undefined };
-  }
   let parsed;
   try {
     parsed = JSON.parse(readFileSync(PROVIDER_SELECTION_PATH, "utf8"));
   } catch (error) {
+    if (error?.code === "ENOENT") {
+      try {
+        lstatSync(PROVIDER_SELECTION_PATH);
+      } catch (entryError) {
+        if (entryError?.code === "ENOENT") {
+          return { providers: providerIds(), ignored: [], degraded: undefined };
+        }
+      }
+    }
     return {
-      providers: providerIds(),
+      providers: [],
       ignored: [],
       degraded: `Unreadable provider selection ${PROVIDER_SELECTION_PATH}: ${
         error instanceof Error ? error.message : String(error)
       }`,
     };
   }
-  if (parsed?.version !== 1 || !Array.isArray(parsed.providers)) {
+  if (
+    parsed?.version !== 1 || !Array.isArray(parsed.providers)
+    || parsed.providers.some((id) => typeof id !== "string")
+  ) {
     return {
-      providers: providerIds(),
+      providers: [],
       ignored: [],
       degraded: `Invalid provider selection ${PROVIDER_SELECTION_PATH}: version/providers are invalid`,
     };
   }
   const { known, unknown } = filterKnownProviderIds(parsed.providers);
-  // An explicitly empty list is a real choice -- disabling the last provider
-  // writes `[]`, and hiding everything is supported -- so it stays empty.
-  // A non-empty list that filters down to nothing is different: this build
-  // recognizes none of the operator's choices, so their file says nothing
-  // about the providers it does have. Falling back to the no-file default
-  // leaves the install in the same coherent state as a fresh one instead of
-  // stranding it with zero routable models, and the credential-aware catalog
-  // still hides anything that cannot authenticate.
+  // A present policy grants only the known providers it actually names.
+  // Unknown choices cannot authorize unrelated routes, even if credentialed.
   if (known.length === 0 && unknown.length > 0) {
     return {
-      providers: providerIds(),
+      providers: [],
       ignored: unknown,
       degraded: `Provider selection ${PROVIDER_SELECTION_PATH} names no provider this build knows (${
         unknown.join(", ")
-      }); showing all providers until it is rewritten.`,
+      }); no built-in provider is selected until it is rewritten.`,
     };
   }
   return {
@@ -244,8 +247,8 @@ export function disableProvider(providerId) {
 
 // Reconcile the on-disk enable list with what this build can authenticate.
 // Reads the file directly rather than readProviderSelectionDetail(): that
-// helper falls back to "every provider" when the file is missing, when
-// SHOW_ALL_MODELS is set, or when every stored id is unknown, and feeding
+// helper falls back to "every provider" when the file is missing or when
+// SHOW_ALL_MODELS is set, and feeding
 // those virtual lists into disableProvider would create or rewrite policy
 // the operator never wrote. Discovery-disabled installs are left alone so
 // the kill-switch does not empty a stored selection by reporting nothing
@@ -266,7 +269,10 @@ export function pruneUnconfiguredProviders() {
   } catch {
     return [];
   }
-  if (parsed?.version !== 1 || !Array.isArray(parsed.providers)) return [];
+  if (
+    parsed?.version !== 1 || !Array.isArray(parsed.providers)
+    || parsed.providers.some((id) => typeof id !== "string")
+  ) return [];
 
   const { known, unknown } = filterKnownProviderIds(parsed.providers);
   const configured = new Set(configuredProviderIds());
@@ -278,13 +284,6 @@ export function pruneUnconfiguredProviders() {
       .map((id) => ({ id, reason: "no credential" })),
   ];
   if (removed.length === 0) return [];
-
-  // Only-unknown files currently read as the no-file default (show all).
-  // Deleting the file preserves that; writing [] would idle the install.
-  if (keep.length === 0 && known.length === 0) {
-    unlinkSync(PROVIDER_SELECTION_PATH);
-    return removed;
-  }
 
   writeProviderSelection(keep);
   return removed;
