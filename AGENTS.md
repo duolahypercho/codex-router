@@ -919,23 +919,23 @@ so the unit of evidence is always the slug, never the model name.
    failure, and a stale `checking` record is retryable. Explicit registry-v1
    routes are settled decisions and are never re-opened by this local probe;
    registry-v2 routes need no compatibility probe.
-2. `multi-agent-proofs.json` is diagnostic application evidence only. Local
-   `candidate`, and legacy `experimental` / `proven`, records cannot change the
-   catalog's `multi_agent_version`, managed agent definitions, or any client
-   route. `applySubagentProofs` deliberately returns the registry capabilities
-   unchanged. An unreadable proofs file therefore authorizes and promotes
-   nothing.
+2. `multi-agent-proofs.json` is diagnostic history only. Local records,
+   including `candidate`, `experimental`, `proven`, and historical `verified`,
+   never grant or revoke subagent capabilities. Publication uses registry
+   capabilities and explicit operator selection through
+   `applyMultiAgentCapabilities`; unreadable diagnostic history changes
+   neither.
 3. The compatibility probe is not the native collaboration proof. It does not
    exercise Codex's encrypted child payload relay, a marker-return spawn, or a
    same-thread follow-up. A successful ordinary chat/tool request must never be
    presented as evidence that the model can hold the native v2 child role.
-4. Only the exact checked-in registry route may assert v2. The route's slug,
-   provider, and upstream model must match an accepted artifact under
-   `v2_agent/`, and the accepted artifact and `multiAgentVersion: "v2"` change
-   land in the same pull request. CI enforces the implication in both
-   directions for every post-workflow promotion. Six exact Kimi/Grok route
-   identities certified before the artifact gate are grandfathered; changing
-   any part of one identity loses that exception.
+4. Only the exact checked-in registry route may assert shipped v2
+   certification. The route's slug, provider, and upstream model must match an
+   accepted artifact under `v2_agent/`, and the accepted artifact and
+   `multiAgentVersion: "v2"` change land in the same pull request. CI enforces
+   the implication in both directions for every post-workflow promotion.
+   Six exact Kimi/Grok route identities certified before the artifact gate
+   are grandfathered; changing any part of one identity loses that exception.
 5. `control subagents verify [SLUG ...]` re-researches explicitly (foreground,
    about two requests per unknown candidate); with no slugs it sweeps the
    enabled list. Select-all and mode changes never trigger probes. Provider,
@@ -985,16 +985,14 @@ so the unit of evidence is always the slug, never the model name.
    Codex collaboration: tool calls work, encrypted subagent payload relay works
    without disclosure, a marker-return spawn succeeds, and a same-thread
    follow-up succeeds. Otherwise omit it and retain conservative v1 behavior.
-   The registry is not the only way a route reaches v2. The operator's own
-   selection promotes it — `subagents mode selected` plus `subagents set <slug>
-   on`, or `mode all` — and so does a completed local verification of all five
-   checks recorded in `multi-agent-proofs.json`. Selection is the ordinary path
-   and the one the Control Center switch uses; the registry exists so nobody
-   has to select a proven route by hand. None of this loosens the gate: an
-   explicit `off` beats every mode, a hidden model is never promoted, a partial
-   verification or a mismatched slug promotes nothing, the legacy diagnostic
-   statuses promote nothing, and only the pull request that moves the registry
-   entry may accept a `v2_agent/` application. Read
+   The operator's own selection can also offer a route as v2 — `subagents mode
+   selected` plus `subagents set <slug> on`, or `mode all`. Selection is intent,
+   not certification, and is the ordinary path the Control Center switch uses.
+   The registry exists so nobody has to select a proven route by hand. An
+   explicit `off` beats every mode and a hidden model is never promoted. Local
+   diagnostic records, including historical `verified` records, never grant or
+   revoke this role. Only the pull request that moves the registry entry may
+   accept a `v2_agent/` application. Read
    `docs/SUBAGENT-CERTIFICATION.md` in full before changing
    `src/subagent-*.mjs`, `src/multi-agent-state.mjs`, `v2_agent/`, or the
    Subagents column — it records which questions have already been answered at

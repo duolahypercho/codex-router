@@ -41,7 +41,6 @@ const routerControl = Object.freeze({
   setSubagentMode: (mode) => call("setSubagentMode", { mode }),
   setSubagentModel: (slug, enabled) => call("setSubagentModel", { slug, enabled }),
   setSubagentEffort: (slug, effort) => call("setSubagentEffort", { slug, effort }),
-  certifySubagentModels: (slugs) => call("certifySubagentModels", { slugs }),
   setSubagentSelection: (selectAll) => call("setSubagentSelection", { selectAll }),
   setPickerModel: (slug, visible) => call("setPickerModel", { slug, visible }),
   setPickerModels: (showAll) => call("setPickerModels", { showAll }),

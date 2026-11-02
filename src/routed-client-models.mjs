@@ -13,9 +13,7 @@ import { NATIVE_CATALOG_PATH } from "./paths.mjs";
 import { nativeSessionAvailable } from "./codex-native-session.mjs";
 import { MODEL_SLUG_ALIASES } from "./model-registry.mjs";
 import { migrateModelVisibility } from "./model-picker-state.mjs";
-import { readMultiAgentSettings } from "./multi-agent-state.mjs";
 import { selectedConfiguredListedModels } from "./provider-selection.mjs";
-import { applySubagentProofs, subagentProofSnapshot } from "./subagent-proofs.mjs";
 import { applyVisionBridge, resolveVisionEngine } from "./vision-bridge.mjs";
 import { readVisionBridgeSettings } from "./vision-bridge-state.mjs";
 
@@ -75,19 +73,11 @@ export function routedClientModels() {
   );
   const hidden = new Set(picker.hidden);
   const visible = new Set(picker.visible);
-  // Keep every client on the same registry-certified capabilities. Local
-  // stream/tool probe records are passed through for compatibility with the
-  // proof overlay API, but applySubagentProofs deliberately treats them as
-  // diagnostic application evidence and never promotes a route to v2.
-  const selected = applySubagentProofs(
-    selectedConfiguredListedModels().filter((model) => {
-      const slug = String(model.slug);
-      return !hidden.has(slug) &&
-        (!picker.hasExplicitVisibility || visible.has(slug));
-    }),
-    subagentProofSnapshot(),
-    { hidden, disabled: readMultiAgentSettings().disabled },
-  );
+  const selected = selectedConfiguredListedModels().filter((model) => {
+    const slug = String(model.slug);
+    return !hidden.has(slug) &&
+      (!picker.hasExplicitVisibility || visible.has(slug));
+  });
   // Native GPT models are authorized by a ChatGPT session rather than an API
   // key. A published client carries none of its own, so they are publishable
   // only after this user authorizes the shared local router plane and while the

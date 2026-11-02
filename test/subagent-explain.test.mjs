@@ -153,8 +153,7 @@ test("selection is reported as intent, never as certification", () => {
   assert.deepEqual(noteCodes(result), ["selected_not_certified"]);
   assert.match(result.notes[0].summary, /statement of intent/);
   assert.match(result.notes[0].summary, /Streaming and tool calls do not prove delegation/);
-  assert.match(result.notes[0].fix, /subagents certify/);
-  assert.match(result.notes[0].fix, /spends real quota/);
+  assert.equal(result.notes[0].fix, undefined);
 });
 
 test("a registry-certified route says so instead", () => {
@@ -166,11 +165,11 @@ test("a registry-certified route says so instead", () => {
   assert.deepEqual(noteCodes(result), ["certified_in_registry"]);
 });
 
-test("a locally verified route is distinguished from a selected one", () => {
+test("a local verified flag cannot claim certification", () => {
   const result = explain({
     proofs: { [ROUTE.slug]: { verified: true } },
   });
-  assert.deepEqual(noteCodes(result), ["verified_locally"]);
+  assert.deepEqual(noteCodes(result), ["selected_not_certified"]);
 });
 
 test("an effort off the model's ladder is flagged without blocking the spawn", (t) => {
