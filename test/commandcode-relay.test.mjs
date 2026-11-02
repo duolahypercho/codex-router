@@ -221,5 +221,256 @@ test("a mid-stream failure is reported inside the stream and still terminates", 
   });
   assert.equal(status.status, 200);
   assert.match(response.captured.body, /premium_credits_exhausted/);
-  assert.ok(response.captured.body.endsWith("data: [DONE]\n\n"));
+  assert.doesNotMatch(response.captured.body, /\[DONE\]|"finish_reason":"stop"/);
+});
+
+test("incomplete Command Code generations cannot become successful answers or deferred retries", async () => {
+  const prefix = TURN.slice(0, -1).map((event) => `${JSON.stringify(event)}\n`).join("");
+  const cases = [
+    Buffer.from(prefix),
+    Buffer.from(`${prefix}${JSON.stringify({ type: "finish-step", finishReason: "error" })}\n`),
+    Buffer.from(`${prefix}${JSON.stringify({ type: "finish-step", finishReason: "error" })}\n${JSON.stringify(TURN.at(-1))}\n`),
+    Buffer.from(`${prefix}${JSON.stringify({ type: "finish", finishReason: "unsupported-reason" })}\n`),
+    Buffer.from(`${prefix}${JSON.stringify({ type: "finish", finishReason: "unknown" })}\n`),
+    Buffer.from(`${prefix}${JSON.stringify({ type: "finish", finishReason: "other" })}\n`),
+    Buffer.from(`${prefix}{"type":"text-delta","text":"PRIVATE_BAD_EVENT"\n${JSON.stringify(TURN.at(-1))}\n`),
+    Buffer.concat([Buffer.from(prefix), Buffer.from([0xe4, 0xb8])]),
+  ];
+  for (const provider of [OPENAI_PROVIDER, ANTHROPIC_PROVIDER]) {
+    for (const stream of [false, true]) {
+      for (const bytes of cases) {
+        const response = fakeResponse();
+        let submissions = 0;
+        const outcome = await relayCommandCodeGenerate({
+          payload: { model: "x", stream, messages: [] },
+          model: MODEL, provider, apiKey: "synthetic_key",
+          baseUrl: "https://fixture.invalid/provider/v1", response, deferErrors: true, at: AT,
+          fetchImpl: async () => {
+            submissions += 1;
+            return { ok: true, status: 200, headers: new Headers(), body: Readable.from([bytes]) };
+          },
+        });
+        assert.equal(outcome.committed, true);
+        assert.equal(response.captured.ended, true);
+        assert.equal(submissions, 1);
+        if (stream) {
+          assert.equal(response.captured.status, 200);
+          assert.match(response.captured.body, /error/);
+          assert.doesNotMatch(response.captured.body, /\[DONE\]|"finish_reason":"stop"|"stop_reason":"end_turn"/);
+        } else {
+          assert.equal(response.captured.status, 502);
+          assert.equal(JSON.parse(response.captured.body).error.type, "commandcode_generate_error");
+        }
+        assert.doesNotMatch(response.captured.body, /PRIVATE_BAD_EVENT/);
+      }
+    }
+  }
+});
+
+test("SSE comments preserve relay replies with known terminal reasons", async () => {
+  for (const provider of [OPENAI_PROVIDER, ANTHROPIC_PROVIDER]) {
+    for (const stream of [false, true]) {
+      for (const finishReason of ["stop", "length"]) {
+        const response = fakeResponse();
+        const events = [...TURN.slice(0, -1), { ...TURN.at(-1), finishReason }];
+        const bytes = Buffer.from(": keepalive\r\n" + events.map((event) => `data: ${JSON.stringify(event)}\r\n\r\n`).join(""));
+        let submissions = 0;
+        const outcome = await relayCommandCodeGenerate({
+          payload: { model: "x", stream, messages: [] }, model: MODEL, provider,
+          apiKey: "synthetic_key", baseUrl: "https://fixture.invalid/provider/v1", response, at: AT,
+          fetchImpl: async () => { submissions += 1; return { ...upstreamOk([]), body: Readable.from([bytes]) }; },
+        });
+        assert.equal(outcome.status, 200);
+        assert.equal(response.captured.status, 200);
+        assert.equal(response.captured.ended, true);
+        assert.equal(submissions, 1);
+        assert.match(response.captured.body, /OK/);
+        assert.doesNotMatch(response.captured.body, /commandcode_generate_error/);
+        if (stream) assert.match(response.captured.body, provider.protocol === "anthropic" ? /message_stop/ : /\[DONE\]/);
+      }
+    }
+  }
+});
+
+test("malformed tool arguments fail both streamed and buffered relay protocols without replay", async () => {
+  for (const provider of [OPENAI_PROVIDER, ANTHROPIC_PROVIDER]) {
+    for (const stream of [false, true]) {
+      const response = fakeResponse();
+      let submissions = 0;
+      const outcome = await relayCommandCodeGenerate({
+        payload: { model: "x", stream, messages: [] }, model: MODEL, provider,
+        apiKey: "synthetic_key", baseUrl: "https://fixture.invalid/provider/v1", response, deferErrors: true, at: AT,
+        fetchImpl: async () => { submissions += 1; return upstreamOk([
+          { type: "tool-input-start", id: "call", toolName: "read_file" },
+          { type: "tool-input-delta", id: "call", delta: "{bad" },
+          { type: "tool-input-end", id: "call" },
+          { type: "finish", finishReason: "tool-calls" },
+        ]); },
+      });
+      assert.equal(outcome.committed, true);
+      assert.equal(response.captured.ended, true);
+      assert.equal(submissions, 1);
+      assert.match(response.captured.body, /unreadable tool arguments/);
+      assert.doesNotMatch(response.captured.body, /\[DONE\]|message_stop/);
+      assert.equal(response.captured.status, stream ? 200 : 502);
+    }
+  }
+});
+
+test("a truncated generation commits its failure before a second pooled key can run", async () => {
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { upsertProviderApiKey, runProviderApiKeyAttempts } = await import("../src/provider-api-key-pool.mjs");
+  const directory = mkdtempSync(join(tmpdir(), "commandcode-truncated-pool-"));
+  const filePath = join(directory, "pools.json");
+  try {
+    for (const id of ["cred_first_12345678", "cred_second_12345678"]) {
+      await upsertProviderApiKey("commandcode", { id }, { filePath });
+    }
+    for (const stream of [false, true]) {
+      let submissions = 0;
+      const response = fakeResponse();
+      const result = await runProviderApiKeyAttempts("commandcode", {
+        filePath, resolveCredential: (id) => id, backoffMs: 0,
+        isResponseCommitted: () => response.captured.ended,
+        send: ({ apiKey }) => relayCommandCodeGenerate({
+          payload: { model: "x", stream, messages: [] }, model: MODEL, provider: OPENAI_PROVIDER,
+          apiKey, baseUrl: "https://fixture.invalid/provider/v1", response, deferErrors: true, at: AT,
+          fetchImpl: async () => { submissions += 1; return upstreamOk(TURN.slice(0, -1)); },
+        }),
+      });
+      assert.equal(submissions, 1);
+      assert.equal(response.captured.status, stream ? 200 : 502);
+      assert.equal(result.committed, true);
+      assert.equal(result.attempts.length, 1);
+      // The pool records HTTP/credential health, not the generation outcome.
+      // An already-committed 200 stream carries the latter in its error frame.
+      assert.equal(result.attempts[0].ok, stream);
+      assert.match(response.captured.body, /error/);
+      assert.doesNotMatch(response.captured.body, /\[DONE\]|"finish_reason":"stop"/);
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+
+test("unreadable buffered Anthropic tool input fails once instead of becoming an empty tool call", async () => {
+  const response = fakeResponse();
+  const outcome = await relayCommandCodeGenerate({
+    payload: { stream: false, messages: [] }, model: MODEL, provider: ANTHROPIC_PROVIDER,
+    apiKey: "synthetic_key", baseUrl: "https://fixture.invalid/provider/v1",
+    response, deferErrors: true, at: AT,
+    fetchImpl: async () => upstreamOk([
+      { type: "tool-input-start", id: "t", toolName: "read_file" },
+      { type: "tool-input-delta", id: "t", delta: '{"path":' },
+      { type: "tool-input-end", id: "t" },
+      { type: "finish-step", finishReason: "tool-calls" },
+    ]),
+  });
+  assert.equal(response.captured.status, 502);
+  assert.equal(outcome.committed, true);
+  assert.match(response.captured.body, /unreadable tool arguments/);
+  assert.doesNotMatch(response.captured.body, /"input":\{\}/);
+});
+
+
+function resetAfterPartial({ controller, name = "Error" } = {}) {
+  const error = Object.assign(new Error("PRIVATE_RESET_DETAIL"), { code: "ECONNRESET", name });
+  return {
+    ...upstreamOk([]),
+    body: Readable.from((async function* () {
+      yield Buffer.from(TURN.slice(0, -1).map((event) => `${JSON.stringify(event)}\n`).join(""));
+      await new Promise(setImmediate);
+      controller?.abort();
+      throw error;
+    })()),
+  };
+}
+
+test("a reset after partial Command Code output commits an error without a success terminal", async () => {
+  for (const provider of [OPENAI_PROVIDER, ANTHROPIC_PROVIDER]) {
+    for (const stream of [false, true]) {
+      for (const name of ["Error", "AbortError"]) {
+        const response = fakeResponse();
+        const outcome = await relayCommandCodeGenerate({
+          payload: { stream, messages: [] }, model: MODEL, provider,
+          apiKey: "synthetic_key", baseUrl: "https://fixture.invalid/provider/v1",
+          response, deferErrors: true, at: AT,
+          fetchImpl: async () => resetAfterPartial({ name }),
+        });
+        assert.equal(outcome.committed, true);
+        assert.equal(response.captured.ended, true);
+        assert.equal(response.captured.status, stream ? 200 : 502);
+        assert.match(response.captured.body, /error/);
+        assert.doesNotMatch(response.captured.body, /PRIVATE_RESET_DETAIL|\[DONE\]|"finish_reason":"stop"|"stop_reason":"end_turn"/);
+      }
+    }
+  }
+});
+
+test("partial resets and actual caller cancellation cannot advance a Command Code key pool", async () => {
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { upsertProviderApiKey, runProviderApiKeyAttempts } = await import("../src/provider-api-key-pool.mjs");
+  const directory = mkdtempSync(join(tmpdir(), "commandcode-reset-pool-"));
+  const filePath = join(directory, "pools.json");
+  try {
+    for (const id of ["cred_first_12345678", "cred_second_12345678"]) {
+      await upsertProviderApiKey("commandcode", { id }, { filePath });
+    }
+    for (const cancel of [false, true]) {
+      for (const stream of [false, true]) {
+        let submissions = 0;
+        const controller = cancel ? new AbortController() : undefined;
+        const response = fakeResponse();
+        const result = await runProviderApiKeyAttempts("commandcode", {
+          filePath, resolveCredential: (id) => id, backoffMs: 0,
+          isResponseCommitted: () => response.captured.status !== undefined,
+          send: ({ apiKey }) => relayCommandCodeGenerate({
+            payload: { stream, messages: [] }, model: MODEL, provider: OPENAI_PROVIDER,
+            apiKey, baseUrl: "https://fixture.invalid/provider/v1", response,
+            signal: controller?.signal, deferErrors: true, at: AT,
+            fetchImpl: async () => { submissions += 1; return resetAfterPartial({ controller }); },
+          }),
+        });
+        assert.equal(submissions, 1);
+        assert.equal(result.attempts.length, 1);
+        if (cancel) {
+          assert.equal(result.error, controller.signal.reason);
+          assert.equal(response.captured.ended, false, "the caller owns cancellation");
+          assert.doesNotMatch(response.captured.body, /PRIVATE_RESET_DETAIL|\[DONE\]|"type":"commandcode_generate_error"/);
+        } else {
+          assert.equal(result.committed, true);
+          assert.equal(response.captured.status, stream ? 200 : 502);
+          assert.match(response.captured.body, /error/);
+        }
+      }
+    }
+    // Unlike a generation-body reset, an explicit HTTP refusal can still
+    // select the second credential before anything is committed to the caller.
+    let submissions = 0;
+    const response = fakeResponse();
+    // This control tests refusal policy, not host filesystem latency.
+    const refusalAt = Date.now();
+    const result = await runProviderApiKeyAttempts("commandcode", {
+      filePath, resolveCredential: (id) => id, backoffMs: 0, now: () => refusalAt,
+      isResponseCommitted: () => response.captured.status !== undefined,
+      send: ({ apiKey }) => relayCommandCodeGenerate({
+        payload: { messages: [] }, model: MODEL, provider: OPENAI_PROVIDER,
+        apiKey, baseUrl: "https://fixture.invalid/provider/v1", response, deferErrors: true, at: AT,
+        fetchImpl: async () => ++submissions === 1
+          ? { ok: false, status: 401, headers: new Headers(), text: async () => "credential refused" }
+          : upstreamOk(TURN),
+      }),
+    });
+    assert.equal(submissions, 2);
+    assert.equal(result.attempts.length, 2);
+    assert.equal(response.captured.status, 200);
+    assert.equal(JSON.parse(response.captured.body).choices[0].message.content, "OK");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });

@@ -1,0 +1,1 @@
+- Keep the Command Code refusal-policy control independent of host filesystem latency by using its existing injected clock.
