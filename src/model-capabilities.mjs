@@ -150,7 +150,8 @@ function modalitiesFrom(source, keys) {
   return normalizeModalities(value, keys[0]);
 }
 
-// Simultaneous advertised scopes are limits, so the smallest usable value wins.
+// Model and endpoint scopes are simultaneous limits: the smallest usable value wins.
+// Built-in discovery ignores numeric strings; generic curation explicitly accepts them.
 export function advertisedContextLength(record, { numericStrings = false } = {}) {
   let smallest;
   for (let value of [
