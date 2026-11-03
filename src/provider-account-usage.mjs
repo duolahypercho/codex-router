@@ -663,14 +663,17 @@ async function minimaxTokenPlanAccount(fetchImpl) {
   if (!MINIMAX_ACCOUNT_HOSTS.has(new URL(baseURL).hostname)) {
     return localOnly("Plan usage is unavailable for a custom MiniMax endpoint");
   }
-  const payload = await requestJson(`${baseURL}/coding_plan/remains`, credential.value, {}, fetchImpl);
+  let payload;
+  try {
+    payload = await requestJson(`${baseURL}/coding_plan/remains`, credential.value, {}, fetchImpl);
+  } catch (error) {
+    // JSON parser errors can quote the upstream body, including an echoed key.
+    if (error instanceof SyntaxError) throw new Error("MiniMax coding plan response was not valid JSON");
+    throw error;
+  }
   const status = payload?.base_resp?.status_code;
   if (status !== undefined && status !== 0) {
-    throw new Error(
-      typeof payload?.base_resp?.status_msg === "string" && payload.base_resp.status_msg
-        ? payload.base_resp.status_msg
-        : `MiniMax coding plan API returned status ${status}`,
-    );
+    throw new Error(`MiniMax coding plan API returned status ${Number.isInteger(status) ? status : "unknown"}`);
   }
   const metrics = minimaxQuotaMetrics(payload);
   if (!metrics.length) throw new Error("MiniMax coding plan response was incomplete");
@@ -849,11 +852,7 @@ async function zaiCodingAccount(fetchImpl) {
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || payload?.success !== true || payload?.code !== 200) {
-    throw new Error(
-      typeof payload?.msg === "string" && payload.msg
-        ? payload.msg
-        : `Z.ai quota API returned HTTP ${response.status}`,
-    );
+    throw new Error(`Z.ai quota API returned HTTP ${response.status}`);
   }
   const metrics = zaiQuotaMetrics(payload.data);
   if (!metrics.length) throw new Error("Z.ai quota response was incomplete");
