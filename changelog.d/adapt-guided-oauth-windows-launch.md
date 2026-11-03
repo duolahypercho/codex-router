@@ -1,0 +1,1 @@
+- **Run guided OAuth CLI commands through the existing platform launch adapter.** Windows npm batch shims now work without changing argument quoting, interactive input or setup exit handling.

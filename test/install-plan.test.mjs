@@ -224,12 +224,12 @@ test("distribution lookup normalizes names and ignores extras", () => {
 // have to agree on is that they both install that lock with hash checking.
 // test/python-lock.test.mjs covers the lock's own agreement with these pins.
 test("both installers install the Python tree from the hashed lock", () => {
-  assert.equal(PYTHON_REQUIREMENTS.length, 4);
+  assert.equal(PYTHON_REQUIREMENTS.length, 5);
   assert.deepEqual(installerRequirementDrift(), []);
 });
 
 test("a matching stamp cannot accept downgraded transitive security floors", () => {
-  for (const [name, version] of Object.entries({ multidict: "6.7.1", urllib3: "2.7.0" })) {
+  for (const [name, version] of Object.entries({ multidict: "6.7.1", urllib3: "2.7.0", certifi: "2026.7.22" })) {
     const root = checkout();
     try {
       installVenv(root, { ...PINNED_VERSIONS, [name]: version });

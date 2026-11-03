@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { assertBefore } from "./script-order.mjs";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
@@ -86,10 +87,7 @@ test("releases are tag-driven and validate every asset before publishing", () =>
   assert.match(release, /select\(\.conclusion == "success"/);
   assert.match(release, /needs: release-preflight/);
   assert.match(release, /needs: \[release-preflight, unified-app, unified-app-macos\]/);
-  assert.ok(
-    release.indexOf("- run: npm test") < release.indexOf("gh release create"),
-    "the release must pass the full test suite before publishing assets",
-  );
+  assertBefore(release, "- run: npm test", "gh release create", "the release must pass the full test suite before publishing assets");
   assert.match(release, /git archive --format=tar\.gz/);
   assert.match(release, /git archive --format=zip/);
   assert.match(release, /name: Unsigned tester app \(\$\{\{ matrix\.platform \}\}\)/);

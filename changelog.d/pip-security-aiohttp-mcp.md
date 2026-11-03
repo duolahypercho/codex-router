@@ -1,0 +1,1 @@
+- **Gateway dependency security update.** Bump aiohttp to 3.14.5 (with yarl 1.25.1) and mcp to 1.30.0 in the universal Python lock and Homebrew resources. Every other pin is unchanged, so the Python 3.10 and 3.11 installs keep their supported numpy versions.

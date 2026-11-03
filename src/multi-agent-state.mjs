@@ -6,8 +6,7 @@ import path from "node:path";
 
 import { writePrivateJson } from "./file-security.mjs";
 import { STATE_DIR } from "./paths.mjs";
-import { applySubagentProofs, subagentProofSnapshot } from "./subagent-proofs.mjs";
-import { VERSION } from "./version.mjs";
+import { subagentProofSnapshot } from "./subagent-proofs.mjs";
 
 export const MULTI_AGENT_STATE_PATH =
   process.env.MODEL_ROUTER_MULTI_AGENT_STATE ||
@@ -36,9 +35,8 @@ function legacySettings() {
   return undefined;
 }
 
-// Local selection controls which proven models remain available as subagents.
-// Capability comes only from the registry's native collaboration proof; local
-// state must never manufacture a v2 claim for an unverified model.
+// Local selection is operator intent. Registry certification is separate;
+// diagnostic probe records never make this choice for the operator.
 export function readMultiAgentSettings() {
   if (existsSync(MULTI_AGENT_STATE_PATH)) {
     try {
@@ -197,9 +195,8 @@ export function replaceMultiAgentState({ mode, enabled = [], disabled = [], effo
 //
 // Only these lines promote, and only from an explicit choice the operator made
 // and can see in `subagents status`. A machine-local probe still promotes
-// nothing on its own -- that distinction is the whole point of the guard in
-// subagent-proofs.mjs, and it is not weakened by honouring a deliberate
-// selection here.
+// nothing on its own. Diagnostic records are separate from this deliberate
+// selection.
 export function applyMultiAgentSettings(models, settings, hidden = new Set()) {
   const disabled = new Set(settings.disabled || []);
   const enabled = new Set(settings.enabled || []);
@@ -218,25 +215,10 @@ export function applyMultiAgentSettings(models, settings, hidden = new Set()) {
   });
 }
 
-// Resolve the effective v2 claims once so catalog publication, managed agent
-// definitions, and doctor checks cannot disagree. Two things can make a route
-// v2: a checked-in registry entry, or a completed local verification of that
-// exact route. The diagnostic proof statuses still promote nothing.
-//
-// `routerVersion` defaults here rather than at each call site: a verification
-// describes one build's relay behaviour, and a caller that forgot to pass it
-// would silently carry that evidence across an upgrade.
-export function applyMultiAgentCapabilities(
-  models,
-  settings,
-  { hidden = new Set(), proofs = subagentProofSnapshot(), routerVersion = VERSION } = {},
-) {
-  const configured = settings || readMultiAgentSettings();
-  return applySubagentProofs(
-    applyMultiAgentSettings(models, configured, hidden),
-    proofs,
-    { hidden, disabled: configured.disabled, routerVersion },
-  );
+// Registry capability and explicit operator selection are the only inputs to
+// publication. Diagnostic records never grant or revoke the native child role.
+export function applyMultiAgentCapabilities(models, settings, { hidden = new Set() } = {}) {
+  return applyMultiAgentSettings(models, settings || readMultiAgentSettings(), hidden);
 }
 
 // Models the user has not switched off as a subagent.

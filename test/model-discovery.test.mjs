@@ -95,10 +95,9 @@ test("OpenCode Go discovery blocks live ids whose protocol route is not certifie
   }
 });
 
-// A control surface offers `addable` and shows `blocked` with its reason, so
-// the free ids OpenCode will not serve to this router have to reach it as the
-// second, not the first: every one of them would fail on its opening request.
-test("OpenCode Free discovery withholds the client-gated ids with their reason", () => {
+// A control surface offers `addable` and shows `blocked` with its reason.
+// Fingerprint free ids are addable; withdrawn free ids stay blocked.
+test("OpenCode Free discovery offers fingerprint free ids and withholds withdrawn ones", () => {
   const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-opencode-free-discovery-"));
   const fixture = path.join(testRoot, "models.json");
   writeFileSync(
@@ -120,18 +119,12 @@ test("OpenCode Free discovery withholds the client-gated ids with their reason",
     const result = JSON.parse(output);
     // The paid id never reaches the comparison: anonymousModelAllowed drops it.
     assert.equal(result.discovered.includes("glm-5.1"), false);
-    // Nothing on this provider is addable: the whole Zen free tier refuses
-    // to answer as of 2026-10-21, so every id it advertises is withheld.
-    assert.deepEqual(result.addable, []);
+    // Fingerprint free ids are addable; only withdrawn ones stay blocked.
     assert.deepEqual(
-      Object.keys(result.blocked).sort(),
-      ["big-pickle", "deepseek-v4-flash-free", "mimo-v2.6-flash-free", "nemotron-3.5-super-vl-free"],
+      result.addable.sort(),
+      ["big-pickle", "mimo-v2.6-flash-free", "nemotron-3.5-super-vl-free"],
     );
-    assert.match(
-      result.blocked["mimo-v2.6-flash-free"],
-      /only to its own client.*can only be used from within OpenCode.*access policy/s,
-    );
-    // A withdrawn id is refused for its own reason, not the gate's.
+    assert.deepEqual(Object.keys(result.blocked).sort(), ["deepseek-v4-flash-free"]);
     assert.match(result.blocked["deepseek-v4-flash-free"], /has withdrawn/);
   } finally {
     rmSync(testRoot, { recursive: true, force: true });

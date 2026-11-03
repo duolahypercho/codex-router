@@ -1,0 +1,1 @@
+- **Local diagnostics no longer certify subagents.** Remove the speculative certification runner and automatic promotion from local records; preserve registry capabilities, explicit selections, and historical diagnostics without repeating paid probes.

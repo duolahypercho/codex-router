@@ -20,22 +20,14 @@ const paths = await load("paths.mjs");
 const security = await load("file-security.mjs");
 const store = await load("provider-credential-store.mjs");
 const target = path.join(paths.STATE_DIR, "metadata", "references.json");
-const migrations = path.join(paths.STATE_DIR, "migrations", "synthetic-metadata");
-const latest = path.join(migrations, "latest.json");
 const entry = store.createCredentialReference({ providerId: "deepseek", kind: "api_key",
   secretRef: { type: "provider-file", providerId: "deepseek", target: "codex" }, label: "Fixture κ 目录" });
 const value = { schemaVersion: 2, credentials: [entry] };
 const expected = Buffer.from(JSON.stringify(value, null, 2) + "\n");
 const previous = Buffer.from('{\r\n "schemaVersion": 2, "credentials": []\r\n}\r\n');
-const legacy = Buffer.from(' \t' + JSON.stringify({ version: 1, credentials: [] }, null, 1).replaceAll("\n", "\r\n") + "\r\n");
 fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o755 });
 fs.chmodSync(path.dirname(target), 0o755);
-const migrating = mode.startsWith("migration");
-if (mode !== "fresh") fs.writeFileSync(target, migrating ? legacy : previous, { mode: 0o600 });
-if (mode === "migration-pointer-failure") {
-  fs.mkdirSync(migrations, { recursive: true });
-  fs.writeFileSync(latest, "prior pointer bytes\r\n");
-}
+if (mode !== "fresh") fs.writeFileSync(target, previous, { mode: 0o600 });
 const original = { exec: cp.execFileSync, open: fs.openSync, write: fs.writeFileSync,
   close: fs.closeSync, rename: fs.renameSync, unlink: fs.unlinkSync, read: fs.readFileSync, lstat: fs.lstatSync };
 const within = (file, parent) => {
@@ -102,8 +94,7 @@ fs.renameSync = (temporary, destination) => {
   assert.equal(path.dirname(temporary), path.dirname(destination));
   assert.equal(descriptors.size, 0);
   assert.equal(security.privateFileIsProtected(temporary), true, "protect metadata before publication");
-  if ((destination === target && ["rename-failure", "cleanup-failure", "leaf-race"].includes(mode))
-    || (destination === latest && mode === "migration-pointer-failure" && !injected)) {
+  if (destination === target && ["rename-failure", "cleanup-failure", "leaf-race"].includes(mode)) {
     injected = true;
     if (mode === "leaf-race") {
       displaced = temporary + ".displaced"; original.rename(temporary, displaced);
@@ -141,8 +132,7 @@ try {
       assert.throws(() => store.writeProviderCredentialStore(value, target), /symbolic link/);
     }
     rejectedPath = undefined;
-  } else if (migrating) result = store.migrateProviderCredentialStore(target, { migrationDirectory: migrations });
-  else {
+  } else {
     result = store.writeProviderCredentialStore(value, target);
     if (mode === "repeat") result = store.writeProviderCredentialStore(value, target);
   }
@@ -151,27 +141,7 @@ if (foreign) {
   assert.equal(fs.existsSync(foreign), true, "foreign metadata temporary must survive");
   assert.deepEqual(fs.readFileSync(foreign), stranger);
 }
-if (migrating) {
-  if (mode === "migration-pointer-failure") {
-    assert.equal(injected, true); assert.equal(error, primary);
-    assert.deepEqual(fs.readFileSync(target), legacy, "failed migration restores exact legacy bytes");
-    assert.equal(fs.readFileSync(latest, "utf8"), "prior pointer bytes\r\n");
-  } else {
-    assert.equal(error, undefined); assert.equal(result.legacy, true);
-    const manifest = JSON.parse(fs.readFileSync(result.manifestPath, "utf8"));
-    assert.deepEqual(fs.readFileSync(manifest.previousPath), legacy, "snapshot buffer stays byte-exact");
-    assert.equal(security.privateFileIsProtected(manifest.previousPath), true);
-    const after = fs.readFileSync(target);
-    if (mode === "migration-changed") {
-      original.write(target, "unrelated edit\n");
-      assert.throws(() => store.rollbackProviderCredentialStore(undefined, { migrationDirectory: migrations, targetPath: target }), /changed after migration/);
-      assert.equal(fs.readFileSync(target, "utf8"), "unrelated edit\n");
-      original.write(target, after);
-    }
-    store.rollbackProviderCredentialStore(undefined, { migrationDirectory: migrations, targetPath: target });
-    assert.deepEqual(fs.readFileSync(target), legacy, "rollback restores exact legacy bytes");
-  }
-} else if (["collision", "write-failure", "close-failure", "harden-failure", "rename-failure", "cleanup-failure", "leaf-race"].includes(mode)) {
+if (["collision", "write-failure", "close-failure", "harden-failure", "rename-failure", "cleanup-failure", "leaf-race"].includes(mode)) {
   assert.equal(injected, true); assert.ok(error); assert.equal(publications, 0);
   assert.deepEqual(fs.readFileSync(target), previous);
   if (mode === "collision") assert.equal(error.code, "EEXIST");
@@ -221,7 +191,7 @@ function exercise(mode) {
   } finally { rmSync(scratch, { recursive: true, force: true }); }
 }
 
-for (const mode of ["fresh", "repeat", "collision", "write-failure", "close-failure", "rename-failure", "cleanup-failure", "leaf-race", "validation", "migration", "migration-pointer-failure", "migration-changed"]) {
+for (const mode of ["fresh", "repeat", "collision", "write-failure", "close-failure", "rename-failure", "cleanup-failure", "leaf-race", "validation"]) {
   test(`credential metadata ${mode} preserves private bytes, validation and ownership`, () => exercise(mode));
 }
 test("credential metadata ACL failure preserves the old store", {

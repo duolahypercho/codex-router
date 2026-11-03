@@ -52,6 +52,24 @@ test("the compile input is exactly the declared requirements", () => {
   assert.deepEqual(lockInputRequirements(), PYTHON_REQUIREMENTS);
 });
 
+test("reinstall sources retain the certifi security floor", () => {
+  const requirement = PYTHON_REQUIREMENTS.find((entry) => entry.startsWith("certifi=="));
+  assert.ok(requirement, "certifi must stay a direct pin so regeneration cannot undo the security fix");
+  const version = requirement.slice("certifi==".length);
+  const parts = version.split(".").map(Number);
+  assert.ok(parts.length === 3 && parts.every(Number.isInteger), "expected a stable certifi release");
+  assert.ok(
+    parts[0] > 2026 || (parts[0] === 2026 && (parts[1] > 10 || (parts[1] === 10 && parts[2] >= 23))),
+    "certifi must include the compromised-root removal and the unaffected G1 restoration",
+  );
+  const formula = readFileSync(repoFile("Formula/codex-router.rb"), "utf8");
+  const resource = formula.match(/resource "certifi" do([\s\S]*?)\n  end/);
+  assert.ok(resource, "Homebrew must also retain the corrected certifi resource");
+  assert.ok(resource[1].includes(`/certifi-${version}.tar.gz"`), "Homebrew must agree with the direct pin");
+  const checksum = resource[1].match(/sha256 "([a-f0-9]{64})"/)?.[1];
+  assert.ok(checksum && lockText().includes(`--hash=sha256:${checksum}`), "Homebrew must use a hash from the universal lock");
+});
+
 test("the lock pins the declared versions and nothing else for those projects", () => {
   const entries = parseLock(lockText());
   for (const requirement of PYTHON_REQUIREMENTS) {

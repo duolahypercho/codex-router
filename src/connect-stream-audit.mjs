@@ -2,7 +2,7 @@
 // full error-code table, and a scanner that reads a stream without decoding it.
 //
 // The scanner exists for the probe, which must not test a transport with the
-// transport. The constants and the code table are shared with the client in
+// transport. Constants, error codes and terminator classification are shared with the client in
 // `devin-connect.mjs`, because the alternative -- a second table restated there
 // -- is exactly the drift this module was written to catch. Nothing here
 // imports the client, so the direction stays one-way.
@@ -18,8 +18,8 @@
 //     no tool calls. The client refuses such a frame by name and asks for
 //     `connect-accept-encoding: identity` so a compliant server never sends
 //     one.
-//   * A stream that ends mid-frame yields every complete message before it and
-//     then stops, which reads as a short answer.
+//   * A stream that ends mid-frame must fail after any yielded prefix. A clean
+//     HTTP close without the logical terminator is not a completed answer.
 //   * A Connect stream reports failure inside the terminator with HTTP 200
 //     already sent, so a client that ignores the terminator reports success.
 //
@@ -170,12 +170,15 @@ export function parseEndStreamPayload(payload) {
   } catch {
     return { text: trimmed.slice(0, 500), json: undefined, malformed: true, error: undefined };
   }
-  if (!json || typeof json !== "object") {
+  if (!json || typeof json !== "object" || Array.isArray(json)) {
     return { text: trimmed.slice(0, 500), json, malformed: true, error: undefined };
   }
   const failure = json.error;
-  if (!failure || typeof failure !== "object") {
+  if (failure === undefined || failure === null) {
     return { text: trimmed.slice(0, 500), json, malformed: false, error: undefined };
+  }
+  if (typeof failure !== "object" || Array.isArray(failure)) {
+    return { text: trimmed.slice(0, 500), json, malformed: true, error: undefined };
   }
   const code = typeof failure.code === "string" ? failure.code : undefined;
   return {

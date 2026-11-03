@@ -7,6 +7,7 @@ import test from "node:test";
 const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-targets-"));
 process.env.CODEX_HOME = path.join(testRoot, "codex");
 process.env.CODEX_ROUTER_STATE_DIR = path.join(testRoot, "state");
+process.env.MODEL_ROUTER_CURSOR_LAUNCHER = path.join(testRoot, "cursor-router-agent");
 
 const {
   installedTargets,
@@ -19,6 +20,7 @@ const {
   CONFIG_PATH,
   CLAUDE_CATALOG_PATH,
   CURSOR_CATALOG_PATH,
+  CURSOR_LAUNCHER_PATH,
   DSH_CATALOG_PATH,
   NATIVE_CATALOG_PATH,
   OPENCLAW_CATALOG_PATH,
@@ -32,7 +34,7 @@ function stageFile(filePath, contents) {
 
 function clearStagedFiles() {
   for (const filePath of [
-    CONFIG_PATH, CLAUDE_CATALOG_PATH, CURSOR_CATALOG_PATH, DSH_CATALOG_PATH, NATIVE_CATALOG_PATH,
+    CONFIG_PATH, CLAUDE_CATALOG_PATH, CURSOR_CATALOG_PATH, CURSOR_LAUNCHER_PATH, DSH_CATALOG_PATH, NATIVE_CATALOG_PATH,
     OPENCLAW_CATALOG_PATH, ...Object.values(ROUTED_HARNESS_CATALOG_PATHS),
   ]) {
     rmSync(filePath, { force: true });
@@ -180,6 +182,21 @@ test("the Cursor publication snapshot marks the Cursor integration", () => {
   } finally {
     clearStagedFiles();
   }
+});
+
+test("an Agent-only owned Cursor launcher keeps the shared plane installed", () => {
+  try {
+    stageFile(CURSOR_LAUNCHER_PATH, "#!/bin/sh\n# codex-router-cursor-launcher\n");
+    assert.deepEqual(installedTargets(), ["cursor"]);
+    stageFile(CONFIG_PATH, "# BEGIN codex-router-managed\n# END codex-router-managed\n");
+    assert.deepEqual(installedTargets(), ["codex", "cursor"]);
+    rmSync(CONFIG_PATH);
+    assert.deepEqual(installedTargets(), ["cursor"]);
+    stageFile(CURSOR_LAUNCHER_PATH, "#!/bin/sh\n# someone else's launcher\n");
+    assert.deepEqual(installedTargets(), []);
+    rmSync(CURSOR_LAUNCHER_PATH);
+    assert.deepEqual(installedTargets(), []);
+  } finally { clearStagedFiles(); }
 });
 
 test("the Claude publication snapshot marks the Claude Code integration", () => {

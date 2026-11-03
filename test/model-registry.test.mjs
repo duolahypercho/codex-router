@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -39,6 +39,12 @@ function fixture(t) {
           warnings: registry.USER_MODEL_WARNINGS,
           skipped: [...registry.USER_MODELS_SKIPPED],
           rawModels: registry.readRegistryDocument().models,
+          routes: Object.fromEntries([...registry.MODEL_BY_SLUG].map(([slug, model]) => [slug, {
+            slug: model.slug, gatewayModel: model.gatewayModel,
+            endpointId: registry.endpointForModel(model)?.id,
+            baseUrl: registry.endpointForModel(model)?.baseUrl,
+            gatewayBaseUrl: registry.endpointForModel(registry.MODEL_BY_GATEWAY_ID.get(model.gatewayModel))?.baseUrl,
+          }])),
         }));
       `], { cwd: root, encoding: "utf8", env: { ...process.env,
         CODEX_ROUTER_SOURCE_ROOT: root, CODEX_HOME: path.join(directory, "codex"),
@@ -101,4 +107,42 @@ test("curated and generic route conversion retains valid policies and excludes i
   ]);
   assert.equal(actual.skipped.length, 3);
   assert.ok(actual.skipped.every(([, reason]) => reason.includes("reasoningTagPolicy")));
+});
+
+test("a custom endpoint keeps its destination when a preset has the same upstream model", (t) => {
+  const shipped = JSON.parse(readFileSync(path.join(root, "config/custom/qwen3.8-27b.json"), "utf8")).models[0];
+  const local = customModel(shipped.upstreamModel);
+  const result = fixture(t).load({ models: [shipped], users: [local] });
+  assert.equal(result.status, 0, result.stderr);
+  const actual = JSON.parse(result.stdout);
+  assert.equal(actual.models.length, 2);
+  assert.equal(actual.skipped.length, 0);
+  assert.deepEqual(actual.routes[local.slug], {
+    slug: local.slug,
+    gatewayModel: local.gatewayModel,
+    endpointId: local.slug,
+    baseUrl: local.endpoint.baseUrl,
+    gatewayBaseUrl: local.endpoint.baseUrl,
+  });
+  assert.equal(actual.routes[shipped.slug].baseUrl, shipped.endpoint.baseUrl);
+
+  const collision = fixture(t).load({ models: [shipped], users: [{ ...local, slug: shipped.slug }] });
+  assert.equal(collision.status, 0, collision.stderr);
+  const rejected = JSON.parse(collision.stdout);
+  assert.equal(rejected.models.length, 1);
+  assert.equal(rejected.skipped.length, 1);
+  assert.equal(rejected.routes[shipped.slug].baseUrl, shipped.endpoint.baseUrl);
+
+  for (const invalid of [
+    { ...local, gatewayModel: shipped.gatewayModel },
+    { ...local, endpoint: { ...local.endpoint, baseUrl: "https://untrusted.example.test/v1" } },
+  ]) {
+    const refused = fixture(t).load({ models: [shipped], users: [invalid] });
+    assert.equal(refused.status, 0, refused.stderr);
+    const invalidResult = JSON.parse(refused.stdout);
+    assert.equal(invalidResult.models.length, 1);
+    assert.equal(invalidResult.skipped.length, 1);
+    assert.equal(invalidResult.routes[local.slug], undefined);
+    assert.equal(invalidResult.routes[shipped.slug].baseUrl, shipped.endpoint.baseUrl);
+  }
 });

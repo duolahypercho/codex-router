@@ -7,13 +7,13 @@ import test from "node:test";
 const root = mkdtempSync(path.join(os.tmpdir(), "codex-router-api-key-routing-"));
 process.env.CODEX_HOME = path.join(root, "codex");
 process.env.CODEX_ROUTER_STATE_DIR = path.join(root, "state");
+process.env.MODEL_ROUTER_STATE_DIR = process.env.CODEX_ROUTER_STATE_DIR;
 process.env.MODEL_ROUTER_PROVIDER_CREDENTIAL_STORE = path.join(root, "state", "provider-credentials.json");
-process.env.MODEL_ROUTER_PROVIDER_CREDENTIAL_MIGRATIONS = path.join(root, "state", "migrations", "provider-credentials");
 delete process.env.OPENROUTER_API_KEY;
 
 const { MODEL_BY_SLUG, PROVIDERS, endpointForModel } = await import("../src/model-registry.mjs");
 const { writeProviderCredential } = await import("../src/provider-credentials.mjs");
-const { addCredentialReference, migrateProviderCredentialStore } = await import("../src/provider-credential-store.mjs");
+const { addCredentialReference } = await import("../src/provider-credential-store.mjs");
 const { resolveProviderApiKeyForRequest } = await import("../src/provider-api-key-routing.mjs");
 const { setProviderApiKeyPaused, upsertProviderApiKey } = await import("../src/provider-api-key-pool.mjs");
 
@@ -27,8 +27,11 @@ test.after(() => rmSync(root, { recursive: true, force: true }));
 
 test.before(async () => {
   writeProviderCredential(provider, "POOL_PRIMARY_SECRET");
-  const store = migrateProviderCredentialStore(credentialStorePath).store;
-  credentialId = store.credentials.find((entry) => entry.providerId === provider.id).id;
+  credentialId = addCredentialReference({
+    providerId: provider.id,
+    kind: "api_key",
+    secretRef: { type: "provider-file" },
+  }, credentialStorePath).id;
   await upsertProviderApiKey(provider.id, { id: credentialId }, { filePath: statePath });
 });
 

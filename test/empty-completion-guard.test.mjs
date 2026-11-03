@@ -979,3 +979,45 @@ test("a search result alone is not an assistant action", async () => {
   })}\n\n`;
   assert.equal((await runGuard(input)).empty, true);
 });
+
+// Every verdict uses the same effective event name. Fragmented data-only and
+// generic message frames must not bypass the downstream terminal hold.
+for (const prefix of ["", "event: message\n", "event: response.completed\n"]) {
+  test(`empty completion semantics are independent of the SSE event field (${prefix || "data-only"})`, async () => {
+    for (const reasoning of [false, true]) {
+      const prelude = reasoning
+        ? 'data: {"type":"response.reasoning_text.delta","delta":"thinking"}\n\n'
+        : 'data: {"type":"response.created","response":{"id":"empty"}}\n\n';
+      const terminal = prefix + 'data: {"type":"response.completed","response":{"output":[]}}';
+      for (const ending of ["", "\n\n", "\r\n\r\n"]) {
+        const input = Buffer.from(prelude + terminal + ending);
+        const guard = new EmptyCompletionGuard("text/event-stream");
+        const chunks = [];
+        await pipeline(
+          Readable.from(Array.from({ length: Math.ceil(input.length / 3) }, (_, i) => input.subarray(i * 3, i * 3 + 3))),
+          guard,
+          new EmptyCompletionTerminalGuard(guard, "text/event-stream"),
+          new Writable({ write(chunk, _encoding, done) { chunks.push(Buffer.from(chunk)); done(); } }),
+        );
+        assert.equal(guard.isEmpty(), true);
+        assert.equal(guard.suppressedPrologue(), !reasoning);
+        assert.equal(Buffer.concat(chunks).toString(), reasoning ? prelude : "");
+      }
+    }
+  });
+}
+
+test("generic message frames preserve content, explicit failures and malformed uncertainty", async () => {
+  for (const data of [
+    '{"type":"response.completed","response":{"output":[{"type":"message","content":[{"type":"output_text","text":"answer"}]}]}}',
+    '{"type":"response.failed","response":{"status":"failed"}}',
+    '{"type":"response.incomplete","response":{"status":"incomplete"}}',
+    '{"type":"response.completed",broken}',
+  ]) {
+    const input = `event: message\ndata: ${data}\n\n`;
+    const result = await runGuard(input, { chunkSize: 3 });
+    assert.equal(result.empty, false);
+    assert.equal(result.suppressed, false);
+    assert.equal(result.body, input);
+  }
+});

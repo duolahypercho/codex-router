@@ -23,6 +23,7 @@ import {
   applyKeepAliveTimeouts,
   endStreamedResponse,
   formatErrorChain,
+  foldInterveningAssistantMessages,
   HOP_BY_HOP_HEADERS,
   httpErrorStatus,
   installGracefulShutdown,
@@ -82,6 +83,12 @@ import {
 } from "./openai-adapters.mjs";
 import { threadIdFromHeaders } from "./codex-session-names.mjs";
 import { applyOpenCodeSessionHeaders, isOpenCodeProvider } from "./opencode-session.mjs";
+import {
+  applyOpenCodeFreeFingerprint,
+  applyOpenCodeFreeLaneHeaders,
+  isOpenCodeFreeLaneProvider,
+  openCodeFreeFingerprintStyle,
+} from "./opencode-free-lane.mjs";
 import { clampOpenCodeMessageContent } from "./opencode-message-compat.mjs";
 import {
   ensureOpenCodeGeminiThoughtSignatures,
@@ -308,55 +315,6 @@ function dashscopeEffortFamily(upstreamModel) {
   return DASHSCOPE_EFFORT_FAMILIES.find((entry) => entry.match.test(upstream));
 }
 
-// Strict chat-completions providers (e.g. MiniMax) reject a turn whose tool
-// result messages do not immediately follow the assistant message carrying the
-// matching tool_calls. When the upstream Responses-API history is translated to
-// chat completions, an assistant turn that produced both tool_calls and a text
-// message can arrive as two consecutive assistant messages (one with
-// tool_calls, one with the text), so the tool results no longer follow the
-// tool-call-bearing assistant. Coalesce runs of consecutive assistant messages
-// into a single assistant message (combining content and tool_calls) so the
-// chat-completions contract holds. This is a safe normalization: consecutive
-// assistant messages are not a valid multi-turn shape, so merging them cannot
-// change a well-formed conversation.
-function combineAssistantContent(target, source) {
-  const sourceContent = source.content;
-  if (sourceContent === undefined || sourceContent === null) return;
-  const targetContent = target.content;
-  if (targetContent === undefined || targetContent === null || targetContent === "") {
-    target.content = sourceContent;
-    return;
-  }
-  if (typeof targetContent === "string" && typeof sourceContent === "string") {
-    target.content = `${targetContent}\n${sourceContent}`;
-    return;
-  }
-  const targetBlocks = Array.isArray(targetContent) ? targetContent : [targetContent];
-  const sourceBlocks = Array.isArray(sourceContent) ? sourceContent : [sourceContent];
-  target.content = [...targetBlocks, ...sourceBlocks];
-}
-
-function coalesceAssistantMessages(messages) {
-  if (!Array.isArray(messages) || messages.length < 2) return messages;
-  const coalesced = [];
-  for (const message of messages) {
-    const previous = coalesced[coalesced.length - 1];
-    if (
-      message?.role === "assistant" &&
-      previous?.role === "assistant" &&
-      (Array.isArray(previous.tool_calls) || Array.isArray(message.tool_calls))
-    ) {
-      combineAssistantContent(previous, message);
-      if (Array.isArray(message.tool_calls) && message.tool_calls.length) {
-        previous.tool_calls = [...(previous.tool_calls || []), ...message.tool_calls];
-      }
-      continue;
-    }
-    coalesced.push(message);
-  }
-  return coalesced;
-}
-
 function restoreNativeReasoningContent(messages) {
   if (!Array.isArray(messages)) return messages;
   return messages.map((message) => {
@@ -442,6 +400,13 @@ function toolCallIds(message) {
 
 function ensureToolResultsForCalls(messages) {
   if (!Array.isArray(messages) || messages.length === 0) return messages;
+  // The shared fold preserves assistant runs whose opaque metadata conflicts.
+  // Their real results may follow those unmerged items. Keep that ambiguous
+  // history for upstream rejection instead of replacing results with stubs.
+  if (messages.some((message, index) => (
+    message?.role === "assistant" && toolCallIds(message).length > 0
+    && messages[index + 1]?.role === "assistant"
+  ))) return messages;
   const repaired = [];
   let index = 0;
   while (index < messages.length) {
@@ -836,7 +801,8 @@ function trimTrailingModelTurns(messages) {
 
 function sanitizeChatToolHistory(messages, provider, model) {
   if (!Array.isArray(messages)) return messages;
-  const repaired = ensureToolResultsForCalls(coalesceAssistantMessages(messages));
+  foldInterveningAssistantMessages(messages);
+  const repaired = ensureToolResultsForCalls(messages);
   let cleaned = repaired;
   if (isGeminiProvider(provider, model)) {
     cleaned = ensureGeminiThoughtSignatures(sanitizeGeminiImageContent(repaired));
@@ -1601,6 +1567,11 @@ function normalizeBody(buffer, contentType, route) {
     }
   }
   if (adapter) payload = adapter.normalizeBody(payload, model);
+  // OpenCode's anonymous free lane needs the public CLI fingerprint on the
+  // body (official read/shell defs + <env>) before the bytes leave the box.
+  if (isOpenCodeFreeLaneProvider(provider)) {
+    applyOpenCodeFreeFingerprint(payload, openCodeFreeFingerprintStyle(route));
+  }
   const targetPath = adapter?.targetPath
     ? adapter.targetPath({ model, body: payload })
     : undefined;
@@ -1667,6 +1638,14 @@ function upstreamHeaders(requestHeaders, body, apiKey, provider, extraHeaders = 
   // OpenCode Go/Zen affinity must win over any session.headers merge above:
   // starting 2026-09-06 their edge may refuse requests without this header.
   applyOpenCodeSessionHeaders(headers, {
+    provider,
+    requestHeaders,
+    body,
+  });
+  // The anonymous free lane overrides UA, Authorization, and session headers
+  // with the public CLI fingerprint. Must run after the generic session merge
+  // so a UUID x-opencode-session cannot leave FreeTierError on the wire.
+  applyOpenCodeFreeLaneHeaders(headers, {
     provider,
     requestHeaders,
     body,

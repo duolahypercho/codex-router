@@ -18,6 +18,7 @@ import {
 } from "./opencode-curation.mjs";
 import { instructionOverlayExists } from "./instruction-overlays.mjs";
 import { SOURCE_ROOT } from "./paths.mjs";
+import { FREE_POOL_PROVIDER, FREE_POOL_SLUG, freePoolMemberModels } from "./free-pool-catalog.mjs";
 import { officialModelDisplayName, readUserModels } from "./user-models.mjs";
 import { curatableRequestProfile, requestProfileKnown } from "./request-profiles.mjs";
 import { reasoningTagPolicyProblem } from "./reasoning-tag-policy.mjs";
@@ -37,9 +38,12 @@ function fail(message) {
 // future registry entry cannot turn an arbitrary HTTPS endpoint into a
 // credential-free exfiltration path.
 const ANONYMOUS_ENDPOINTS = Object.freeze({
-  "opencode-free": "https://opencode.ai/zen/v1",
-  "opencode-free-responses": "https://opencode.ai/zen/v1",
+  "opencode-free": "https://opencode.ai/inference/v1",
+  "opencode-free-responses": "https://opencode.ai/inference/v1",
   "kilo-free": "https://api.kilo.ai/api/gateway",
+  // The free/auto pool: the same two free lanes, under one picker entry.
+  free: "https://api.kilo.ai/api/gateway",
+  "free-opencode": "https://opencode.ai/inference/v1",
 });
 
 // The same guarantee, one level down. A per-model endpoint moves the address
@@ -60,6 +64,12 @@ export function anonymousModelAllowed(provider, modelId) {
     return id === "big-pickle" || id.endsWith("-free");
   }
   if (provider.anonymousModelPolicy === "suffix-free") return id.endsWith(":free");
+  // Kilo names some of its free pool without the `:free` suffix
+  // (`reflection/beam-free`, `openrouter/free`, `kilo-auto/free`); every one of
+  // them still says free in its id, which is what keeps this an allowlist.
+  if (provider.anonymousModelPolicy === "free-pool") {
+    return id.endsWith(":free") || id.endsWith("/free") || id.endsWith("-free");
+  }
   if (provider.anonymousModelPolicy === "explicit-models") {
     return Array.isArray(provider.anonymousModels) && provider.anonymousModels.includes(id);
   }
@@ -295,6 +305,7 @@ function loadRegistry() {
         }
         if (![
           "explicit-models",
+          "free-pool",
           "opencode-console",
           "suffix-free",
         ].includes(provider.anonymousModelPolicy)) {
@@ -866,6 +877,12 @@ function modelProblem(model, providers, slugs, gatewayModels) {
   }
   // Only an explicit boolean may change failover eligibility; anything else is
   // a typo that would otherwise silently leave the route eligible.
+  if (
+    model.freePool !== undefined &&
+    (model.freePool !== true || model.slug !== FREE_POOL_SLUG || model.provider !== FREE_POOL_PROVIDER)
+  ) {
+    return `model ${model.slug} may not declare freePool; only ${FREE_POOL_SLUG} is the free pool`;
+  }
   if (model.failoverCandidate !== undefined && typeof model.failoverCandidate !== "boolean") {
     return `model ${model.slug} has an invalid failoverCandidate`;
   }
@@ -972,13 +989,13 @@ function mergeUserModels(base, staticAliases) {
   const models = [...base.models];
   const slugs = new Set(models.map((model) => model.slug));
   const gatewayModels = new Set(models.map((model) => model.gatewayModel));
-  // Curation used to publish opaque provider ids before a checked-in entry
-  // gave the same route a stable public slug. Treat provider + upstream id as
-  // routing identity too, not only the public slug: otherwise both names reach
-  // the exact same endpoint and the picker shows a duplicate model. Keep the
-  // replacement so persisted visibility can follow the canonical slug.
+  // Provider-level routes share one endpoint, so an old curation slug for a
+  // checked-in model can follow its canonical slug. Per-model endpoints are
+  // explicit destinations: the same upstream id does not make them aliases.
   const checkedInRoutes = new Map(
-    models.map((model) => [`${model.provider}\0${model.upstreamModel}`, model]),
+    models
+      .filter((model) => !base.providers.get(model.provider)?.perModelEndpoint)
+      .map((model) => [`${model.provider}\0${model.upstreamModel}`, model]),
   );
   const aliases = new Map();
   const userModels = new Set();
@@ -1092,7 +1109,31 @@ export const RUNTIME_PROVIDER_WARNINGS = runtime.warnings;
 export const CHECKED_IN_MODELS = registry.models;
 export const COMPATIBILITY_LAYER = Object.freeze(readCompatibilityLayerSettings());
 export const COMPATIBILITY_DISABLED_MODELS = new Map();
-export const MODELS = Object.freeze(merged.models.filter((model) => {
+// The free/auto pool's members are ordinary unlisted routes built from the
+// cached free catalogs (src/free-pool-catalog.mjs). They are added here, after
+// the checked-in and user models, so CHECKED_IN_MODELS stays exactly what the
+// checkout ships and a member can never shadow a real route: one that fails
+// validation or collides is dropped, never the route it collided with.
+export const FREE_POOL_MEMBER_WARNINGS = [];
+function withFreePoolMembers(models) {
+  if (!models.some((model) => model.slug === FREE_POOL_SLUG)) return models;
+  const slugs = new Set(models.map((model) => model.slug));
+  const gatewayModels = new Set(models.map((model) => model.gatewayModel));
+  const members = [];
+  for (const candidate of freePoolMemberModels()) {
+    if (slugs.has(candidate.slug) || gatewayModels.has(candidate.gatewayModel)) continue;
+    const problem = modelProblem(candidate, runtime.providers, slugs, gatewayModels);
+    if (problem) {
+      FREE_POOL_MEMBER_WARNINGS.push(problem);
+      continue;
+    }
+    slugs.add(candidate.slug);
+    gatewayModels.add(candidate.gatewayModel);
+    members.push(Object.freeze(normalizedModel(candidate, runtime.providers.get(candidate.provider))));
+  }
+  return [...models, ...members];
+}
+export const MODELS = Object.freeze(withFreePoolMembers(merged.models).filter((model) => {
   if (COMPATIBILITY_LAYER.enabled || !requiresCompatibilityLayer(model, providerForModel)) return true;
   COMPATIBILITY_DISABLED_MODELS.set(model.slug, model);
   COMPATIBILITY_DISABLED_MODELS.set(model.gatewayModel, model);

@@ -240,9 +240,6 @@ export const MIGRATIONS_DIR = path.join(STATE_DIR, "migrations");
 export const PROVIDER_CREDENTIAL_STORE_PATH =
   process.env.MODEL_ROUTER_PROVIDER_CREDENTIAL_STORE ||
   path.join(STATE_DIR, "provider-credentials.json");
-export const PROVIDER_CREDENTIAL_MIGRATIONS_DIR =
-  process.env.MODEL_ROUTER_PROVIDER_CREDENTIAL_MIGRATIONS ||
-  path.join(MIGRATIONS_DIR, "provider-credentials");
 // Account-pool policy contains only opaque account ids and routing metadata;
 // native OAuth credentials stay owned by the Codex login implementation.
 export const CHATGPT_ACCOUNT_POOL_PATH =

@@ -83,7 +83,7 @@ node src/control.mjs tool-result-aging off
 By default, ordinary aging considers consumed textual results larger than
 32 KiB and protects the newest four results. Recognized instruction-file reads
 (such as AGENTS.md and SKILL.md) and Cua bootstrap/runtime documentation are
-protected from both ordinary aging and dense shaping. Detection is bounded,
+protected from aging. Detection is bounded,
 not a complete interpreter of arbitrary shell or JavaScript.
 
 Safe omission requires both a committed exact original and verified local
@@ -102,11 +102,7 @@ A missing, expired, or corrupt original is unavailable historical evidence.
 **Do not rerun the original command to reconstruct it.** A fresh execution could
 observe different state or repeat a mutation.
 
-The same opt-in can shape textual output when a client requests context
-compaction. The newest-four protection applies to ordinary aging; dense
-compaction can shape recent output too. Recognized instruction outputs remain
-protected. Neither path replaces the client's decision about when the whole
-conversation needs compaction.
+Context compaction uses the same aging policy and keeps recent results intact.
 
 Native GPT rewriting is separately opt-in:
 
@@ -712,8 +708,8 @@ node scripts/verify-skill-injection.mjs --latest --expect routed
 ```
 
 It accepts only a standalone app-injected developer block with a turn ID, then
-correlates a same-turn tool call referencing the skill path with its output and
-checks same-turn `create_thread` arguments. With `--expect native`, that
+correlates a same-turn tool call referencing the skill path with its output.
+Thread creation is not required. With `--expect native`, that
 completed pack-path call is an error. Because arbitrary exec code is opaque,
 the rollout proves a completed path-referencing call, not that the command read
 specific bytes. Browser and computer-use execution remains live-only.
