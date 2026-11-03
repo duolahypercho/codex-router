@@ -26,7 +26,6 @@ const {
   parseOllamaList,
   rateModelFit,
   readLocalModelSelection,
-  removeLocalModel,
   renderLocalModels,
   runningLocalModels,
   setLocalModelEnabled,
@@ -133,38 +132,6 @@ test("the snapshot joins installed, checked, loaded, and vision state", () => {
   // None of these can call tools, so none can be a Codex chat model.
   assert.equal(snapshot.usableAsChat, 0);
   assert.deepEqual(snapshot.runtime, { installed: true, running: true, version: "0.1.0" });
-});
-
-test("removing a model needs explicit consent and unchecks it", () => {
-  setLocalModelEnabled("doomed:latest", true, NO_OLLAMA);
-  assert.throws(
-    () => removeLocalModel("doomed:latest", { spawn: () => ({ status: 0 }) }),
-    /deletes it from disk/,
-  );
-  // Refused without consent, so it is still checked and still on disk.
-  assert.ok(readLocalModelSelection().enabled.includes("doomed:latest"));
-
-  let called;
-  removeLocalModel("doomed:latest", {
-    ...NO_OLLAMA,
-    confirmed: true,
-    spawn: (bin, args) => { called = { bin, args }; return { status: 0 }; },
-  });
-  assert.deepEqual(called, { bin: "ollama", args: ["rm", "doomed:latest"] });
-  // A model that is gone must not stay checked.
-  assert.ok(!readLocalModelSelection().enabled.includes("doomed:latest"));
-});
-
-test("a failed removal surfaces ollama's own message", () => {
-  assert.throws(
-    () =>
-      removeLocalModel("missing", {
-        ...NO_OLLAMA,
-        confirmed: true,
-        spawn: () => ({ status: 1, stderr: "model 'missing' not found" }),
-      }),
-    /model 'missing' not found/,
-  );
 });
 
 test("ollama's reported capabilities are parsed, not guessed from the name", async () => {

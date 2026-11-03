@@ -142,6 +142,17 @@ See [providers, authentication, and curation](docs/PROVIDERS.md),
 [Codex modes and optional features](docs/CODEX.md), and the
 [model registry](https://github.com/duolahypercho/codex-router/tree/main/config/).
 
+### Free Auto (`free/auto`)
+
+`./bin/providers enable free` adds one model, **Free Auto** (`free/auto`). It
+needs no API key. Each request goes to the anonymous Kilo and OpenCode Zen
+free models, in order. A model that is rate limited, out of quota, or
+unavailable before it answers is skipped and drained for a cooldown, until
+every model is drained. Pick it in the Codex picker, or send
+`"model": "free/auto"` to the local Responses or Chat Completions API. The
+Control Center Usage page shows which backend served each request, fallbacks,
+drains, and tokens. See [Free Auto](docs/PROVIDERS.md#free-auto-one-model-many-free-backends-freeauto).
+
 ## Common commands
 
 Run these from the installed source checkout. Commands that update, repair,

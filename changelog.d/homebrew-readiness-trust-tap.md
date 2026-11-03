@@ -1,0 +1,1 @@
+- **The Homebrew formula check trusts its temporary tap.** Homebrew now refuses to load formulae from untrusted third-party taps, which failed the `homebrew-formula` CI job for every change to the Python lock or formula. The readiness script trusts only its temporary tap when the installed Homebrew supports trust lists, and removes the entry during cleanup.

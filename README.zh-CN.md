@@ -128,6 +128,10 @@ Windows 将 `./bin/model-router codex` 替换为 `.\model-router.ps1 codex`。
 详见[供应商、认证与模型选择](docs/zh-CN/PROVIDERS.md)、
 [Codex 模式与可选功能](docs/zh-CN/CODEX.md)以及[模型注册表](https://github.com/duolahypercho/codex-router/tree/main/config/)。
 
+### Free Auto（`free/auto`）
+
+`./bin/providers enable free` 会添加一个模型 **Free Auto**（`free/auto`），无需 API key。每个请求按顺序发往 Kilo 与 OpenCode Zen 的匿名免费模型。某个模型在回答前遇到限流、额度用尽或不可用时，会被跳过并在冷却期内标记为已耗尽，直到全部耗尽。可在 Codex 模型选择器中选择它，也可以通过本地 Responses 或 Chat Completions API 使用 `"model": "free/auto"`。Control Center 的用量页面会显示每个请求由哪个后端模型处理，以及回退、耗尽和 token 情况。详见 [Free Auto](docs/PROVIDERS.md#free-auto-one-model-many-free-backends-freeauto)。
+
 ## 常用命令
 
 以下命令应在已安装的源码目录中运行。

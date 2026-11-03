@@ -31,6 +31,7 @@ import type {
   UsageMetric,
 } from "../types";
 import { useI18n } from "../i18n-react";
+import { FreePoolPanel } from "./FreePoolPanel";
 import { translatorLocale, type Translate } from "../i18n";
 import "./usage-status.css";
 
@@ -472,6 +473,7 @@ export function UsagePage({
           </div>
         </>
       )}
+      <FreePoolPanel api={api} refreshKey={refreshing} t={t} />
     </div>
   );
 }

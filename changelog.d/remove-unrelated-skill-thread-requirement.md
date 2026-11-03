@@ -1,0 +1,1 @@
+- **Keep skill-injection verification scoped to injection evidence.** A completed same-turn skill-path reference no longer requires an unrelated create_thread call; trusted developer, turn and output correlation checks remain.

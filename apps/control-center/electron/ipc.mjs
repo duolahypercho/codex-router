@@ -180,10 +180,6 @@ const CATALOG_MUTATION_TIMEOUT_MS = 1_320_000;
 // discards the already-computed ledger and makes the dashboard fall back to
 // its latest 1,000 event details.
 const PROVIDER_USAGE_TIMEOUT_MS = 120_000;
-// Five live checks, two of them a full Codex parent-and-child turn. The
-// catalog ceiling is not enough headroom for a slow provider, and a timeout
-// here reads to the operator as "your model failed" when it did not.
-const SUBAGENT_CERTIFY_TIMEOUT_MS = 600_000;
 const ROUTER_BROWSER_OAUTH_TIMEOUT_MS = 11 * 60_000;
 // The live compatibility request and the managed service readiness gate share
 // one ten-minute budget. The command runner gets one extra minute solely to
@@ -272,23 +268,6 @@ function executablePath(name) {
     } catch { /* keep looking */ }
   }
   return undefined;
-}
-
-function executableVersion(executable) {
-  if (!executable) return undefined;
-  // Modern Node deliberately refuses to execute batch shims with shell:false.
-  // Version text is optional, so do not weaken the no-shell boundary just to
-  // decorate a card on Windows.
-  if (process.platform === "win32" && /\.(?:cmd|bat)$/i.test(executable)) return undefined;
-  const result = spawnSync(executable, ["--version"], {
-    encoding: "utf8",
-    env: process.env,
-    timeout: 2_000,
-    windowsHide: true,
-    shell: false,
-  });
-  if (result.error || result.status !== 0) return undefined;
-  return cleanText(String(result.stdout || result.stderr).split("\n", 1)[0], "", 80) || undefined;
 }
 
 function codexDesktopPath() {
@@ -398,12 +377,6 @@ export function getHarnessSnapshot() {
   const claudeLauncher = executablePath("claude-router");
   const gemini = executablePath("gemini");
   const openclaw = executablePath("openclaw");
-  const codexVersion = executableVersion(codex);
-  const dshVersion = executableVersion(dsh);
-  const cursorVersion = executableVersion(cursorAgent);
-  const claudeVersion = executableVersion(claude);
-  const geminiVersion = executableVersion(gemini);
-  const openclawVersion = executableVersion(openclaw);
   const openclawApp = openclawDesktopPath();
   const stateDirectory = routerStateDirectory();
   const codexConfig = readBounded(path.join(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"), "config.toml"), 2 * 1024 * 1024);
@@ -430,7 +403,6 @@ export function getHarnessSnapshot() {
         ownership: "openclaw",
         description: "OpenClaw's current agent runtime using every model selected in this router.",
         cliInstalled: Boolean(openclaw),
-        ...(openclawVersion ? { cliVersion: openclawVersion } : {}),
         appInstalled: Boolean(openclawApp),
         configured: Boolean(openclawState?.models?.length),
         canInstall: true,
@@ -445,7 +417,6 @@ export function getHarnessSnapshot() {
         ownership: "openai",
         description: "OpenAI's desktop and terminal coding harness.",
         cliInstalled: Boolean(codex),
-        ...(codexVersion ? { cliVersion: codexVersion } : {}),
         appInstalled: Boolean(codexDesktopPath()),
         configured: /# BEGIN (?:kimi-)?codex-(?:router|proxy)-/m.test(codexConfig || ""),
         canInstall: Boolean(codex || codexDesktopPath()),
@@ -460,7 +431,6 @@ export function getHarnessSnapshot() {
         ownership: "deepseek",
         description: "DeepSeek's coding harness, sharing this router's model catalog and credentials.",
         cliInstalled: Boolean(dsh),
-        ...(dshVersion ? { cliVersion: dshVersion } : {}),
         appInstalled: Boolean(dsh),
         configured: existsSync(path.join(stateDirectory, "dsh-models.json")),
         canInstall: true,
@@ -473,7 +443,6 @@ export function getHarnessSnapshot() {
         ownership: "anthropic",
         description: "Anthropic's coding agent using every model selected in this router.",
         cliInstalled: Boolean(claude),
-        ...(claudeVersion ? { cliVersion: claudeVersion } : {}),
         appInstalled: false,
         configured: Boolean(claudeLauncher && claudeState?.models?.length),
         canInstall: Boolean(claude),
@@ -488,7 +457,6 @@ export function getHarnessSnapshot() {
         ownership: "google",
         description: "Google's terminal coding agent using the shared routed model catalog.",
         cliInstalled: Boolean(gemini),
-        ...(geminiVersion ? { cliVersion: geminiVersion } : {}),
         appInstalled: false,
         configured: Boolean(geminiState?.models?.length),
         canInstall: Boolean(gemini),
@@ -503,7 +471,6 @@ export function getHarnessSnapshot() {
         ownership: "cursor",
         description: "Cursor Agent and Cursor App using the router's separate authenticated adapters.",
         cliInstalled: Boolean(cursorAgent),
-        ...(cursorVersion ? { cliVersion: cursorVersion } : {}),
         appInstalled: Boolean(cursorApp),
         configured: Boolean(cursorLauncher && (!cursorApp || cursorState?.publicOrigin)),
         agentConfigured: Boolean(cursorLauncher),
@@ -537,14 +504,12 @@ export function getHarnessSnapshot() {
       // command, which costs a process and is asked when a row is acted on.
       ...ROUTED_HARNESS_ROWS.map((row) => {
         const binary = row.executables.map((name) => executablePath(name)).find(Boolean);
-        const version = executableVersion(binary);
         return {
           id: row.id,
           displayName: row.displayName,
           ownership: row.ownership,
           description: row.description,
           cliInstalled: Boolean(binary),
-          ...(version ? { cliVersion: version } : {}),
           appInstalled: false,
           configured: existsSync(path.join(stateDirectory, row.marker)),
           canInstall: row.installable || Boolean(binary),
@@ -1620,6 +1585,8 @@ export function registerIpcHandlers({
     ["provider-usage"],
     { timeoutMs: PROVIDER_USAGE_TIMEOUT_MS },
   ));
+  // free/auto's members, drains and local usage rows; read-only and local.
+  handle("getFreePool", async () => runJson(["free-pool", "status"], { timeoutMs: 20_000 }));
   handle("getLocalModels", async () => runJson(["local-models", "list", "--json"], { timeoutMs: 20_000 }));
   handle("getVisionBridge", async () => runJson(["vision-bridge", "status"], { timeoutMs: 20_000 }));
   handle("getToolResultAging", async () => runJson(["tool-result-aging", "status"], { timeoutMs: 20_000 }));
@@ -1983,18 +1950,6 @@ export function registerIpcHandlers({
     if (typeof enabled !== "boolean") throw new Error("enabled must be boolean.");
     return runJson(["subagents", "set", model, enabled ? "on" : "off"], { timeoutMs: CATALOG_MUTATION_TIMEOUT_MS });
   });
-  // A certification run makes live calls to the provider and to a native
-  // parent that delegates to it, so it needs its own ceiling rather than the
-  // catalog mutation one: the delegation alone can take a minute per turn.
-  handleAction("certifySubagentModels", async ({ slugs } = {}) => {
-    if (!Array.isArray(slugs) || !slugs.length) throw new Error("slugs must be a non-empty array.");
-    if (slugs.length > 24) throw new Error("Certify at most 24 routes at once.");
-    const models = [];
-    for (const slug of slugs) models.push(await validateModel(slug));
-    // One command for the whole batch: the runs fan out inside it, and the
-    // proofs write and catalog republish happen once, in that process.
-    return runJson(["subagents", "certify", ...models], { timeoutMs: SUBAGENT_CERTIFY_TIMEOUT_MS });
-  });
   handleAction("setSubagentEffort", async ({ slug, effort } = {}) => {
     const model = await validateModel(slug);
     oneOf(effort, EFFORTS, "Subagent effort");
@@ -2009,22 +1964,9 @@ export function registerIpcHandlers({
     if (typeof visible !== "boolean") throw new Error("visible must be boolean.");
     return runJson(["picker", "set", model, visible ? "show" : "hide"], { timeoutMs: CATALOG_MUTATION_TIMEOUT_MS });
   });
-  handleAction("setPickerModels", async (input = {}) => {
-    const { models, showAll } = input;
-    // The renderer's compact "show all" control uses a boolean; bulk callers
-    // may instead provide individual validated model entries.
-    if (typeof models === "undefined" && typeof showAll === "boolean") {
-      return runJson(["picker", "all", showAll ? "show" : "hide"], { timeoutMs: CATALOG_MUTATION_TIMEOUT_MS });
-    }
-    if (!Array.isArray(models) || models.length > 500) throw new Error("models must be an array.");
-    let result;
-    for (const item of models) {
-      const slug = typeof item === "string" ? item : item?.slug;
-      const visible = typeof item === "string" ? true : item?.visible;
-      if (typeof visible !== "boolean") throw new Error("Each picker model needs a boolean visible value.");
-      result = await runJson(["picker", "set", await validateModel(slug), visible ? "show" : "hide"], { timeoutMs: CATALOG_MUTATION_TIMEOUT_MS });
-    }
-    return result || (await runJson(["picker", "status"]));
+  handleAction("setPickerModels", async ({ showAll } = {}) => {
+    if (typeof showAll !== "boolean") throw new Error("showAll must be boolean.");
+    return runJson(["picker", "all", showAll ? "show" : "hide"], { timeoutMs: CATALOG_MUTATION_TIMEOUT_MS });
   });
 
   handleAction("installLocalModel", async ({ tag, yes = false, force = false } = {}) => {
@@ -2257,9 +2199,9 @@ export function registerIpcHandlers({
         pending: true,
       };
     } catch (error) {
-      if (loginFinalization) {
-        try { await loginFinalization; } catch {}
-      } else {
+      // An attached writer already owns finalization, queued after this
+      // mutation. Leave its attempt intact and release the queue so it can run.
+      if (!loginFinalization) {
         releaseSubscriptionLogin(id);
         try {
           // Synchronous validation can fail after reservation but before a
@@ -2276,8 +2218,8 @@ export function registerIpcHandlers({
             homesDir: path.dirname(profileHome),
           });
         } catch {}
+        subscriptionLoginAttempts.delete(id);
       }
-      subscriptionLoginAttempts.delete(id);
       throw error;
     }
   });

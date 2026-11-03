@@ -7,8 +7,6 @@ import {
   readMultiAgentSettings,
   subagentEffort,
 } from "./multi-agent-state.mjs";
-import { subagentProofSnapshot } from "./subagent-proofs.mjs";
-import { VERSION } from "./version.mjs";
 
 // Why a route cannot be spawned as a subagent, answered before anything is
 // spent finding out (#804).
@@ -55,8 +53,6 @@ export function explainSubagentRoute({
   reasoningLevels = [],
   agentsDir,
   settings = readMultiAgentSettings(),
-  proofs = subagentProofSnapshot(),
-  routerVersion = VERSION,
 } = {}) {
   const route = String(slug || "").trim();
   const blocks = [];
@@ -115,8 +111,6 @@ export function explainSubagentRoute({
   // this answer cannot disagree with what gets published.
   const [resolved] = applyMultiAgentCapabilities([model], settings, {
     hidden,
-    proofs,
-    routerVersion,
   });
   const eligible = resolved?.multiAgentVersion === "v2";
 
@@ -157,16 +151,10 @@ export function explainSubagentRoute({
   if (eligible) {
     // Where the v2 claim came from decides how much it is worth, and the
     // difference is the whole subject of docs/SUBAGENT-CERTIFICATION.md.
-    const proof = proofs?.[route];
     if (model.multiAgentVersion === "v2") {
       notes.push({
         code: "certified_in_registry",
         summary: `${route} ships certified: a reviewed native-collaboration proof for this exact route is checked in.`,
-      });
-    } else if (proof?.verified) {
-      notes.push({
-        code: "verified_locally",
-        summary: `${route} passed all five collaboration checks on this machine.`,
       });
     } else {
       notes.push({
@@ -175,7 +163,6 @@ export function explainSubagentRoute({
           `${route} is offered because you selected it, which is a statement of intent rather than `
           + "evidence that it can hold Codex's native child role. Streaming and tool calls do not "
           + "prove delegation works.",
-        fix: `To gather that evidence, run ./bin/control subagents certify ${route}. It spends real quota on this route's provider and on a native parent turn.`,
       });
     }
   }

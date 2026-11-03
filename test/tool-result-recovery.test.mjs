@@ -346,7 +346,7 @@ test("a real committed snapshot survives restart and reads exact Unicode/CRLF by
   assert.equal(JSON.parse(cli.stdout).text, full.slice(0, 5));
 });
 
-test("aging and dense shaping publish only durable readback receipts, never rerun instructions", async t => {
+test("aging publishes only durable readback receipts, never rerun instructions", async t => {
   const options = await fixture(t);
   const input = history();
   const retain = (text, info) => retainToolResult(text, { ...options, ...info });
@@ -367,13 +367,7 @@ test("aging and dense shaping publish only durable readback receipts, never reru
   assert.doesNotMatch(receipt, /Repeat the preceding|mutating-original-command/u);
   const [name] = readdirSync(options.directory).filter(n => n.endsWith(".result"));
   assert.equal(readRetainedToolResult(name.slice(0, -7), options).text, full.slice(0, 2000));
-  const shapeInput = history("repeated long line\n".repeat(1200));
-  shapeInput.push({type: "function_call_output", call_id: "reader", output: JSON.stringify(proof)});
-  const shaped = await ageToolResultsWithRecovery(shapeInput, {
-    tools, denseShaping: true, retain: (text, info) => retainToolResult(text, { ...options, ...info }),
-  });
-  assert.equal(shaped.stats.toolResultsShaped, 1);
-  assert.match(shaped.input[1].output, /Exact archived result/u);
+
 });
 
 test("without a local execution tool no output is rewritten or written to disk", async () => {
@@ -497,7 +491,9 @@ test("readback attestations reject forged, expired and cross-context proofs", as
   assert.equal(hasVerifiedToolResultReadback(input, options.scope, options), true);
   assert.equal(hasVerifiedToolResultReadback(input, "another thread", options), false);
   assert.equal(hasVerifiedToolResultReadback(input, options.scope, {...options, now: Date.now() + 31*60000}), false);
-  page.readbackProof = page.readbackProof.slice(0, -2) + "AA";
+  const originalProof = page.readbackProof;
+  page.readbackProof = originalProof.slice(0, -1) + (originalProof.endsWith("A") ? "B" : "A");
+  assert.notEqual(page.readbackProof, originalProof);
   assert.equal(hasVerifiedToolResultReadback([{type: "function_call_output", output: JSON.stringify(page)}], options.scope, options), false);
   const payload = {instructions: "rules", input: [{role: "developer", content: "workspace-write"}]};
   const a = toolResultRecoveryScope("thread", payload);

@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import {
-  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -22,21 +21,18 @@ const providerCredentialsModule = new URL("../src/provider-credentials.mjs", imp
 const root = mkdtempSync(path.join(os.tmpdir(), "codex-router-credential-store-"));
 process.env.CODEX_HOME = path.join(root, "codex");
 process.env.CODEX_ROUTER_STATE_DIR = path.join(root, "state");
+process.env.MODEL_ROUTER_STATE_DIR = process.env.CODEX_ROUTER_STATE_DIR;
 process.env.MODEL_ROUTER_PROVIDER_CREDENTIAL_STORE = path.join(root, "state", "provider-credentials.json");
-process.env.MODEL_ROUTER_PROVIDER_CREDENTIAL_MIGRATIONS = path.join(root, "state", "migrations", "provider-credentials");
 for (const name of ["DEEPSEEK_API_KEY", "OPENROUTER_API_KEY", "ANTHROPIC_API_KEY"]) delete process.env[name];
 
 const {
   addCredentialReference,
   createCredentialReference,
   generatedCredentialId,
-  migrateProviderCredentialStore,
-  PROVIDER_CREDENTIAL_SCHEMA_VERSION,
   readProviderCredentialStore,
   redactCredentialObject,
   redactCredentialText,
   removeCredentialReference,
-  rollbackProviderCredentialStore,
   sanitizeCredentialStatus,
   sanitizedCredentialStore,
   writeProviderCredentialStore,
@@ -169,6 +165,15 @@ test("credential metadata parsing fails closed for unknown or secret-bearing fie
     () => writeProviderCredentialStore({ credentials: [], accessToken: "TEST_STORE_SECRET" }, path.join(root, "state", "unsafe.json")),
     /secret field accessToken/,
   );
+  const unsupported = path.join(root, "state", "unsupported.json");
+  for (const schemaVersion of [1, 3]) {
+    writeFileSync(unsupported, `${JSON.stringify({ schemaVersion, credentials: [] })}\n`);
+    assert.deepEqual(readProviderCredentialStore(unsupported).credentials, []);
+    assert.throws(
+      () => writeProviderCredentialStore({ schemaVersion, credentials: [] }, unsupported),
+      /Unsupported provider credential store schema/,
+    );
+  }
 });
 
 test("redaction covers headers, URLs, errors, nested objects, and known secrets", () => {
@@ -191,77 +196,11 @@ test("redaction covers headers, URLs, errors, nested objects, and known secrets"
   assert.equal(object.nested.message, "[REDACTED]");
 });
 
-test("migration discovers configured provider files without copying secret bytes", () => {
-  const filePath = path.join(root, "state", "migrated.json");
-  const migrationDirectory = path.join(root, "state", "migration-test");
-  const providerPath = writeProviderCredential("deepseek", "TEST_MIGRATION_SECRET");
-  const first = migrateProviderCredentialStore(filePath, { migrationDirectory });
-  assert.equal(first.migrated, true);
-  assert.equal(first.store.schemaVersion, PROVIDER_CREDENTIAL_SCHEMA_VERSION);
-  assert.equal(first.store.credentials.some((entry) => entry.providerId === "deepseek"), true);
-  assert.doesNotMatch(readFileSync(filePath, "utf8"), /TEST_MIGRATION_SECRET/);
-  assert.equal(privateFileIsProtected(first.manifestPath), true);
-  const second = migrateProviderCredentialStore(filePath, { migrationDirectory });
-  assert.equal(second.migrated, false, "the second run must be idempotent");
-
-  rollbackProviderCredentialStore(first.manifestPath, { migrationDirectory, targetPath: filePath });
-  assert.equal(existsSync(filePath), false);
-  assert.equal(readFileSync(providerPath, "utf8"), "TEST_MIGRATION_SECRET\n");
-});
-
-test("legacy migration preserves exact bytes and rejects changed targets", () => {
-  const filePath = path.join(root, "state", "legacy.json");
-  const migrationDirectory = path.join(root, "state", "legacy-migration-test");
-  const legacyBytes = Buffer.from(JSON.stringify({
-    version: 1,
-    credentials: [{
-      id: "cred_legacy_reference_123456",
-      providerId: "openrouter",
-      kind: "api_key",
-      secretRef: { type: "provider-file" },
-      state: "active",
-    }],
-  }) + "\n", "utf8");
-  writeFileSync(filePath, legacyBytes, { mode: 0o600 });
-  const migration = migrateProviderCredentialStore(filePath, { migrationDirectory });
-  assert.equal(migration.legacy, true);
-  assert.equal(JSON.parse(readFileSync(filePath, "utf8")).schemaVersion, PROVIDER_CREDENTIAL_SCHEMA_VERSION);
-  const snapshotPath = path.join(path.dirname(migration.manifestPath), "provider-credentials.before-migration.json");
-  assert.deepEqual(readFileSync(snapshotPath), legacyBytes);
-  writeFileSync(filePath, Buffer.from("changed\n"));
+test("credential writes and resolution do not traverse symlinked paths", () => {
   assert.throws(
-    () => rollbackProviderCredentialStore(migration.manifestPath, { migrationDirectory, targetPath: filePath }),
-    /changed after migration/,
-  );
-  assert.equal(readFileSync(filePath, "utf8"), "changed\n");
-  writeFileSync(filePath, Buffer.from(JSON.stringify({
-    schemaVersion: PROVIDER_CREDENTIAL_SCHEMA_VERSION,
-    credentials: migration.store.credentials,
-  }, null, 2) + "\n"));
-  rollbackProviderCredentialStore(undefined, { migrationDirectory, targetPath: filePath });
-  assert.deepEqual(readFileSync(filePath), legacyBytes);
-});
-
-test("migration rejects unknown legacy fields and confined paths", () => {
-  const filePath = path.join(root, "state", "bad-legacy.json");
-  writeFileSync(filePath, `${JSON.stringify({ version: 1, credentials: [], opaque: "TEST_SECRET" })}\n`, { mode: 0o600 });
-  assert.throws(
-    () => migrateProviderCredentialStore(filePath, { migrationDirectory: path.join(root, "state", "bad-migration") }),
-    /unsupported field opaque/,
-  );
-  assert.throws(
-    () => migrateProviderCredentialStore(path.join(root, "outside", "store.json")),
+    () => writeProviderCredentialStore({ credentials: [] }, path.join(root, "outside", "store.json")),
     /inside the router state directory/,
   );
-  const link = path.join(root, "state", "linked.json");
-  symlinkSync(path.join(root, "state", "target.json"), link);
-  assert.throws(
-    () => addCredentialReference({ providerId: "deepseek", kind: "api_key", secretRef: ref() }, link),
-    /symbolic link/,
-  );
-});
-
-test("credential writes and resolution do not traverse symlinked paths", () => {
   const outside = path.join(root, "outside-credential-state");
   const linkedDirectory = path.join(root, "state", "linked-directory");
   mkdirSync(outside, { recursive: true });
@@ -280,33 +219,6 @@ test("credential writes and resolution do not traverse symlinked paths", () => {
   unlinkSync(providerPath);
   symlinkSync(external, providerPath);
   assert.equal(resolveProviderCredential("deepseek"), undefined);
-});
-
-test("failed migration restores the exact original bytes", () => {
-  const filePath = path.join(root, "state", "transactional-legacy.json");
-  const migrationDirectory = path.join(root, "state", "transactional-migration");
-  const legacyBytes = Buffer.from(JSON.stringify({
-    version: 1,
-    credentials: [{
-      id: "cred_transactional_123456",
-      providerId: "deepseek",
-      kind: "api_key",
-      secretRef: { type: "provider-file" },
-      state: "active",
-    }],
-  }) + "\n", "utf8");
-  writeFileSync(filePath, legacyBytes, { mode: 0o600 });
-  const latestPath = path.join(migrationDirectory, "latest.json");
-  mkdirSync(migrationDirectory, { recursive: true, mode: 0o700 });
-  const outside = path.join(root, "latest-target.json");
-  writeFileSync(outside, "do not touch\n", { mode: 0o600 });
-  symlinkSync(outside, latestPath);
-  assert.throws(
-    () => migrateProviderCredentialStore(filePath, { migrationDirectory }),
-    /symbolic link/,
-  );
-  assert.deepEqual(readFileSync(filePath), legacyBytes);
-  assert.equal(readFileSync(outside, "utf8"), "do not touch\n");
 });
 
 test("credential references are router-plane- and provider-bound at resolution time", () => {

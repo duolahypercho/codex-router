@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, wri
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import vm from "node:vm";
 
 // `paths.mjs` resolves every document location once, at import time, so the
 // redirection has to be in place before the first import of anything that
@@ -106,8 +107,8 @@ test("every routed harness publishes the whole routed catalog and takes it back 
     assert.equal(status.installed, true);
     assert.equal(status.providerInstalled, true);
     assert.equal(status.baseUrlManaged, true);
-    assert.equal(status.configValid, true, `${harness.id}: ${status.configError || ""}`);
-    assert.equal(status.catalogFresh, true);
+    assert.equal(status.configValid, harness.format === "yaml" ? null : true, `${harness.id}: ${status.configError || ""}`);
+    assert.equal(status.catalogFresh, harness.format === "yaml" ? null : true);
     assert.equal(status.publishedModels, MODELS.length);
     // The caller secret is a path segment of the base URL, so status output --
     // which reaches doctor and support bundles -- must never carry it.
@@ -669,3 +670,49 @@ test("the Control Center's copy of the harness table matches the router's", asyn
 });
 
 test.after(() => rmSync(root, { recursive: true, force: true }));
+
+test("YAML endpoint evidence never claims protocol or catalog validity", () => {
+  reset();
+  for (const [id, from, to] of [["omp", "openai-responses", "openai-completions"],
+    ["hermes", "anthropic_messages", "chat_completions"]]) {
+    const client = manager(id);
+    client.install();
+    const original = readFileSync(DOCUMENTS[id], "utf8");
+    assert.ok(original.includes(from));
+    writeFileSync(DOCUMENTS[id], original.replace(from, to));
+    const status = client.status();
+    assert.equal(status.callerCapabilityCurrent, true);
+    assert.equal(status.configValid, null);
+    assert.equal(status.catalogFresh, null);
+    assert.equal(readFileSync(DOCUMENTS[id], "utf8"), original.replace(from, to));
+  }
+  const client = manager("pi");
+  client.install();
+  const document = JSON.parse(readFileSync(DOCUMENTS.pi, "utf8"));
+  document.providers["codex-router"].api = "openai-completions";
+  writeFileSync(DOCUMENTS.pi, JSON.stringify(document));
+  assert.equal(client.status().configValid, false);
+});
+
+test("doctor distinguishes unverified YAML from known-invalid configuration", () => {
+  const source = readFileSync(new URL("../src/doctor.mjs", import.meta.url), "utf8").replaceAll("\r\n", "\n");
+  const start = source.indexOf('      const status = childJson("routed-harness-manager.mjs"');
+  const end = source.indexOf("    } catch (error)", start);
+  assert.ok(start >= 0 && end > start);
+  const status = { installed: true, providerInstalled: true, baseUrlManaged: true,
+    configValid: null, catalogFresh: null, documentProtected: true, cliInstalled: true };
+  function diagnose() {
+    const rows = [];
+    vm.runInNewContext(source.slice(start, end), {
+      childJson: () => status, harness: routedHarness("omp"), publishHint: "synthetic",
+      add: (...row) => rows.push(row),
+    });
+    return rows;
+  }
+  const rows = diagnose();
+  assert.equal(rows[0][0], "warn");
+  assert.match(rows[0][2], /not validated/);
+  assert.match(rows.at(-1)[2], /unknown/);
+  status.configValid = false;
+  assert.equal(diagnose()[0][0], "fail");
+});

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { Readable } from "node:stream";
+import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 
 import {
@@ -58,5 +59,60 @@ test("a canceled upstream body read releases the reader instead of waiting forev
     assert.equal(error.name, "AbortError");
     return true;
   });
+  assert.equal(canceled, true);
+});
+
+test("a bounded peek rejects without waiting for the original tee branch", async () => {
+  const original = new Response("synthetic diagnostic".repeat(64));
+  const peek = original.clone();
+  const outcome = readResponseBody(peek, { maxBytes: 16, awaitCancellation: false })
+    .then(() => undefined, (error) => error);
+  try {
+    const result = await Promise.race([outcome, delay(100).then(() => "pending")]);
+    assert.equal(result?.code, "ERR_UPSTREAM_RESPONSE_TOO_LARGE");
+    assert.equal(await original.text(), "synthetic diagnostic".repeat(64));
+  } finally {
+    await original.body?.cancel().catch(() => {});
+    await outcome;
+  }
+});
+
+test("owned upstream reads still await their cancellation cleanup", async () => {
+  let finishCancellation;
+  let cancellationStarted = false;
+  const cleanup = new Promise((resolve) => { finishCancellation = resolve; });
+  const body = new ReadableStream({
+    start(controller) { controller.enqueue(new Uint8Array(17)); },
+    cancel() { cancellationStarted = true; return cleanup; },
+  });
+  let settled = false;
+  const reading = readResponseBody(new Response(body), { maxBytes: 16 })
+    .catch((error) => { settled = true; return error; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(cancellationStarted, true);
+  assert.equal(settled, false);
+  finishCancellation();
+  assert.equal((await reading).code, "ERR_UPSTREAM_RESPONSE_TOO_LARGE");
+});
+
+test("an aborted peek also leaves completion to the original branch owner", async () => {
+  let canceled = false;
+  const original = new Response(new ReadableStream({
+    pull() {},
+    cancel() { canceled = true; },
+  }));
+  const controller = new AbortController();
+  const outcome = readResponseBody(original.clone(), {
+    signal: controller.signal, awaitCancellation: false,
+  }).then(() => undefined, (error) => error);
+  controller.abort();
+  try {
+    const result = await Promise.race([outcome, delay(100).then(() => "pending")]);
+    assert.equal(result?.name, "AbortError");
+    assert.equal(canceled, false);
+  } finally {
+    await original.body.cancel();
+    await outcome;
+  }
   assert.equal(canceled, true);
 });

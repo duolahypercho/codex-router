@@ -7,6 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import { assertCallerSecret, cursorCliBaseUrl, redactCallerUrl } from "./caller-auth.mjs";
 import { runningClientProcesses } from "./client-restart-notice.mjs";
+import { CURSOR_LAUNCHER_MARKER as LAUNCHER_MARKER } from "./client-installation-state.mjs";
 import { cursorCatalogSelections } from "./cursor-model-id.mjs";
 import {
   CALLER_SECRET_PATH,
@@ -31,7 +32,6 @@ const APPLICATION_STATE_KEY =
   "src.vs.platform.reactivestorage.browser.reactiveStorageServiceImpl.persistentStorage.applicationUser";
 const LEGACY_OPENAI_KEY = "cursorAuth/openAIKey";
 const SECURE_OPENAI_KEY = "secret://cursorAuth/openAIKey";
-const LAUNCHER_MARKER = "codex-router-cursor-launcher";
 
 function secret(target, label) {
   if (!existsSync(target)) throw new Error(`${label} is missing; run ./bin/doctor --fix.`);

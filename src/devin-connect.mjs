@@ -5,7 +5,7 @@
 // sequence of length-prefixed envelopes. That is small enough to implement
 // directly, which keeps the router's dependency list where it is.
 
-import { COMPRESSED_FLAG, END_STREAM_FLAG, connectStatusFor } from "./connect-stream-audit.mjs";
+import { COMPRESSED_FLAG, END_STREAM_FLAG, connectStatusFor, parseEndStreamPayload } from "./connect-stream-audit.mjs";
 import { decodeMessage, encodeMessage } from "./protobuf-wire.mjs";
 
 const CONNECT_VERSION = "1";
@@ -170,11 +170,11 @@ export async function* connectServerStream({
         );
       }
       if ((flags & END_STREAM_FLAG) !== 0) {
-        let terminator;
-        try {
-          terminator = JSON.parse(new TextDecoder().decode(payload) || "{}");
-        } catch {
-          terminator = {};
+        const terminator = parseEndStreamPayload(payload);
+        if (terminator.malformed) {
+          throw connectError("Devin upstream sent an unreadable Connect end-of-stream envelope.", {
+            code: "devin_malformed_end_stream",
+          });
         }
         if (terminator?.error) {
           const code = terminator.error.code;
@@ -191,4 +191,10 @@ export async function* connectServerStream({
       yield decodeMessage(responseSchema, payload);
     }
   }
+  throw connectError(
+    buffered.length
+      ? "Devin upstream ended with an incomplete Connect frame."
+      : "Devin upstream ended without a Connect end-of-stream envelope.",
+    { code: "devin_incomplete_stream" },
+  );
 }

@@ -1,0 +1,1 @@
+- Stop heartbeat observation at the same partial-event bound before and after response identity is known, while forwarding original bytes.

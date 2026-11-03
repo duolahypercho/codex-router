@@ -1,0 +1,1 @@
+- Report explicit Command Code failures, generation read failures and nonempty unreadable tool arguments without replaying a generation. Ignore SSE keepalive comments. Preserve main's clean-EOF/reason fallback and missing/empty tool-input compatibility; these conventions do not establish origin completion or full tool-schema validity.

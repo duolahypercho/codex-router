@@ -110,11 +110,16 @@ export function installedTargetsFromStatus(statuses = {}) {
     const status = statuses[harness.id] || {};
     const evidence = status.installed === true || status.providerInstalled === true;
     if (!evidence) continue;
+    // Rotation needs a current owned capability, not a claim that the whole
+    // YAML document has been semantically validated. JSON keeps its full check.
+    const configReady = harness.format === "yaml"
+      ? status.stateValid === true && status.callerCapabilityCurrent === true
+      : status.configValid === true;
     if (
       status.installed !== true ||
       status.providerInstalled !== true ||
       status.baseUrlManaged !== true ||
-      status.configValid !== true
+      !configReady
     ) {
       partialClient(harness.displayName);
     }

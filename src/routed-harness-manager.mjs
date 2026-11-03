@@ -425,12 +425,13 @@ export function createRoutedHarnessManager(id, {
       const liveBaseUrl = present ? publishedBaseUrl(harness, contents) : undefined;
       const secret = currentSecret(secretPath);
       const expectedBaseUrl = harnessBaseUrl(harness, secret, port);
-      const expectedProvider = harness.buildProvider({ models, baseUrl: expectedBaseUrl, secret });
       // JSON documents round-trip, so the published provider can be compared
       // whole. YAML ones are spliced as text and never parsed back, so the
-      // comparable evidence there is the marker plus the live base URL.
+      // comparable evidence there is the marker plus the live base URL. Those
+      // prove endpoint ownership, not the YAML protocol or complete model set.
       const providerValid = harness.format === "json"
-        ? isDeepStrictEqual(jsonDocumentValue(contents, harness.providerPath, harness.displayName), expectedProvider)
+        ? isDeepStrictEqual(jsonDocumentValue(contents, harness.providerPath, harness.displayName),
+          harness.buildProvider({ models, baseUrl: expectedBaseUrl, secret }))
         : present && liveBaseUrl === expectedBaseUrl;
       const markerFresh = Boolean(state) && state.baseUrl === expectedBaseUrl &&
         isDeepStrictEqual(state.models, models.map((model) => String(model.slug)));
@@ -444,7 +445,7 @@ export function createRoutedHarnessManager(id, {
         callerCapabilityCurrent: liveBaseUrl === expectedBaseUrl,
         baseUrl: liveBaseUrl ? redactCallerUrl(liveBaseUrl) : null,
         documentProtected: Boolean(base.documentExists && privateFileIsProtected(target)),
-        configValid: providerValid,
+        configValid: providerValid && harness.format === "yaml" ? null : providerValid,
         ...(present && !providerValid
           ? {
             configError:
@@ -453,7 +454,9 @@ export function createRoutedHarnessManager(id, {
           }
           : {}),
         publishedModels: state?.models?.length ?? 0,
-        catalogFresh: markerFresh && providerValid,
+        catalogFresh: markerFresh && providerValid
+          ? (harness.format === "yaml" ? null : true)
+          : false,
         defaultOwned: Boolean(state?.defaultOwned),
         defaultModel: harness.defaultModelPath ? (readDefaultModel(harness, contents) || null) : null,
       };

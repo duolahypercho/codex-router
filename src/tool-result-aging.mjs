@@ -4,15 +4,12 @@ import { createHash } from "node:crypto";
 // output can therefore cost its full size many times after the model has
 // already acted on it. Keep the policy deliberately narrow: only old, textual
 // results above this floor qualify, and the newest result frontier stays
-// byte-for-byte intact on ordinary turns. RTK-style shaping is reserved for an
-// actual routed compaction request, after the client has decided it needs one.
+// byte-for-byte intact, including requests to compact the conversation.
 export const TOOL_RESULT_AGING_MIN_BYTES = 32 * 1024;
 export const TOOL_RESULT_AGING_FRONTIER = 4;
-export const DENSE_SHAPING_MIN_BYTES = 8 * 1024;
 
 const PREVIEW_CODE_UNITS = 1_024;
-const DENSE_SHAPING_MIN_SAVED_BYTES = 1_024;
-const DENSE_SHAPING_RECEIPT_PREFIX =
+const SHAPED_RECEIPT_PREFIX =
   "[Tool result shaped by Codex Router RTK-style compaction:";
 const LEGACY_TOKEN_MAXXING_RECEIPT_PREFIX =
   "[Tool result shaped by Codex Router token maxxing:";
@@ -57,127 +54,6 @@ function safeTail(value) {
   let start = Math.max(0, value.length - PREVIEW_CODE_UNITS);
   if (start > 0 && /[\uDC00-\uDFFF]/u.test(value[start])) start += 1;
   return value.slice(start);
-}
-
-function leadingIndent(value) {
-  const match = /^( *)\S/u.exec(value);
-  return match ? match[1].length : 0;
-}
-
-const IMPORTANT_LINE =
-  /\b(error|failed?|failure|exception|fatal|panic|traceback|warning|denied|invalid|security)\b/iu;
-
-function collapseTerminalRewrites(value) {
-  return value
-    .replace(/\r\n/gu, "\n")
-    .split("\n")
-    .map((line) => {
-      if (!line.includes("\r")) return line;
-      const rewrites = line.split("\r");
-      const final = rewrites.findLast((entry) => entry.length > 0) ?? "";
-      const important = rewrites.filter(
-        (entry) => entry !== final && IMPORTANT_LINE.test(entry),
-      );
-      return [...important, final].join("\n");
-    })
-    .join("\n");
-}
-
-function collapseRepeatedLines(lines) {
-  const compacted = [];
-  for (let index = 0; index < lines.length; ) {
-    const line = lines[index];
-    let end = index + 1;
-    while (end < lines.length && lines[end] === line) end += 1;
-    const count = end - index;
-    if (count >= 3 && line.trim()) {
-      const marker = `[same line repeated ${count - 1} more times]`;
-      const replacement = `${line}\n${marker}`;
-      const originalLength = line.length * count + count - 1;
-      if (replacement.length < originalLength) {
-        compacted.push(line, marker);
-      } else {
-        compacted.push(...lines.slice(index, end));
-      }
-    } else if (!line.trim() && count > 1) {
-      compacted.push(line);
-    } else {
-      compacted.push(...lines.slice(index, end));
-    }
-    index = end;
-  }
-  return compacted;
-}
-
-function collapseDeeplyIndentedBlocks(lines) {
-  const compacted = [];
-  for (let index = 0; index < lines.length; ) {
-    if (leadingIndent(lines[index]) < 8 || IMPORTANT_LINE.test(lines[index])) {
-      compacted.push(lines[index]);
-      index += 1;
-      continue;
-    }
-    let end = index + 1;
-    while (
-      end < lines.length &&
-      leadingIndent(lines[end]) >= 8 &&
-      !IMPORTANT_LINE.test(lines[end])
-    ) {
-      end += 1;
-    }
-    const count = end - index;
-    if (count >= 8) {
-      const marker = `[${count - 2} deeply indented lines omitted]`;
-      const replacement = `${lines[index]}\n${marker}\n${lines[end - 1]}`;
-      let originalLength = count - 1;
-      for (let cursor = index; cursor < end; cursor += 1) {
-        originalLength += lines[cursor].length;
-      }
-      if (replacement.length < originalLength) {
-        compacted.push(lines[index], marker, lines[end - 1]);
-      } else {
-        compacted.push(...lines.slice(index, end));
-      }
-    } else {
-      compacted.push(...lines.slice(index, end));
-    }
-    index = end;
-  }
-  return compacted;
-}
-
-// A deliberately small, deterministic RTK-style shaper. It removes terminal
-// progress rewrites, exact repetition, blank-line runs, and deep boilerplate,
-// while preserving error-bearing lines. The caller keeps a digest and readback
-// instruction because this is a lossy compaction optimization.
-export function shapeToolResult(value) {
-  if (typeof value !== "string" || !value) return value;
-  const normalized = collapseTerminalRewrites(value);
-  const repeated = collapseRepeatedLines(normalized.split("\n"));
-  const shaped = collapseDeeplyIndentedBlocks(repeated).join("\n");
-  return shaped.length < value.length ? shaped : value;
-}
-
-function shapedResult(value, recovery) {
-  if (
-    value.startsWith(DENSE_SHAPING_RECEIPT_PREFIX) ||
-    value.startsWith(LEGACY_TOKEN_MAXXING_RECEIPT_PREFIX)
-  ) {
-    return undefined;
-  }
-  const shaped = shapeToolResult(value);
-  if (shaped === value) return undefined;
-  const before = Buffer.byteLength(value, "utf8");
-  const shapedBytes = Buffer.byteLength(shaped, "utf8");
-  const digest = createHash("sha256").update(value, "utf8").digest("hex");
-  const receipt = [
-    `${DENSE_SHAPING_RECEIPT_PREFIX} ${before} -> ${shapedBytes} bytes, sha256:${digest}.`,
-    `${recovery} Only this routed copy was shaped.]`,
-    "",
-    shaped,
-  ].join("\n");
-  const after = Buffer.byteLength(receipt, "utf8");
-  return before - after >= DENSE_SHAPING_MIN_SAVED_BYTES ? receipt : undefined;
 }
 
 function resultReceipt(value, recovery) {
@@ -370,7 +246,6 @@ export function ageToolResults(
     enabled = true,
     minBytes = TOOL_RESULT_AGING_MIN_BYTES,
     frontier = TOOL_RESULT_AGING_FRONTIER,
-    denseShaping = false,
     retain,
   } = {},
 ) {
@@ -401,10 +276,8 @@ export function ageToolResults(
   const instructionReads = instructionReadCalls(input);
   let changed = false;
   let toolResultsAged = 0;
-  let toolResultsShaped = 0;
   let toolResultBytesBefore = 0;
   let toolResultBytesAfter = 0;
-  let toolResultShapeBytesSaved = 0;
   // What the pass looked at, recorded whether or not anything qualified. A
   // session can spend its whole context on results that each sit under the
   // floor, and without these the outcome is indistinguishable from the pass
@@ -415,30 +288,19 @@ export function ageToolResults(
   const replacements = new Map();
   for (let index = 0; index < input.length; index += 1) {
     const item = input[index];
-    const protectedResult = protectedIndexes.has(index);
-    if (protectedResult && !denseShaping) continue;
+    if (protectedIndexes.has(index)) continue;
     const value = textualOutput(item);
     if (value === undefined) continue;
-    // Preserve the original item, including structured parts, for both ordinary
-    // aging and dense compaction. Do not archive or rewrite runtime instructions.
+    // Runtime instructions remain available even after the model used them.
     if (instructionReads.has(item.call_id) ||
         (cuaCalls.has(item.call_id) && isCuaDocumentation(value))) continue;
     if (value.startsWith("[Older tool result compacted by Codex Router") ||
-        value.startsWith(DENSE_SHAPING_RECEIPT_PREFIX) ||
+        value.startsWith(SHAPED_RECEIPT_PREFIX) ||
         value.startsWith(LEGACY_TOKEN_MAXXING_RECEIPT_PREFIX)) continue;
     const size = Buffer.byteLength(value, "utf8");
-    if (!protectedResult) {
-      toolResultsEvaluated += 1;
-      if (size > toolResultBytesLargest) toolResultBytesLargest = size;
-    }
-    const canAge = !protectedResult && size > minBytes && actedAfter[index];
-    // A digest and a rerun suggestion are not recovery. Without an actually
-    // committed snapshot and a usable readback path, leave the result intact.
-    const eligibleShape = denseShaping && size > DENSE_SHAPING_MIN_BYTES &&
-      !value.startsWith(DENSE_SHAPING_RECEIPT_PREFIX) &&
-      !value.startsWith(LEGACY_TOKEN_MAXXING_RECEIPT_PREFIX) &&
-      shapeToolResult(value) !== value;
-    if ((!canAge && !eligibleShape) || typeof retain !== "function") continue;
+    toolResultsEvaluated += 1;
+    if (size > toolResultBytesLargest) toolResultBytesLargest = size;
+    if (size <= minBytes || !actedAfter[index] || typeof retain !== "function") continue;
     let recovery;
     try {
       recovery = retain(value, { callId: item.call_id, tool: names.get(item.call_id), index });
@@ -446,15 +308,7 @@ export function ageToolResults(
       continue;
     }
     if (typeof recovery !== "string" || !recovery) continue;
-    let receipt;
-    let shaped = false;
-    if (canAge) {
-      receipt = resultReceipt(value, recovery);
-    } else if (denseShaping && size > DENSE_SHAPING_MIN_BYTES) {
-      receipt = shapedResult(value, recovery);
-      shaped = receipt !== undefined;
-    }
-    if (!receipt) continue;
+    const receipt = resultReceipt(value, recovery);
     const rewritten = { ...item, output: receipt };
     // Count model-visible text rather than serializing the whole item again.
     // The request path will serialize once later; avoiding a second copy here
@@ -463,12 +317,7 @@ export function ageToolResults(
     const after = Buffer.byteLength(receipt, "utf8");
     if (after >= before) continue;
     changed = true;
-    if (shaped) {
-      toolResultsShaped += 1;
-      toolResultShapeBytesSaved += before - after;
-    } else {
-      toolResultsAged += 1;
-    }
+    toolResultsAged += 1;
     toolResultBytesBefore += before;
     toolResultBytesAfter += after;
     replacements.set(index, rewritten);
@@ -481,11 +330,9 @@ export function ageToolResults(
     input: next,
     stats: {
       toolResultsAged,
-      toolResultsShaped,
       toolResultBytesBefore,
       toolResultBytesAfter,
       toolResultBytesSaved,
-      toolResultShapeBytesSaved,
       toolResultsEvaluated,
       toolResultBytesLargest,
     },

@@ -77,18 +77,6 @@ function isTerminalEvent(eventType, dataText) {
 
 const FAILURE_TERMINAL_EVENT_TYPES = new Set(["error", "response.failed", "response.incomplete"]);
 
-// An upstream that states the turn failed: a typed failure event, or an
-// untyped `data:` payload whose JSON names one.
-function isFailureTerminalEvent(eventType, dataText) {
-  if (FAILURE_TERMINAL_EVENT_TYPES.has(eventType)) return true;
-  if (eventType !== undefined || !dataText || dataText === "[DONE]") return false;
-  try {
-    return FAILURE_TERMINAL_EVENT_TYPES.has(JSON.parse(dataText)?.type);
-  } catch {
-    return false;
-  }
-}
-
 function sseFields(block) {
   let eventType = undefined;
   const dataLines = [];
@@ -99,12 +87,19 @@ function sseFields(block) {
       dataLines.push(value.startsWith(" ") ? value.slice(1) : value);
     }
   }
-  return {
-    eventType,
-    // The SSE algorithm joins repeated data fields with a line feed before
-    // dispatch. Overwriting them truncates valid multiline JSON.
-    dataText: dataLines.length ? dataLines.join("\n") : undefined,
-  };
+  // Resolve the event name once for both guards. Responses gateways may use
+  // data-only frames or the generic SSE message name; their JSON type has the
+  // same meaning for content, liveness, failure and terminal suppression.
+  const dataText = dataLines.length ? dataLines.join("\n") : undefined;
+  if ((!eventType || eventType === "message") && dataText && dataText !== "[DONE]") {
+    try {
+      const type = JSON.parse(dataText)?.type;
+      if (typeof type === "string") eventType = type;
+    } catch {
+      // Malformed data remains indeterminate; never infer an empty turn.
+    }
+  }
+  return { eventType, dataText };
 }
 
 function nextSseBlock(buffer) {
@@ -692,7 +687,7 @@ export class EmptyCompletionGuard extends Transform {
     // completion. Holding it would only delay the error the client needs
     // (until the prelude or stall timer, which then reports a second failure),
     // and retrying it would replay a request the provider already refused.
-    if (isFailureTerminalEvent(eventType, dataText)) {
+    if (FAILURE_TERMINAL_EVENT_TYPES.has(eventType)) {
       this.#clearTimer();
       this.#release();
       // A stream already released for liveness or a time limit stops parsing
@@ -795,7 +790,7 @@ export class EmptyCompletionGuard extends Transform {
     if (!dataText || dataText === "[DONE]") return false;
     try {
       const data = JSON.parse(dataText);
-      return isLivenessEvent(eventType ?? data?.type, data);
+      return isLivenessEvent(eventType, data);
     } catch {
       return false;
     }
@@ -805,7 +800,7 @@ export class EmptyCompletionGuard extends Transform {
     if (!dataText || dataText === "[DONE]") return false;
     try {
       const data = JSON.parse(dataText);
-      return isContentEvent(eventType ?? data?.type, data);
+      return isContentEvent(eventType, data);
     } catch {
       // Indeterminate, not "no content": the payload could not be parsed, so
       // the absence of recognized content says nothing about whether the turn
