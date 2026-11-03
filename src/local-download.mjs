@@ -1,19 +1,15 @@
 import {
-  chmodSync,
-  closeSync,
   existsSync,
   mkdirSync,
-  openSync,
   readFileSync,
-  statSync,
-  unlinkSync,
-  writeFileSync,
+  realpathSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { protectPrivateFile, writePrivateJson } from "./file-security.mjs";
+import { ownerLeaseEndpoint, startOwnerServer, closeOwnerServer } from "./kernel-owner-lease.mjs";
+import { writePrivateJson } from "./file-security.mjs";
 import {
   applyModelOverlayPublication,
   transactModelOverlayMutation,
@@ -32,8 +28,6 @@ export const LOCAL_DOWNLOAD_STATE_PATH =
 export const LOCAL_DOWNLOAD_CLAIM_PATH =
   process.env.MODEL_ROUTER_LOCAL_DOWNLOAD_CLAIM || `${LOCAL_DOWNLOAD_STATE_PATH}.claim`;
 
-export const LOCAL_DOWNLOAD_CLAIM_STALE_MS = 30 * 1_000;
-
 export const LOCAL_DOWNLOAD_HEARTBEAT_TIMEOUT_MS = 5 * 60 * 1_000;
 
 export const LOCAL_DOWNLOAD_ACTIVE_STATUSES = Object.freeze(["downloading", "uninstalling"]);
@@ -42,88 +36,21 @@ export function isLocalOperationActive(state) {
   return LOCAL_DOWNLOAD_ACTIVE_STATUSES.includes(state?.status);
 }
 
-/**
- * Claim the short controller section that checks the state and seeds a new
- * operation. The state file itself is atomically replaced, so two controllers
- * could otherwise both read "idle" before either one writes "downloading".
- * This tiny exclusive claim closes that window without holding a lock for the
- * multi-minute Ollama worker. A dead controller's claim is recoverable.
- */
-export function claimLocalOperation(
-  tag,
-  kind,
-  {
-    now = Date.now,
-    kill = process.kill,
-    claimPath = LOCAL_DOWNLOAD_CLAIM_PATH,
-  } = {},
-) {
-  const currentNow = typeof now === "function" ? now() : now;
-  const normalizedTag = normalizeLocalModelTag(tag);
-  const directory = path.dirname(claimPath);
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
-  chmodSync(directory, 0o700);
-
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    let descriptor;
-    const token = `${process.pid}:${currentNow}:${Math.random().toString(36).slice(2)}`;
-    try {
-      descriptor = openSync(claimPath, "wx", 0o600);
-      writeFileSync(
-        descriptor,
-        `${JSON.stringify({ version: 1, pid: process.pid, kind, tag: normalizedTag, createdAt: currentNow, token })}\n`,
-        "utf8",
-      );
-      closeSync(descriptor);
-      descriptor = undefined;
-      protectPrivateFile(claimPath);
-      let released = false;
-      return {
-        acquired: true,
-        release() {
-          if (released) return;
-          released = true;
-          try {
-            const owner = JSON.parse(readFileSync(claimPath, "utf8"));
-            if (owner?.token === token) unlinkSync(claimPath);
-          } catch {
-            // A concurrent controller either owns a replacement claim or the
-            // file has already gone away. Never remove that controller's lock.
-          }
-        },
-      };
-    } catch (error) {
-      if (descriptor !== undefined) {
-        try { closeSync(descriptor); } catch {}
-      }
-      if (error?.code !== "EEXIST") throw error;
-
-      let owner;
-      try {
-        owner = JSON.parse(readFileSync(claimPath, "utf8"));
-      } catch {
-        owner = null;
-      }
-      const ownerAlive = processIsAlive(Number(owner?.pid), kill);
-      const createdAt = Number(owner?.createdAt);
-      let mtimeFresh = false;
-      try {
-        const modifiedAt = statSync(claimPath).mtimeMs;
-        mtimeFresh = Number.isFinite(modifiedAt) && currentNow - modifiedAt <= LOCAL_DOWNLOAD_CLAIM_STALE_MS;
-      } catch {}
-      const claimFresh = Number.isFinite(createdAt) && currentNow - createdAt <= LOCAL_DOWNLOAD_CLAIM_STALE_MS;
-      // An empty/partially written claim is still a live claim. Do not unlink
-      // it while its owner is between open() and write(); only a sufficiently
-      // old unreadable file is recoverable.
-      if (ownerAlive || claimFresh || (!owner && mtimeFresh)) return { acquired: false, owner };
-      try {
-        unlinkSync(claimPath);
-      } catch (unlinkError) {
-        if (unlinkError?.code !== "ENOENT") return { acquired: false, owner };
-      }
-    }
+// The OS owns this short controller gate until release or process death.
+// A busy/colliding endpoint grants no permission to seed another operation.
+export async function claimLocalOperation(tag, kind, { claimPath = LOCAL_DOWNLOAD_CLAIM_PATH } = {}) {
+  normalizeLocalModelTag(tag);
+  mkdirSync(path.dirname(claimPath), { recursive: true, mode: 0o700 });
+  let identity = path.join(realpathSync.native(path.dirname(claimPath)), path.basename(claimPath));
+  if (process.platform === "win32") identity = identity.toLowerCase();
+  const endpoint = ownerLeaseEndpoint("controller", identity, 30_000, { family: "local-operation" });
+  try {
+    const server = await startOwnerServer(endpoint);
+    return { acquired: true, release: () => closeOwnerServer({ server }) };
+  } catch (error) {
+    if (["EADDRINUSE", "EACCES"].includes(error?.code)) return { acquired: false };
+    throw error;
   }
-  return { acquired: false };
 }
 
 function processIsAlive(pid, kill = process.kill) {
