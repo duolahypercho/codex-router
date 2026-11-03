@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -934,5 +934,69 @@ test("a native client close before a terminal response still meters zero", async
     await stopChild(router);
     await closeServer(native.server);
     rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+
+test("a routed terminal stays successful when the WebSocket edge closes its completed HTTP turn", async (t) => {
+  for (const repair of [false, true]) {
+    await t.test(repair ? "after one empty repair" : "first attempt", async () => {
+      let attempts = 0;
+      const text = { id: "msg-routed-terminal", type: "message", role: "assistant", content: [{ type: "output_text", text: "completed result" }] };
+      const gateway = await mockServer(async (request, response) => {
+        if (request.method === "GET") return response.writeHead(200, { "Content-Type": "application/json" }).end('{"ok":true}');
+        await readBody(request);
+        attempts += 1;
+        response.writeHead(200, { "Content-Type": "text/event-stream" });
+        if (repair && attempts === 1) {
+          response.end(`event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: {
+            id: "resp-empty-before-terminal", status: "completed", output: [], usage: { input_tokens: 17, output_tokens: 2 },
+          } })}\n\n`);
+          return;
+        }
+        for (const event of [
+          { type: "response.created", response: { id: "resp-routed-terminal" } },
+          { type: "response.output_item.added", output_index: 0, item: { ...text, content: [] } },
+          { type: "response.content_part.added", output_index: 0, item_id: text.id, content_index: 0, part: { type: "output_text", text: "" } },
+          { type: "response.output_text.delta", output_index: 0, item_id: text.id, content_index: 0, delta: "completed result" },
+          { type: "response.output_text.done", output_index: 0, item_id: text.id, content_index: 0, text: "completed result" },
+          { type: "response.content_part.done", output_index: 0, item_id: text.id, content_index: 0, part: text.content[0] },
+          { type: "response.output_item.done", output_index: 0, item: text },
+          { type: "response.completed", response: { id: "resp-routed-terminal", status: "completed", output: [text], usage: { input_tokens: 40, output_tokens: 4 } } },
+        ]) response.write(`data: ${JSON.stringify(event)}\n\n`);
+      });
+      const stateDir = stateDirectory();
+      writeFileSync(path.join(stateDir, "zai-api-key.secret"), "synthetic-zai-key\n", { mode: 0o600 });
+      const port = await openPort();
+      const base = `http://127.0.0.1:${gateway.port}`;
+      const router = run({
+        CODEX_ROUTER_PORT: String(port), MODEL_ROUTER_STATE_DIR: stateDir, CODEX_ROUTER_STATE_DIR: stateDir,
+        CODEX_HOME: path.join(stateDir, "codex"), CODEX_ROUTER_NO_DISCOVERY: "0",
+        CODEX_ROUTER_GATEWAY_BASE_URL: `${base}/v1`, CODEX_ROUTER_API_BASE_URL: `${base}/v1`,
+        CODEX_ROUTER_OAUTH_HEALTH_URL: `${base}/health`, CODEX_ROUTER_API_HEALTH_URL: `${base}/health`,
+        CODEX_ROUTER_GATEWAY_HEALTH_URL: `${base}/health`, CODEX_ROUTER_GROK_OAUTH_HEALTH_URL: `${base}/health`,
+      });
+      try {
+        await waitFor(`${routerBase(port)}/models`, router);
+        const received = await cancelNativeTurnAfterMarker(port,
+          { model: "zai-api/glm-5.3", input: "synthetic task", stream: true }, '"type":"response.completed"');
+        assert.match(received, /completed result/);
+        await waitUntil(() => usageEvents(stateDir).length > 0, "no routed usage row");
+        const event = usageEvents(stateDir).at(-1);
+        assert.equal(event.status, 200);
+        assert.equal(event.generationOutcome, "completed");
+        assert.equal(event.provider, "zai-api");
+        assert.equal(event.model, "zai-api/glm-5.3");
+        assert.equal(event.inputTokens, repair ? 57 : 40);
+        assert.equal(event.outputTokens, repair ? 6 : 4);
+        assert.equal(attempts, repair ? 2 : 1);
+        assert.equal(usageEvents(stateDir).length, 1, "the completed turn is recorded only once");
+        assert.equal(event.emptyCompletionRetried, repair ? true : undefined);
+      } finally {
+        await stopChild(router);
+        await closeServer(gateway.server);
+        rmSync(stateDir, { recursive: true, force: true });
+      }
+    });
   }
 });

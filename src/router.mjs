@@ -5798,11 +5798,11 @@ async function handleResponses(request, response, requestUrl) {
     // goes away, but `pipeResponse` can resolve before that event fires: the
     // response socket is already destroyed at that point. Read the state
     // directly as well so a cancel that races the close event still meters 0.
-    const nativeCompletedBeforeClose =
-      !route && usageTransform?.completedResponseObserved() === true;
+    const completedBeforeClose =
+      usageTransform?.completedResponseObserved() === true;
     const clientWalkedAway =
       (clientGone || (response.destroyed && !response.writableFinished)) &&
-      !nativeCompletedBeforeClose;
+      !completedBeforeClose;
     finalStatus = clientWalkedAway ? 0 : upstream.status;
     if (
       route?.provider === "grok-oauth" &&
@@ -5989,7 +5989,8 @@ async function handleResponses(request, response, requestUrl) {
             }
           }
           const retryClientWalkedAway =
-            clientGone || (response.destroyed && !response.writableFinished);
+            (clientGone || (response.destroyed && !response.writableFinished)) &&
+            retryUsageTransform?.completedResponseObserved() !== true;
           emptyCompletionPreludeLimit ||=
             retryEmptyCompletionGuard?.preludeLimitKind?.();
           if (retryClientWalkedAway) {
@@ -6308,16 +6309,16 @@ async function handleResponses(request, response, requestUrl) {
       usageRecorded = true;
       return;
     }
-    // Codex may close a native stream immediately after response.completed.
+    // The WebSocket edge or Codex may close HTTP after a successful terminal.
     // That is a successful terminal turn, not a canceled generation.
-    if (!route && clientGone && usageTransform?.completedResponseObserved() === true) {
+    if (clientGone && (emptyCompletionRetried ? retryUsageTransform : usageTransform)?.completedResponseObserved() === true) {
       finalStatus = upstreamStatus ?? response.statusCode;
       activityStatus = finalStatus;
       if (!usageRecorded) {
         recordTurnUsage({
           ...(!route && upstreamAttempts.length ? { upstreamAttempts, deliveryPolicy: NATIVE_RETRY_POLICY } : {}),
-          model: requestedModel,
-          provider: "openai",
+          model: route?.slug || requestedModel,
+          provider: route ? canonicalProviderId(route.provider) : "openai",
           status: finalStatus,
           durationMs: Date.now() - startedAt,
           responseStartMs: upstreamLatencyMs,
@@ -6328,12 +6329,14 @@ async function handleResponses(request, response, requestUrl) {
           ...toolResultAging,
           ...imageBudget,
           retries: (upstreamRetries || 0) + (usage?.retries || 0) || undefined,
+          ...(emptyCompletionRetried ? { emptyCompletionRetried: true } : {}),
+          ...(failoverFrom ? { failoverFrom } : {}),
         }, diagnostics);
         usageRecorded = true;
       }
       if (!QUIET) {
         console.error(
-          `[codex-router] model=${requestedModel || "unknown"} provider=openai status=${finalStatus}${
+          `[codex-router] model=${route?.slug || requestedModel || "unknown"} provider=${route ? canonicalProviderId(route.provider) : "openai"} status=${finalStatus}${
             upstreamRetries ? ` retries=${upstreamRetries}` : ""
           }`,
         );

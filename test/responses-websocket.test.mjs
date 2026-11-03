@@ -1848,3 +1848,94 @@ test("a transport end releases a backpressured socket after its close frame", as
   client.peer.close();
   await waitFor(() => accepted.destroyed, 5_000);
 });
+
+
+test("a completed SSE turn releases its WebSocket queue before HTTP EOF", async (t) => {
+  const bodies = [];
+  let firstCanceled = false;
+  const kept = { id: "msg-owned", type: "message", role: "assistant", content: [{ type: "output_text", text: "completed answer" }] };
+  const usage = { input_tokens: 11, output_tokens: 7 };
+  const { server, port } = await startServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    bodies.push(JSON.parse(Buffer.concat(chunks)));
+    if (bodies.length > 1) {
+      sse(response, [
+        { type: "response.created", response: { id: "resp-next" } },
+        { type: "response.completed", response: { id: "resp-next", status: "completed", output: [] } },
+      ]);
+      return;
+    }
+    response.on("close", () => { firstCanceled = true; });
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    for (const event of [
+      { type: "response.created", response: { id: "resp-owned" } },
+      { type: "response.output_item.done", output_index: 0, item: kept },
+      { type: "response.completed", response: { id: "resp-owned", status: "completed", output: [kept], usage } },
+    ]) response.write(`data: ${JSON.stringify(event)}\n\n`);
+    // Deliberately retain the HTTP body after the logical terminal.
+  });
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const { peer, socket } = await connect(port);
+  t.after(() => socket.destroy());
+  peer.sendJson(createRequest());
+  assert.equal((await peer.nextJson()).type, "response.created");
+  assert.deepEqual((await peer.nextJson()).item, kept);
+  const completed = await peer.nextJson();
+  assert.deepEqual(completed.response.usage, usage);
+  const nextInput = { type: "message", role: "user", content: "next request" };
+  peer.sendJson(createRequest({ previous_response_id: "resp-owned", input: [nextInput] }));
+  assert.equal((await peer.nextJson()).response.id, "resp-next");
+  assert.equal((await peer.nextJson()).type, "response.completed");
+  assert.equal(bodies.length, 2, "the second request must not wait for the old body to close itself");
+  assert.deepEqual(bodies[1].input.slice(-2), [kept, nextInput]);
+  await waitFor(() => firstCanceled);
+  peer.close();
+});
+
+
+test("post-terminal cleanup cannot own the queue or certify an unsuccessful continuation", async (t) => {
+  for (const terminal of [
+    { type: "response.completed", status: "completed", succeeds: true },
+    { type: "response.completed", status: "incomplete", succeeds: false },
+    { type: "response.done", status: "completed", succeeds: true },
+    { type: "response.cancelled", status: "cancelled", succeeds: false },
+    { type: "response.canceled", status: "canceled", succeeds: false },
+    { type: "response.error", status: "failed", succeeds: false },
+  ]) {
+    await t.test(`${terminal.type}/${terminal.status}`, async (subtest) => {
+      let calls = 0;
+      let cancellations = 0;
+      const { server, port } = await startServer(() => assert.fail("the synthetic fetch owns this response"), {
+        fetchImpl: async () => {
+          calls += 1;
+          const id = calls === 1 ? "resp-held-cleanup" : "resp-after-cleanup";
+          const frame = Buffer.from([
+            { type: "response.created", response: { id } },
+            { type: calls === 1 ? terminal.type : "response.completed", response: { id, status: calls === 1 ? terminal.status : "completed", output: [] } },
+          ].map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""));
+          return new Response(new ReadableStream({
+            start(controller) { controller.enqueue(frame); if (calls > 1) controller.close(); },
+            cancel() { cancellations += 1; return new Promise(() => {}); },
+          }), { headers: { "Content-Type": "text/event-stream" } });
+        },
+      });
+      const { peer, socket } = await connect(port);
+      subtest.after(() => { socket.destroy(); server.close(); });
+      peer.sendJson(createRequest());
+      assert.equal((await peer.nextJson()).type, "response.created");
+      assert.equal((await peer.nextJson()).response.status, terminal.status);
+      peer.sendJson(createRequest({ previous_response_id: "resp-held-cleanup", input: [] }));
+      if (!terminal.succeeds) {
+        assert.equal((await peer.nextJson()).error.code, "previous_response_not_found");
+        assert.equal(calls, 1);
+        peer.sendJson(createRequest());
+      }
+      assert.equal((await peer.nextJson()).response.id, "resp-after-cleanup");
+      assert.equal((await peer.nextJson()).type, "response.completed");
+      assert.equal(calls, 2);
+      assert.equal(cancellations, 1);
+      peer.close();
+    });
+  }
+});
