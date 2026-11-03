@@ -1,0 +1,1 @@
+- **Data-only Responses completions use the same empty-output verdict.** Resolve generic SSE event types once for content and both terminal guards, preserving malformed uncertainty, original bytes, and the boundary against retrying relayed output.
