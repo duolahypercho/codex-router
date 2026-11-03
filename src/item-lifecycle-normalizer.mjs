@@ -1,4 +1,5 @@
 import { Transform } from "node:stream";
+import { MAX_BUFFERED_RESPONSE_BYTES } from "./http-utils.mjs";
 
 // LiteLLM's chat-completions -> Responses bridge (use_chat_completions_api) can
 // emit output items with overlapping lifecycles when one Qwen turn carries both
@@ -69,10 +70,24 @@ export class ItemLifecycleNormalizer extends Transform {
   // FIFO groups of blocks held for indices that opened while a different item was
   // still open. Each group collects the blocks for one output index.
   #queue = [];
+  #heldBytes = 0;
+  #maxBufferedBytes;
+
+  constructor({ maxBufferedBytes = MAX_BUFFERED_RESPONSE_BYTES } = {}) {
+    super();
+    this.#maxBufferedBytes = Number.isSafeInteger(maxBufferedBytes) && maxBufferedBytes > 0
+      ? maxBufferedBytes : 8 * 1024 * 1024;
+  }
 
   _transform(chunk, encoding, callback) {
     const piece = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding);
     if (this.#passthrough) {
+      this.push(piece);
+      callback();
+      return;
+    }
+    if (this.#heldBytes + this.#buffer.length + piece.length > this.#maxBufferedBytes) {
+      this.#disable();
       this.push(piece);
       callback();
       return;
@@ -122,6 +137,7 @@ export class ItemLifecycleNormalizer extends Transform {
       this.#buffer = this.#buffer.subarray(found.index + separator.length);
       this.#handleFrame(original, separator, block);
     }
+    if (!this.#buffer.length) this.#buffer = Buffer.alloc(0);
   }
 
   #handleFrame(original, separator, block = original) {
@@ -189,6 +205,9 @@ export class ItemLifecycleNormalizer extends Transform {
       group = { index: idx, blocks: [] };
       this.#queue.push(group);
     }
+    // A short subarray must not pin the whole incoming HTTP chunk in memory.
+    block.original = Buffer.from(block.original);
+    this.#heldBytes += block.original.length;
     group.blocks.push(block);
   }
 
@@ -200,6 +219,7 @@ export class ItemLifecycleNormalizer extends Transform {
     while (this.#openIndex === undefined && this.#queue.length) {
       const group = this.#queue.shift();
       for (const block of group.blocks) {
+        this.#heldBytes -= block.original.length;
         this.#emitOriginal(block.original);
         if (block.type === "response.output_item.added") this.#openIndex = block.index;
         else if (block.type === "response.output_item.done") this.#openIndex = undefined;
@@ -215,6 +235,7 @@ export class ItemLifecycleNormalizer extends Transform {
       for (const block of group.blocks) this.#emitOriginal(block.original);
     }
     this.#queue = [];
+    this.#heldBytes = 0;
     this.#openIndex = undefined;
   }
 }
