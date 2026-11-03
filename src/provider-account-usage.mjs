@@ -663,7 +663,14 @@ async function minimaxTokenPlanAccount(fetchImpl) {
   if (!MINIMAX_ACCOUNT_HOSTS.has(new URL(baseURL).hostname)) {
     return localOnly("Plan usage is unavailable for a custom MiniMax endpoint");
   }
-  const payload = await requestJson(`${baseURL}/coding_plan/remains`, credential.value, {}, fetchImpl);
+  let payload;
+  try {
+    payload = await requestJson(`${baseURL}/coding_plan/remains`, credential.value, {}, fetchImpl);
+  } catch (error) {
+    // JSON parser errors can quote the upstream body, including an echoed key.
+    if (error instanceof SyntaxError) throw new Error("MiniMax coding plan response was not valid JSON");
+    throw error;
+  }
   const status = payload?.base_resp?.status_code;
   if (status !== undefined && status !== 0) {
     throw new Error(`MiniMax coding plan API returned status ${Number.isInteger(status) ? status : "unknown"}`);

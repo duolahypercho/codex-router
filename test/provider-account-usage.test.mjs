@@ -1259,6 +1259,26 @@ test("Vertex usage does not probe Google Cloud and reports router traffic only",
   assert.match(snapshot.vertex.message, /Google Cloud Console/);
 });
 
+test("MiniMax malformed quota JSON does not expose its response text", async () => {
+  const saved = process.env.MINIMAX_API_KEY;
+  process.env.MINIMAX_API_KEY = "BADKEY_74";
+  try {
+    const snapshot = await providerAccountUsageSnapshot({
+      providerIds: ["minimax-token-plan"],
+      fetchImpl: async (_url, options) => {
+        assert.equal(options.headers.Authorization, "Bearer BADKEY_74");
+        return new Response("BADKEY_74 <invalid-json>");
+      },
+    });
+    assert.equal(snapshot["minimax-token-plan"].status, "unavailable");
+    assert.equal(snapshot["minimax-token-plan"].message, "MiniMax coding plan response was not valid JSON");
+    assert.doesNotMatch(JSON.stringify(snapshot), /BADKEY_74|invalid-json/);
+  } finally {
+    if (saved === undefined) delete process.env.MINIMAX_API_KEY;
+    else process.env.MINIMAX_API_KEY = saved;
+  }
+});
+
 test("Z.ai quota errors omit upstream text that echoes the credential", async () => {
   const saved = process.env.ZAI_API_KEY;
   process.env.ZAI_API_KEY = "TEST_ZAI_ERROR_KEY";
