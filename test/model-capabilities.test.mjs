@@ -114,3 +114,13 @@ test("discovery keeps model ids when one live capability record is malformed", a
     rmSync(fixtureRoot, { recursive: true, force: true });
   }
 });
+
+test("generic metadata uses the same smallest serving scope as built-in discovery", async () => {
+  const { modelContextLengths } = await import("../src/model-discovery.mjs");
+  const { PROVIDERS } = await import("../src/model-registry.mjs");
+  const record = { id: "vendor/model", context_length: 1000000, top_provider: { context_length: 65536 } };
+  assert.equal(modelMetadataFromProviderRecord(record).contextWindow, 65536);
+  assert.equal(modelContextLengths({ data: [record] }, PROVIDERS.get("openrouter"))[record.id], 65536);
+  assert.equal(modelMetadataFromProviderRecord({ ...record, top_provider: { context_length: 1000000 } }).contextWindow, 1000000);
+  assert.equal(modelMetadataFromProviderRecord({ id: "vendor/model", context_window: "65536" }).contextWindow, 65536);
+});
