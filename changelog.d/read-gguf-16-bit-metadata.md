@@ -1,0 +1,1 @@
+- Read GGUF signed and unsigned 16-bit metadata at its actual width so later context-length metadata remains aligned.
