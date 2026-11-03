@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 import { callerBaseUrl } from "../src/caller-auth.mjs";
 import { readRegistryDocument } from "../src/model-registry.mjs";
 import { openPort } from "./port-pool.mjs";
+import { addHttpFixtureDiagnostic, closeHttpFixture, observeHttpFixture } from "./http-fixture.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const INTERNAL_KEY = "test-internal-service-key-with-sufficient-length";
@@ -276,11 +277,12 @@ const CONTENT_SSE_METERED = [
 
 async function mockServer(handler) {
   const server = http.createServer(handler);
+  const snapshot = observeHttpFixture(server);
   await new Promise((resolve, reject) => {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", resolve);
   });
-  return { server, port: server.address().port };
+  return { server, port: server.address().port, snapshot };
 }
 
 function run(env, setupState) {
@@ -362,7 +364,7 @@ async function stopChild(child) {
 }
 
 async function closeServer(server) {
-  await new Promise((resolve) => server.close(resolve));
+  await closeHttpFixture(server);
 }
 
 function readRouted(port, body) {
@@ -2047,6 +2049,12 @@ test("a Z.ai headers-only response keeps the short prelude bound", async () => {
     const [event] = await waitForUsageEvents(router.stateDir, 1, router);
     assert.equal(event.status, 502);
     assert.equal(event.emptyCompletionRetried, true);
+  } catch (error) {
+    addHttpFixtureDiagnostic(error, {
+      test: "Z.ai headers-only prelude", posts,
+      gateway: gw.snapshot(), router: router.testErrors(),
+    });
+    throw error;
   } finally {
     await stopChild(router);
     await closeServer(gw.server);

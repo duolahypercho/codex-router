@@ -131,3 +131,20 @@ test("CRLF-framed streams are recognized at their boundaries", async () => {
   assert.ok(heartbeats(read()).length >= 1, read());
   heartbeat.destroy();
 });
+
+
+test("an oversized partial event disables heartbeat observation even after identity was announced", async () => {
+  for (const announced of [false, true]) {
+    const heartbeat = new ResponsesHeartbeatTransform({ intervalMs: 30 });
+    const read = collect(heartbeat);
+    const prefix = announced ? CREATED : "";
+    if (announced) heartbeat.write(CREATED);
+    const piece = "x".repeat(1024 * 1024);
+    for (let index = 0; index < 5; index += 1) heartbeat.write(piece);
+    heartbeat.write("\n\n" + CREATED);
+    await delay(100);
+    assert.equal(heartbeats(read()).length, 0, "observation must stay disabled after losing a bounded frame");
+    assert.equal(read(), prefix + piece.repeat(5) + "\n\n" + CREATED);
+    heartbeat.destroy();
+  }
+});

@@ -6,6 +6,7 @@ formula_path="$source_root/Formula/codex-router.rb"
 tap_name="local/codex-router-readiness"
 install_formula=false
 installed_by_check=false
+trusted_by_check=false
 official_probe_root=""
 
 case "${1:-}" in
@@ -32,6 +33,9 @@ cleanup() {
     brew uninstall "$tap_name/codex-router" >/dev/null 2>&1 || true
   fi
   brew untap "$tap_name" >/dev/null 2>&1 || true
+  if [ "$trusted_by_check" = true ]; then
+    brew untrust --tap "$tap_name" >/dev/null 2>&1 || true
+  fi
   if [ -n "$official_probe_root" ]; then
     rm -rf -- "$official_probe_root"
   fi
@@ -43,6 +47,14 @@ trap 'exit 143' TERM
 
 brew tap-new --no-git "$tap_name" >/dev/null
 tap_root=$(brew --repository "$tap_name")
+
+# Homebrew refuses to load formulae from third-party taps it has not been told
+# to trust. Trust only this temporary tap, and only on Homebrew versions that
+# have the trust list; cleanup removes the entry again.
+if brew commands --quiet 2>/dev/null | grep -qx trust; then
+  brew trust --tap "$tap_name" >/dev/null
+  trusted_by_check=true
+fi
 cp "$formula_path" "$tap_root/Formula/codex-router.rb"
 
 # Homebrew applies additional formula rules only when the path belongs to an

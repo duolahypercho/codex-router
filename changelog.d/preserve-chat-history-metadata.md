@@ -1,0 +1,1 @@
+- Reuse the shared assistant-history repair in the API forwarder so adjacent tool turns retain reasoning and vendor metadata; preserve conflicting opaque metadata and real tool results instead of guessing a merge.

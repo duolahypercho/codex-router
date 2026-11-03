@@ -148,20 +148,30 @@ test("Kimi OAuth forwarder strips client_metadata and access_programs before ups
     }
     assert.equal(ready, true, errors);
     const messages = [{ role: "user", content: "hi" }];
-    const response = await fetch(`${base}/v1/chat/completions`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        model: "k3",
-        messages,
-        reasoning_effort: "medium",
-        client_metadata: { workspace: "caller-owned" },
-        access_programs: { cyber: "standard" },
-      }),
-    });
-    assert.equal(response.status, 200, errors);
-    await response.json();
-    assert.equal(upstreamRequests.length, 1);
+    for (const authorization of [
+      { Authorization: `Bearer ${internalKey}` },
+      { "X-Api-Key": internalKey },
+      { "X-Goog-Api-Key": internalKey },
+    ]) {
+      const response = await fetch(`${base}/v1/chat/completions`, {
+        method: "POST",
+        headers: { ...authorization, "Content-Type": "application/json", "chatgpt-account-id": "synthetic-account" },
+        body: JSON.stringify({
+          model: "k3", messages, reasoning_effort: "medium",
+          client_metadata: { workspace: "caller-owned" },
+          access_programs: { cyber: "standard" },
+        }),
+      });
+      assert.equal(response.status, 200, errors);
+      await response.json();
+      const sent = upstreamRequests.at(-1).headers;
+      assert.equal(sent.authorization, "Bearer test-oauth-access");
+      assert.equal(sent["x-api-key"], undefined);
+      assert.equal(sent["x-goog-api-key"], undefined);
+      assert.equal(sent["chatgpt-account-id"], undefined);
+      assert.equal(sent["content-type"], "application/json");
+    }
+    assert.equal(upstreamRequests.length, 3);
     // The request went through normalizeKimiBody: thinking is forced on and
     // the k3 effort ladder is applied, so these assertions prove the observed
     // body is the normalized one rather than an untouched relay.

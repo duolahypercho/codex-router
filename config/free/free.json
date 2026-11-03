@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "providers": [
+    {
+      "id": "free",
+      "displayName": "Free Auto",
+      "kind": "openai-compatible",
+      "ownedBy": "kilo",
+      "baseUrl": "https://api.kilo.ai/api/gateway",
+      "authMode": "anonymous",
+      "anonymousModelPolicy": "free-pool",
+      "anonymousNote": "No API key is needed. free/auto tries the anonymous Kilo free pool and the OpenCode Zen free lane in order and moves on when one is rate limited, out of quota, or unavailable before it has answered. Use at your own risk: anonymous access is limited per IP, prompts sent to free models may be logged and used for training by the upstream, and the free catalog can change or be withdrawn without notice."
+    },
+    {
+      "id": "free-opencode",
+      "displayName": "Free Auto (OpenCode Zen lane)",
+      "kind": "openai-compatible",
+      "ownedBy": "opencode",
+      "variantOf": "free",
+      "baseUrl": "https://opencode.ai/inference/v1",
+      "authMode": "anonymous",
+      "anonymousModelPolicy": "opencode-console",
+      "anonymousNote": "The OpenCode Zen free lane behind free/auto. Requests go to /inference/v1 with OpenCode's public CLI client fingerprint (no login, no API key). Free ids Zen has withdrawn stay out of the pool."
+    }
+  ]
+}

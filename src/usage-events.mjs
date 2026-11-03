@@ -224,6 +224,10 @@ export function recordUsageEvent({
   reasoningEffort,
   providerToolCount,
   providerToolSchemaBytes,
+  // The free/auto pool this row's attempt belonged to, and why the pool moved
+  // past it. Absent on every row outside the pool.
+  freePool,
+  freePoolReason,
   at = Date.now(),
 }) {
   const diagnostics = usageDiagnosticMetadata({
@@ -234,6 +238,8 @@ export function recordUsageEvent({
     reasoningEffort,
     providerToolCount,
     providerToolSchemaBytes,
+    freePool,
+    freePoolReason,
   });
   const event = {
     ...serviceTierMetadata({
@@ -578,6 +584,8 @@ export function recentUsageEvents({
           reasoningEffort: event.reasoningEffort,
           providerToolCount: event.providerToolCount,
           providerToolSchemaBytes: event.providerToolSchemaBytes,
+          freePool: event.freePool,
+          freePoolReason: event.freePoolReason,
         });
         return {
           ...serviceTierMetadata(event),
@@ -589,6 +597,10 @@ export function recentUsageEvents({
           // series per subscription.
           provider: canonicalProviderId(safeText(event.provider, "unknown")),
           status: Number.isInteger(event.status) ? event.status : 0,
+          // The free/auto usage view counts fallbacks from this field.
+          ...(typeof event.failoverFrom === "string" && event.failoverFrom.trim()
+            ? { failoverFrom: safeText(event.failoverFrom, "unknown") }
+            : {}),
           ...(safeUpstreamAttempts(event.upstreamAttempts) ? { upstreamAttempts: safeUpstreamAttempts(event.upstreamAttempts) } : {}),
           ...(["at-most-once", "availability"].includes(event.deliveryPolicy) ? { deliveryPolicy: event.deliveryPolicy } : {}),
           ...(Number.isInteger(event.httpStatus) && event.httpStatus >= 100 && event.httpStatus <= 599 ? { httpStatus: event.httpStatus } : {}),

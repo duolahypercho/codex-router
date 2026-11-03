@@ -331,11 +331,10 @@ export function stripCodexEncryptedSchemaAnnotation(schema) {
 // zod-generated dynamic tools break the second when a `$defs` entry combines a
 // reference with `type`, `format`, or validation constraints.
 //
-// Inlining replaces such a node with its resolved target merged under the
-// node's own siblings. Nothing is invented: the target is the schema the client
-// itself pointed at, and a `description` or `default` declared beside the `$ref`
-// still wins over whatever the target says. Pure `#/$defs/` pointers are left
-// exactly as they are -- they are the form Moonshot asks for -- while a
+// Foreign refs are inlined only with annotation siblings: assertion siblings
+// remain conjunctive and cannot be safely folded with object spread. A
+// `description` or `default` still overrides the target's annotation. Pure
+// `#/$defs/` pointers are left exactly as they are -- they are the form Moonshot asks for -- while a
 // definition reference carrying siblings is expanded only on a route that asks
 // for this strict validation flavor.
 //
@@ -507,17 +506,19 @@ function inlineNodeRefs(
   // cannot represent that conjunction.
   if (strictDefsRef && expanded.$ref !== undefined) return node;
   if (foreignRef) {
-    const conflicts = Object.keys(rewrittenSiblings).some((key) => (
-      !REF_OVERRIDE_ANNOTATIONS.has(key) &&
-      Object.hasOwn(expanded, key) &&
-      !isDeepStrictEqual(rewrittenSiblings[key], expanded[key])
-    ));
-    // `$ref` siblings are conjunctive. Object spread is lossless when the
-    // assertions are distinct or identical, but a different value for the
-    // same assertion would overwrite one side and can widen the schema.
-    if (conflicts) return node;
+    // Reference siblings are conjunctive, including across different keywords:
+    // moving properties into a closed target changes additionalProperties.
+    // Reuse the annotation-only rule instead of inventing a conjunction merge.
+    if (!Object.keys(rewrittenSiblings).every((key) => REF_OVERRIDE_ANNOTATIONS.has(key))) return node;
   }
   if (strictDefsRef) {
+    // A proven scalar target has no object-member scope to change. Keep the
+    // existing scalar UUID repair, but do not move new validation assertions
+    // into object/array/unknown targets; identical assertions are redundant.
+    const scalar = ["string", "number", "integer", "boolean", "null"].includes(expanded.type);
+    if (!scalar && Object.keys(rewrittenSiblings).some((key) => (
+      !REF_OVERRIDE_ANNOTATIONS.has(key) && !isDeepStrictEqual(rewrittenSiblings[key], expanded[key])
+    ))) return node;
     const conflicts = Object.keys(rewrittenSiblings).some((key) => (
       Object.hasOwn(expanded, key) && !isDeepStrictEqual(rewrittenSiblings[key], expanded[key])
     ));
@@ -727,6 +728,24 @@ export function hasObjectRoot(schema) {
   return isPlainObject(schema.properties);
 }
 
+// Merge only complete string-literal domains. Complex assertions and
+// annotations stay on their alternatives instead of being guessed away.
+function stringLiteralAlternatives(values, root) {
+  const literals = [];
+  for (const value of values) {
+    const node = isPlainObject(value) && Object.keys(value).length === 1 && typeof value.$ref === "string"
+      ? resolveRef(value.$ref, root) : value;
+    if (!isPlainObject(node) || Object.keys(node).some((key) => !["type", "const", "enum"].includes(key)) ||
+        (node.type !== undefined && node.type !== "string")) return undefined;
+    const domain = Object.hasOwn(node, "const") ? [node.const] : node.enum;
+    if (!Array.isArray(domain) || domain.length === 0 || domain.some((literal) => typeof literal !== "string") ||
+        (Object.hasOwn(node, "const") && node.enum !== undefined &&
+         (!Array.isArray(node.enum) || !node.enum.includes(node.const)))) return undefined;
+    literals.push(...domain);
+  }
+  return { type: "string", enum: [...new Set(literals)] };
+}
+
 // Returns `schema` unchanged when its root is already a plain object, so the
 // common case costs one type check and no copy.
 export function objectRootToolSchema(schema) {
@@ -734,22 +753,29 @@ export function objectRootToolSchema(schema) {
   if (hasObjectRoot(schema)) return schema;
 
   const branches = objectBranches(schema, schema, new Set());
-  const properties = {};
-  // Root-level properties apply to every branch, so they win over branch
-  // definitions of the same name.
-  if (isPlainObject(schema.properties)) Object.assign(properties, schema.properties);
-  for (const branch of branches) {
+  const unionBranches = branches.filter((branch) => branch !== schema);
+  const rootProperties = isPlainObject(schema.properties) ? schema.properties : {};
+  const properties = new Map(Object.entries(rootProperties));
+  const alternatives = new Map();
+  for (const branch of unionBranches) {
     if (!isPlainObject(branch.properties)) continue;
     for (const [name, property] of Object.entries(branch.properties)) {
-      if (!(name in properties)) properties[name] = property;
+      // Root constraints bind every operation. Otherwise retain each branch's
+      // domain instead of letting the first const/enum hide later operations.
+      if (Object.hasOwn(rootProperties, name)) continue;
+      const values = alternatives.get(name) || [];
+      if (!values.some((value) => isDeepStrictEqual(value, property))) values.push(property);
+      alternatives.set(name, values);
     }
+  }
+  for (const [name, values] of alternatives) {
+    properties.set(name, values.length === 1 ? values[0] : stringLiteralAlternatives(values, schema) ?? { anyOf: values });
   }
   // Required only where every branch requires it: a field the view branch
   // demands is optional for the delete branch, and marking it required would
   // reject calls the app accepts. Root-level requirements are separate -- they
   // bind every branch, so they survive whatever the branches disagree about.
   const rootRequired = Array.isArray(schema.required) ? schema.required : [];
-  const unionBranches = branches.filter((branch) => branch !== schema);
   const shared = unionBranches.length
     ? unionBranches
         .map((branch) => (Array.isArray(branch.required) ? branch.required : []))
@@ -763,16 +789,14 @@ export function objectRootToolSchema(schema) {
     ...(schema.definitions ? { definitions: schema.definitions } : {}),
     ...(typeof schema.description === "string" ? { description: schema.description } : {}),
     type: "object",
-    properties,
+    properties: Object.fromEntries(properties),
     ...(required.length ? { required } : {}),
-    // The merged object cannot describe which branch a call belongs to, so it
-    // must not reject fields that only one branch declares. A root that was
-    // rewritten without merging anything -- a nullable `type: ["object","null"]`
-    // becoming plain `"object"` -- has no such ambiguity, so it keeps whatever
-    // it declared rather than being quietly opened up.
-    ...(unionBranches.length || schema.additionalProperties === undefined
-      ? { additionalProperties: true }
-      : { additionalProperties: schema.additionalProperties }),
+    // The union of declared fields is sufficient when every operation is
+    // closed. Branch associations remain the original client's validation
+    // responsibility; this provider-facing projection is not an executor.
+    additionalProperties: unionBranches.length && unionBranches.every((branch) => branch.additionalProperties === false)
+      ? false
+      : schema.additionalProperties === undefined ? true : schema.additionalProperties,
   };
 }
 

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, mkdtempSync, writeFileSync } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -419,28 +419,28 @@ test("a removed model with a failed catalog refresh stays a completed removal", 
   assert.equal(snapshot.download.error, undefined);
 });
 
-test("local operation claims serialize concurrent controllers", () => {
+test("local operation claims serialize concurrent controllers", async () => {
   const claimPath = path.join(stateDir, "operation.claim");
-  const first = claimLocalOperation("gemma4:12b", "download", {
+  const first = await claimLocalOperation("gemma4:12b", "download", {
     claimPath,
     now: () => 10_000,
     kill: () => {},
   });
   assert.equal(first.acquired, true);
-  const second = claimLocalOperation("gemma4:12b", "download", {
+  const second = await claimLocalOperation("gemma4:12b", "download", {
     claimPath,
     now: () => 10_001,
     kill: () => {},
   });
   assert.equal(second.acquired, false);
-  first.release();
-  const third = claimLocalOperation("gemma4:12b", "uninstall", {
+  await first.release();
+  const third = await claimLocalOperation("gemma4:12b", "uninstall", {
     claimPath,
     now: () => 10_002,
     kill: () => {},
   });
   assert.equal(third.acquired, true);
-  third.release();
+  await third.release();
 });
 
 test("a cancelled worker cannot resurrect the download state", async () => {
@@ -782,4 +782,32 @@ test("a vision-only local pull is adopted as the first image reader, not a Codex
   assert.equal(result.canChat, false);
   assert.equal(result.adoptedVision, true);
   assert.equal(readLocalDownload().detail, "ready for images");
+});
+
+test("a crashed local controller releases its kernel gate without stale-file reclamation", async () => {
+  const claimPath = path.join(stateDir, "crashed-controller.claim");
+  writeFileSync(claimPath, JSON.stringify({ pid: 999999, createdAt: 0, token: "old-claim" }));
+  const moduleUrl = new URL("../src/local-download.mjs", import.meta.url).href;
+  const source = `import {claimLocalOperation} from ${JSON.stringify(moduleUrl)};
+    const claim=await claimLocalOperation('gemma4:12b','download',{claimPath:${JSON.stringify(claimPath)}});
+    if(!claim.acquired)throw new Error('not acquired');process.stdout.write('ready\\n');setInterval(()=>{},1000);`;
+  const child = spawn(process.execPath, ["--input-type=module", "--eval", source], { stdio: ["ignore", "pipe", "pipe"] });
+  try {
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("controller did not acquire gate")), 10000);
+      child.once("error", reject);
+      child.stdout.once("data", () => { clearTimeout(timer); resolve(); });
+    });
+    const blocked = await claimLocalOperation("gemma4:12b", "download", { claimPath });
+    assert.equal(blocked.acquired, false);
+    const ended = new Promise((resolve) => child.once("exit", resolve));
+    child.kill("SIGTERM");
+    await ended;
+    const recovered = await claimLocalOperation("gemma4:12b", "download", { claimPath });
+    assert.equal(recovered.acquired, true);
+    await recovered.release();
+    assert.equal(JSON.parse(readFileSync(claimPath, "utf8")).token, "old-claim", "no stale pathname was removed");
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+  }
 });

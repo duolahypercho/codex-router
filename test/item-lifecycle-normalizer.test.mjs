@@ -246,3 +246,43 @@ test("preserves CRLF framing while reordering", async () => {
   assert.ok(out.includes("\r\n\r\n"), "CRLF separators must be preserved");
   assert.ok(!out.includes("\n\n\n"), "must not corrupt separators");
 });
+
+
+test("lifecycle reordering stops retaining bytes when its shared buffer allowance is exhausted", async () => {
+  for (const partial of [false, true]) {
+    const norm = new ItemLifecycleNormalizer({ maxBufferedBytes: 512 });
+    const chunks = [];
+    norm.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    const input = [block({ type: "response.output_item.added", output_index: 0 })];
+    norm.write(input[0]);
+    for (let index = 0; index < 16; index += 1) {
+      const piece = partial ? "x".repeat(100)
+        : block({ type: "response.output_text.delta", output_index: 1, delta: "x".repeat(60) });
+      input.push(piece);
+      norm.write(piece);
+    }
+    assert.equal(Buffer.concat(chunks).toString(), input.join(""), "oversized retained data must be relayed before EOF");
+    const tail = partial ? "\n\n" + INTERLEAVED : INTERLEAVED;
+    input.push(tail);
+    norm.end(tail);
+    await new Promise((resolve) => norm.on("end", resolve));
+    assert.equal(Buffer.concat(chunks).toString(), input.join(""), "after giving up reordering, every original byte stays in order");
+  }
+});
+
+
+test("lifecycle fallback preserves held frames and invalid UTF-8 bytes", async () => {
+  const norm = new ItemLifecycleNormalizer({ maxBufferedBytes: 512 });
+  const chunks = [];
+  norm.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+  const input = [
+    Buffer.from(block({ type: "response.output_item.added", output_index: 0 })),
+    Buffer.from(block({ type: "response.output_item.added", output_index: 1 })),
+    Buffer.from([0xff, 0x0a, 0x0a]),
+    Buffer.from(INTERLEAVED),
+  ];
+  for (const chunk of input) norm.write(chunk);
+  norm.end();
+  await new Promise((resolve) => norm.once("end", resolve));
+  assert.deepEqual(Buffer.concat(chunks), Buffer.concat(input));
+});

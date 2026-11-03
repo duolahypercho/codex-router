@@ -1,0 +1,1 @@
+- **Report YAML diagnostic evidence at its actual scope.** Managed endpoint checks no longer claim complete protocol/model validity or catalog freshness; caller-key rotation keeps its existing owned-capability preflight instead of depending on that broader claim.

@@ -18,6 +18,8 @@ import {
   GROK_APPLY_PATCH_UPDATE_EXAMPLE,
 } from "../src/grok-apply-patch-guidance.mjs";
 
+import { addHttpFixtureDiagnostic, closeHttpFixture, observeHttpFixture } from "./http-fixture.mjs";
+
 // Real Router preparation and client restoration against explicit gateway/API
 // stubs. Chat models flatten namespaces for the gateway; Responses models keep
 // their native declarations and history on the API hop. The real Router/API
@@ -65,13 +67,14 @@ async function openPort() {
 
 async function mockServer(handler) {
   const server = http.createServer(handler);
+  const snapshot = observeHttpFixture(server);
   await new Promise((resolve, reject) => {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", resolve);
   });
   const address = server.address();
   assert.ok(typeof address === "object" && address);
-  return { server, port: address.port };
+  return { server, port: address.port, snapshot };
 }
 
 function run(script, env) {
@@ -145,7 +148,7 @@ async function stopChild(child) {
 }
 
 async function closeServer(server) {
-  await new Promise((resolve) => server.close(resolve));
+  await closeHttpFixture(server);
 }
 
 // The namespace inventory the Codex client actually sends on routed requests
@@ -969,8 +972,11 @@ async function scenario(
     ...routerEnv,
     ...preparedRouterEnv,
   });
+  let phase = "router readiness";
+  let clientResponse;
   try {
     await waitFor(`${routerBase(routerPort)}/models`, router);
+    phase = "response headers";
     const response = await fetch(`${routerBase(routerPort)}${endpoint}`, {
       method: "POST",
       headers: {
@@ -980,10 +986,19 @@ async function scenario(
       },
       body: JSON.stringify(requestPayload(stream, model)),
     });
+    clientResponse = response;
     assert.equal(response.status, expectedStatus, `router status ${response.status}`);
+    phase = "response body";
     const clientBody = await response.text();
     if (routerLogPattern) await waitForLog(router, routerLogPattern);
     return { gatewayBodies, gatewayHeaders, upstreamPaths, visionBodies, clientBody, router, status: response.status };
+  } catch (error) {
+    addHttpFixtureDiagnostic(error, {
+      phase, model, status: clientResponse?.status,
+      contentType: clientResponse?.headers.get("content-type"),
+      gateway: gateway.snapshot(), router: router.testErrors(),
+    });
+    throw error;
   } finally {
     await stopChild(router);
     await closeServer(gateway.server);

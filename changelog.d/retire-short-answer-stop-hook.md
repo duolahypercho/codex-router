@@ -1,0 +1,1 @@
+- Retire the short-answer Stop hook classifier and transcript logging. Previously configured hook paths remain callable and permit the turn to end.

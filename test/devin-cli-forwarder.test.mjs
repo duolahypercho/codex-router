@@ -248,6 +248,29 @@ test("Devin forwarder diagnoses failures without exposing upstream private text"
     assert.doesNotMatch(result.bodyText, /event: error/);
   });
 
+  await t.test("missing or malformed Connect termination never becomes successful output", async () => {
+    for (const frames of [
+      [],
+      [textFrame],
+      [textFrame, new Uint8Array([0, 0])],
+      [textFrame, encodeEnvelope(Buffer.from(echoedPrivateText), { flags: END_STREAM_FLAG })],
+    ]) {
+      for (const stream of [false, true]) {
+        const result = await request({ frames }, { stream });
+        if (stream && frames.length) {
+          assert.equal(result.status, 200);
+          assert.match(result.bodyText, /partial answer/);
+          assert.match(result.bodyText, /event: error/);
+          assert.doesNotMatch(result.bodyText, /\[DONE\]|"finish_reason":"stop"/);
+        } else {
+          assert.equal(result.status, 502);
+          assert.equal(JSON.parse(result.bodyText).error.type, "api_error");
+          assert.doesNotMatch(result.bodyText, /partial answer/);
+        }
+      }
+    }
+  });
+
   await t.test("untrusted codes cannot leak text or forge logs in either catch path", async () => {
     for (const code of [`permission_denied\r\n${echoedPrivateText}`, TOKEN.repeat(100)]) {
       for (const models of [false, true]) {

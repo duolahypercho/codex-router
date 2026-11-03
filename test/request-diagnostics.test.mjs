@@ -259,3 +259,34 @@ test("client hook diagnostic mode is optional, constrained, and content-free", (
   assert.deepEqual(usageDiagnosticMetadata({ grokStructuredPatch: safe }), { grokStructuredPatch: safe });
   for (const mode of ["private prompt", {}, 1, null]) assert.equal(sanitizeGrokStructuredPatch({ ...safe, mode }), undefined);
 });
+
+test("a free/auto row read back keeps the member it fell back from, so the pool view can count fallbacks", async () => {
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), "model-router-diagnostics-free-pool-"));
+  const previousStateDir = process.env.MODEL_ROUTER_STATE_DIR;
+  process.env.MODEL_ROUTER_STATE_DIR = stateDir;
+  try {
+    const usage = await import(`../src/usage-events.mjs?freepool=${Date.now()}`);
+    usage.recordUsageEvent({
+      model: "free/auto",
+      provider: "free",
+      status: 200,
+      durationMs: 12,
+      inputTokens: 15,
+      outputTokens: 1,
+      requestId: "turn-1",
+      failoverFrom: "free/recursive/flint-v1.0:free",
+      freePool: "free/auto",
+    });
+    const event = usage.recentUsageEvents().find((row) => row.requestId === "turn-1");
+    assert.equal(event.failoverFrom, "free/recursive/flint-v1.0:free");
+    assert.equal(event.freePool, "free/auto");
+    const { freePoolStatus } = await import("../src/free-pool.mjs");
+    const status = freePoolStatus({ events: [event] });
+    assert.equal(status.usage.fallbacks, 1);
+    assert.equal(status.usage.recent[0].failoverFrom, "free/recursive/flint-v1.0:free");
+  } finally {
+    if (previousStateDir === undefined) delete process.env.MODEL_ROUTER_STATE_DIR;
+    else process.env.MODEL_ROUTER_STATE_DIR = previousStateDir;
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});

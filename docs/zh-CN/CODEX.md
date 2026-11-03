@@ -42,13 +42,13 @@ node src/control.mjs tool-result-aging on
 node src/control.mjs tool-result-aging off
 ```
 
-普通老化处理已被模型使用、超过 32 KiB 的旧文本结果，保留最新四项。被识别的 AGENTS.md、SKILL.md 等指令读取及 Cua 运行时文档在普通老化和紧凑整形中均保留。
+普通老化处理已被模型使用、超过 32 KiB 的旧文本结果，保留最新四项。被识别的 AGENTS.md、SKILL.md 等指令读取及 Cua 运行时文档在老化处理中保留。
 
 省略文本前，Router 保存完整原文并验证同一对话/权限范围内的本地回读凭证。验证前原文连同只读恢复说明保留在请求里。存储失败、访问失败或无效凭证时保留完整内容。
 
 按结果附带的原样读命令操作，命令中包含 Node、脚本、签名句柄与存储路径。返回 `text`、`nextOffset`、`eof`；分页使用 `--offset N --limit N`，查找使用 `--find 'literal text'`。找不到对应句柄时，用现有合法句柄执行同范围搜索。历史原文已删除、过期或损坏时，将其记为不可用证据；重新执行原命令得到的是新的观察结果。
 
-客户端请求上下文压缩时，同一开关还可整形文本。最新四项的保护适用于普通老化；紧凑整形可以处理近期结果。原生 GPT 的改写另行启用：
+上下文压缩沿用相同的老化策略，保留近期结果。原生 GPT 的改写另行启用：
 
 ```sh
 node src/control.mjs tool-result-aging native on

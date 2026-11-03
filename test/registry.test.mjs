@@ -115,6 +115,7 @@ test("provider registry exposes configured API and OAuth model families", () => 
       "deepseek/deepseek-v4-flash-vision-exp",
       "deepseek/deepseek-v4-pro",
       "deepseek/deepseek-v4.1-flash",
+      "free/auto",
       "grok-api/grok-4.5",
       "grok-api/grok-4.7",
       "grok-oauth/grok-4.5",
@@ -478,12 +479,12 @@ test("provider registry exposes configured API and OAuth model families", () => 
   const opencodeFree = PROVIDERS.get("opencode-free");
   const opencodeFreeResponses = PROVIDERS.get("opencode-free-responses");
   assert.equal(opencodeFree.authMode, "anonymous");
-  assert.equal(opencodeFree.baseUrl, "https://opencode.ai/zen/v1");
+  assert.equal(opencodeFree.baseUrl, "https://opencode.ai/inference/v1");
   assert.equal(opencodeFree.credential, undefined);
   assert.equal(opencodeFreeResponses.variantOf, "opencode-free");
   assert.equal(opencodeFreeResponses.protocol, "openai-responses");
   assert.equal(opencodeFreeResponses.authMode, "anonymous");
-  assert.equal(opencodeFreeResponses.baseUrl, "https://opencode.ai/zen/v1");
+  assert.equal(opencodeFreeResponses.baseUrl, "https://opencode.ai/inference/v1");
   assert.equal(opencodeFreeResponses.baseUrlEnv, undefined);
   assert.equal(opencodeFreeResponses.credential, undefined);
   assert.equal(opencodeFreeResponses.anonymousModelPolicy, "explicit-models");

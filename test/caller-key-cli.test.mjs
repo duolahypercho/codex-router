@@ -70,3 +70,18 @@ test("caller-key rotation checks state ownership before any transaction work", a
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("YAML rotation uses current owned endpoint evidence without a full validation claim", () => {
+  for (const id of ["omp", "hermes"]) {
+    const complete = { installed: true, providerInstalled: true, baseUrlManaged: true,
+      stateValid: true, callerCapabilityCurrent: true, configValid: null };
+    assert.deepEqual(installedTargetsFromStatus({ [id]: complete }), [id]);
+    for (const field of ["installed", "providerInstalled", "baseUrlManaged", "stateValid", "callerCapabilityCurrent"]) {
+      assert.throws(() => installedTargetsFromStatus({ [id]: { ...complete, [field]: false } }), /partial managed state/);
+    }
+  }
+  assert.throws(() => installedTargetsFromStatus({ pi: {
+    installed: true, providerInstalled: true, baseUrlManaged: true,
+    stateValid: true, callerCapabilityCurrent: true, configValid: null,
+  } }), /partial managed state/);
+});

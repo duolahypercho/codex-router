@@ -481,7 +481,7 @@ in code to its official endpoint.
 
 | Picker label | Provider ID | Endpoint | Free-model rule |
 | --- | --- | --- | --- |
-| OpenCode Free | `opencode-free` | `https://opencode.ai/zen/v1` | `big-pickle` and IDs ending in `-free` |
+| OpenCode Free | `opencode-free` | `https://opencode.ai/inference/v1` | `big-pickle` and IDs ending in `-free` (public CLI fingerprint; no key) |
 | Kilo Free | `kilo-free` | `https://api.kilo.ai/api/gateway` | IDs ending in `:free` |
 
 Neither ships its free subset as checked-in metadata: everything comes from the
@@ -518,6 +518,95 @@ documented anonymous `:free` path.
 Kilo's catalog also advertises `tencent/hy4-preview`, but that ID is paid: it
 does not end in `:free`. The Kilo Free route deliberately filters it out rather
 than presenting HY4 as an anonymous model.
+
+### Free Auto: one model, many free backends (`free/auto`)
+
+`free/auto` is a single model ID that is backed by a pool of anonymous free
+models. Only `free/auto` shows up in the Codex picker and in the model lists.
+The individual free models behind it stay hidden.
+
+```sh
+./bin/providers enable free        # opt in; no API key
+./bin/control free-pool status     # members, drains, recent usage (JSON)
+./bin/control free-pool refresh    # re-read the free lists from upstream, then restart the router
+./bin/control free-pool reset      # forget every drain
+```
+
+**Members, in try order.** Kilo's `kilo-auto/free` router comes first. Next
+come the Kilo gateway's free models (`:free` / `/free` / `-free`, plus other
+`isFree` listings the catalog accepts), then the OpenCode Zen free lane
+(`big-pickle` and IDs ending in `-free`, minus IDs Zen has withdrawn, as listed
+in `src/opencode-curation.mjs`). Both lanes need no login and no API key. The
+OpenCode lane talks to `https://opencode.ai/inference/v1` and sends OpenCode's
+public CLI client fingerprint (User-Agent `opencode/latest/2.0.26/cli`,
+`Authorization: Bearer public`, paired session headers, and the official
+`read`/`shell` tool definitions — see `src/opencode-free-lane.mjs`). That is
+the same public client shape the no-login reference plugin uses; there is no
+per-user secret. A built-in list ships with the router. It is replaced by the
+live `/models` lists (filtered to the free rule) when
+`./bin/control free-pool refresh` runs, or once a day at router start while
+`free` is enabled (`MODEL_ROUTER_FREE_POOL_REFRESH=0` turns that off). A
+refreshed list takes effect after a router restart. If a refresh fails, the
+last good list is kept, falling back to the built-in one.
+
+**Fallback rules.**
+
+- The pool tries members in order. It moves to the next member when a member
+  answers 429, quota or usage-limit, any 5xx, model unavailable, or a network
+  timeout, but only *before any text has streamed*.
+- Once a member has streamed output, the turn stays with that member. A
+  failure after that point is returned as it is, so no answer is ever spliced
+  from two models.
+- A plain request rejection, such as a bad tool schema or a 400, is returned
+  as is and does not walk the pool.
+- A member that fails is *drained* for a cooldown. The cooldown is the
+  upstream's `Retry-After` for a rate limit (held between 30 seconds and 1
+  hour), otherwise 10 minutes for rate limits, 1 hour for quota or a refused
+  key, 2 minutes for a 5xx or timeout, 10 to 30 minutes when the upstream says
+  the model is unavailable, and 6 hours for 402, 404 or 410. No cooldown is
+  longer than 12 hours.
+  Drained members are skipped until the cooldown passes. Drains are stored in
+  `free-pool-drains.json` and never mark the `kilo-free` or `opencode-free`
+  providers as cooling down.
+- When every member is drained, `free/auto` returns HTTP 429 with error type
+  `free_pool_exhausted` and a `retry_at` time.
+- `MODEL_ROUTER_FREE_POOL_PREFER=<upstream id>[,<id>...]` moves the listed
+  members to the front.
+
+**Using it outside Codex.** In Codex, pick **Free Auto** in the model picker.
+Any OpenAI-compatible client can send `"model": "free/auto"` to the router's
+managed base URL, the `openai_base_url` in `~/.codex/config.toml`
+(`http://127.0.0.1:4202/_codex-router/<caller-key>/v1`):
+
+```sh
+BASE="http://127.0.0.1:4202/_codex-router/<caller-key>"
+# Responses API (streaming or not)
+curl -s "$BASE/v1/responses" -H 'content-type: application/json' \
+  -d '{"model":"free/auto","input":"Say hi","stream":false}'
+# Chat Completions
+curl -s "$BASE/cursor/v1/chat/completions" -H 'content-type: application/json' \
+  -d '{"model":"free/auto","messages":[{"role":"user","content":"Say hi"}],"stream":false}'
+```
+
+The caller key is a secret, so don't share the full URL.
+
+**Usage.** In the Control Center, the **Usage** page has a *Free Auto pool*
+panel. It shows requests, tokens in and out, which backend model served each
+request, fallbacks, drained members with their remaining cooldown, and
+errors. The data is read from this machine's local usage log and drain file.
+Nothing is sent anywhere.
+
+**Caveats.**
+
+- Free tiers are rate-limited per IP and shared by everyone behind that IP.
+- Prompts sent to free models may be logged or used for training by the
+  upstream.
+- OpenCode's free tier accepts the public CLI fingerprint above. Without it
+  the same free ids answer FreeTierError. The fingerprint is not a login and
+  uses the pooled `Bearer public` credential; OpenCode may still rate-limit or
+  region-block the IP, and may log prompts.
+- A refreshed OpenCode or Kilo member list only takes effect after a router
+  restart.
 
 ### Custom: one provider, many endpoints
 

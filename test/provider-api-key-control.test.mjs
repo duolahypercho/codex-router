@@ -25,8 +25,8 @@ const foregroundRouterPort = await freePort();
 const ACL_HEAVY_MUTATION_TEST_TIMEOUT_MS = process.platform === "win32" ? 120_000 : 30_000;
 process.env.CODEX_HOME = path.join(root, "codex");
 process.env.CODEX_ROUTER_STATE_DIR = stateDir;
+process.env.MODEL_ROUTER_STATE_DIR = process.env.CODEX_ROUTER_STATE_DIR;
 process.env.MODEL_ROUTER_PROVIDER_CREDENTIAL_STORE = credentialStorePath;
-process.env.MODEL_ROUTER_PROVIDER_CREDENTIAL_MIGRATIONS = path.join(stateDir, "migrations", "provider-credentials");
 process.env.MODEL_ROUTER_API_KEY_POOL_PATH = poolStatePath;
 
 const { addCredentialReference, readProviderCredentialStore } = await import("../src/provider-credential-store.mjs");
@@ -218,7 +218,6 @@ function runControl(arguments_, environment = {}) {
       CODEX_ROUTER_STATE_DIR: stateDir,
       MODEL_ROUTER_STATE_DIR: stateDir,
       MODEL_ROUTER_PROVIDER_CREDENTIAL_STORE: credentialStorePath,
-      MODEL_ROUTER_PROVIDER_CREDENTIAL_MIGRATIONS: process.env.MODEL_ROUTER_PROVIDER_CREDENTIAL_MIGRATIONS,
       MODEL_ROUTER_API_KEY_POOL_PATH: poolStatePath,
       MODEL_ROUTER_LAUNCH_AGENTS_DIR: launchAgentsDir,
       CODEX_ROUTER_SERVICE_PLATFORM: "darwin",

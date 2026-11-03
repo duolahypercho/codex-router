@@ -82,7 +82,7 @@ function upstreamHeaders(requestHeaders, body) {
   const headers = {};
   for (const [name, value] of Object.entries(requestHeaders)) {
     const lower = name.toLowerCase();
-    if (HOP_BY_HOP_HEADERS.has(lower) || lower === "authorization") continue;
+    if (HOP_BY_HOP_HEADERS.has(lower) || ["authorization", "x-api-key", "x-goog-api-key"].includes(lower)) continue;
     if (lower.startsWith("x-msh-") || lower.startsWith("x-codex-")) continue;
     if (lower.startsWith("x-openai-") || lower === "chatgpt-account-id") continue;
     if (lower === "originator" || lower === "user-agent" || lower === "accept-encoding") continue;

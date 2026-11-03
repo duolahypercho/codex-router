@@ -6,7 +6,9 @@ import {
   GROQ_MAX_TOOLS,
   GROQ_TOOL_LIMIT_CODE,
 } from "../src/chat-tool-surface.mjs";
-import { mergeCodexAppTools } from "../src/codex-app-tools.mjs";
+import { CODEX_APP_TOOLS, mergeCodexAppTools } from "../src/codex-app-tools.mjs";
+import { grokLiteralDomain } from "../src/grok-tool-schema.mjs";
+import { moonshotSchemaRoute } from "../src/moonshot-schema-routes.mjs";
 import {
   buildNamespaceLookups,
   flattenNamespacedHistory,
@@ -14,6 +16,7 @@ import {
   flattenToolSearchHistory,
   flattenToolChoice,
   rewriteNamespaceResponsePayload,
+  repairToolSchemaRoots,
   toolSearchRelayAvailable,
 } from "../src/namespace-relay.mjs";
 
@@ -987,8 +990,10 @@ test("Grok OAuth preserves exclusive schema alternatives through eager and disco
         assert.deepEqual(tool.parameters.oneOf, [schema.oneOf[0], ...schema.oneOf[1].oneOf]);
         assert.equal(tool.inputSchema, schema);
       } else {
-        assert.equal(tool.parameters.oneOf, undefined, "other providers keep existing merger behavior");
-        assert.equal(tool.parameters.properties.mode.const, "view");
+        assert.equal(tool.parameters.oneOf, undefined, "these routes still use a plain object root");
+        assert.deepEqual(tool.parameters.properties.mode, {
+          type: "string", enum: ["view", "update", "delete"],
+        });
       }
     }
   }
@@ -1051,4 +1056,39 @@ test("current MCP app tools stay caller-owned without a native search control", 
     assert.equal(restored.output[0].name, "create_thread");
     assert.equal(restored.output[0].namespace, "mcp__codex_app");
   }
+});
+
+test("every automation operation survives eager, discovered and deferred strict-provider surfaces", () => {
+  const automation = CODEX_APP_TOOLS.flatMap((namespace) => namespace.tools || [])
+    .find((tool) => tool.name === "automation_update");
+  const original = structuredClone(automation.inputSchema);
+  for (const mode of ["eager", "discovered", "deferred"]) {
+    const declaration = { type: "namespace", name: "mcp__codex_app", tools: [
+      { ...automation, ...(mode === "deferred" ? { defer_loading: true } : {}) },
+    ] };
+    const input = mode === "discovered" ? [
+      { type: "tool_search_call", call_id: "search", execution: "client", arguments: { query: "automation" } },
+      { type: "tool_search_output", call_id: "search", status: "completed", execution: "client", tools: [declaration] },
+    ] : mode === "deferred" ? [
+      { type: "function_call", namespace: "mcp__codex_app", name: "automation_update", call_id: "old", arguments: '{"mode":"delete","id":"fixture"}' },
+    ] : [];
+    for (const provider of ["kimi-oauth", "kimi-api", "kimi-api-cn", "opencode-go", "deepseek", "grok-api"]) {
+      const surface = chatProviderToolSurface([clientToolSearch(), ...(mode === "discovered" ? [] : [declaration])],
+        provider, { input, upstreamModel: "kimi-k2.7-code" });
+      const options = moonshotSchemaRoute(provider, "kimi-k2.7-code")
+        ? { inlineForeignRefs: true, declareTypes: true } : {};
+      const initial = repairToolSchemaRoots(surface.tools, options);
+      const searched = flattenToolSearchHistory(input, initial, surface.namespaces);
+      const repaired = repairToolSchemaRoots(searched.tools, options);
+      const tool = repaired.find((item) => item.name === "mcp__codex_app__automation_update");
+      assert.ok(tool, `${provider}/${mode}`);
+      const modeSchema = tool.parameters.properties.mode;
+      assert.equal(modeSchema.type, "string", "Moonshot receives a typed finite domain, not a new untyped ref union");
+      const domains = (modeSchema.anyOf || [modeSchema]).flatMap((branch) => grokLiteralDomain(branch, tool.parameters) || []);
+      assert.deepEqual([...new Set(domains)].sort(), ["create", "delete", "suggested_create", "suggested_update", "update", "view"], `${provider}/${mode}`);
+      assert.equal(tool.parameters.additionalProperties, false);
+      assert.deepEqual(tool.inputSchema, original, "execution retains the complete original branch constraints");
+    }
+  }
+  assert.deepEqual(automation.inputSchema, original);
 });

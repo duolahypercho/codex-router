@@ -397,31 +397,6 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
     );
   }
 
-  // A held `output_text.done` that never grew into a finished sentence is
-  // still leaked thinking: the 14:12 ImageGen retry stored
-  // "I'll use the image generation" as `final_answer` after LiteLLM closed
-  // that fragment as `output_text` (distinct from the reasoning_text match).
-  // Short punctuated answers ("4.", "Done.") stay answers. A single token
-  // with no whitespace (`CODEX_ROUTER_STREAM_OK`) is a finished marker, not
-  // a mid-clause cut — treating every 20+ unpunctuated string as unfinished
-  // 502'd the live streaming probe. Unmatched openers, trailing clause
-  // marks, first-person planning openers, and dangling function words
-  // remain unfinished.
-  #isUnfinishedAssistantText(text) {
-    const value = typeof text === "string" ? text.trimEnd() : "";
-    if (!value) return true;
-    const opens = (value.match(/[(\[{]/g) || []).length;
-    const closes = (value.match(/[)\]}]/g) || []).length;
-    if (opens > closes) return true;
-    if (/[:,，、]$/u.test(value)) return true;
-    if (/[.!?…]["'”’)\]]*$/u.test(value)) return false;
-    if (!/\s/u.test(value)) return false;
-    if (/^(I'll|I will|Let me|Let's|I'm going to|I am going to|I need to)\b/iu.test(value)) {
-      return true;
-    }
-    return /\b(the|a|an|of|to|for|with|and|or|but)$/iu.test(value);
-  }
-
   // Thinking copied onto `output_text` is the same string, or a prefix of the
   // thinking the finish sequence then closes as `reasoning_text`. A real
   // answer is a different string from that thinking.
@@ -455,7 +430,6 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
       if (
         this.#message.heldOutputTextDone
         && !this.#isLeakedThinkingText(this.#message.text, reasoning)
-        && !this.#isUnfinishedAssistantText(this.#message.text)
       ) {
         this.#message.textDone = true;
         return [
@@ -689,22 +663,8 @@ export class GrokReasoningSummaryCompatTransform extends Transform {
           ? event.part.text
           : this.#message.text;
         this.#message.text = text;
-        if (this.#isUnfinishedAssistantText(text)) {
-          this.#message.prematureClose = true;
-          this.#message.textAtPrematureClose = text;
-          return [];
-        }
         this.#message.textDone = true;
         return [...this.#flushPendingMessage(), block];
-      }
-      if (
-        this.#isResponseTerminal(type)
-        && this.#message.heldOutputTextDone
-        && !this.#message.textDone
-        && this.#isUnfinishedAssistantText(this.#message.text)
-      ) {
-        this.#message.prematureClose = true;
-        return this.#truncatedCompletion(parsed, event);
       }
       if (
         type === "response.output_item.done"

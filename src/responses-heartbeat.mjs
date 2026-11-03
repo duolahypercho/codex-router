@@ -73,9 +73,10 @@ export class ResponsesHeartbeatTransform extends Transform {
       const blocks = this.#parseBuffer.split(/\r?\n\r?\n/);
       this.#parseBuffer = blocks.pop() || "";
       for (const block of blocks) this.#observe(block);
-      if (this.#parseBuffer.length > MAX_SNAPSHOT_EVENT_CHARS && !this.#identity) {
-        // An unbounded partial event before any announcement: stop trying.
-        this.#terminal = true;
+      if (this.#parseBuffer.length > MAX_SNAPSHOT_EVENT_CHARS) {
+        // Identity does not justify retaining an unbounded partial event.
+        this.#parseBuffer = "";
+        this.#stop();
       }
       this.#arm();
     }

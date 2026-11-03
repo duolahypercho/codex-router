@@ -44,7 +44,6 @@ const {
 const { createSupportBundle } = await import("../src/support-bundle.mjs");
 const { PROVIDERS } = await import("../src/model-registry.mjs");
 const { vertexForwardBaseUrl } = await import("../src/vertex-endpoint.mjs");
-const { configureProvider: configureSharedProvider } = await import("../src/setup-shared.mjs");
 const { privateFileIsProtected } = await import("../src/file-security.mjs");
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -310,13 +309,16 @@ test("credential and support-bundle paths treat Vertex as keyless local auth", (
 });
 
 test("setup reports the Vertex configuration command instead of opening an API-key prompt", () => {
-  assert.throws(
-    () => configureSharedProvider(PROVIDERS.get("vertex"), {
-      guided: false,
-      providerKeyCommand: () => "./bin/provider-key vertex set",
-    }),
-    /control vertex set|gcloud auth/i,
-  );
+  const result = spawnSync(process.execPath, [
+    path.join(root, "src", "setup.mjs"), "--auto", "--providers", "vertex", "--selection-only",
+  ], {
+    cwd: root,
+    encoding: "utf8",
+    env: { ...process.env, MODEL_ROUTER_STATE_DIR: path.join(testRoot, "state") },
+  });
+  assert.equal(result.status, 2, result.stderr);
+  assert.match(result.stderr, /control vertex set|gcloud auth/i);
+  assert.doesNotMatch(result.stderr, /provider-key vertex set/i);
 });
 
 test("doctor reports Vertex configuration and authentication failures without secrets", () => {

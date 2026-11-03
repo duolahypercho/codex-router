@@ -1,0 +1,1 @@
+- **Opening the Harness tab no longer launches unused CLI version probes.** Detection keeps executable and configuration checks while removing up to eleven synchronous subprocesses from each snapshot.

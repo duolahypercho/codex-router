@@ -1,0 +1,1 @@
+- **A failed ChatGPT browser handoff no longer blocks subsequent actions or app shutdown.** The attached login writer retains its finalization ownership while the failed action releases the mutation queue.

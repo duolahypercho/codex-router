@@ -1,0 +1,1 @@
+- Require successful completion before accepting a compaction summary; partial streams and explicitly incomplete JSON cannot replace history or trigger another paid attempt from diagnostic event names.

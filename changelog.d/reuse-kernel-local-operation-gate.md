@@ -1,0 +1,1 @@
+- Replace local controller stale-file reclamation with the existing cross-platform kernel owner lease and remove the redundant nested MLX claim. Process death releases the short gate; an occupied endpoint only reports busy.
