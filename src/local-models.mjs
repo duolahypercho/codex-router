@@ -1098,6 +1098,8 @@ function ggufReader(buffer) {
   };
   return {
     u8() { need(1); return buffer[offset++]; },
+    u16() { need(2); const value = buffer.readUInt16LE(offset); offset += 2; return value; },
+    i16() { need(2); const value = buffer.readInt16LE(offset); offset += 2; return value; },
     u32() { need(4); const value = buffer.readUInt32LE(offset); offset += 4; return value; },
     i32() { need(4); const value = buffer.readInt32LE(offset); offset += 4; return value; },
     u64() { need(8); const value = Number(buffer.readBigUInt64LE(offset)); offset += 8; return value; },
@@ -1118,7 +1120,8 @@ function ggufReader(buffer) {
 // knowable by walking it -- tokenizer vocabularies are arrays of strings.
 function readGgufValue(reader, type) {
   if (type === GGUF_UINT8 || type === GGUF_INT8 || type === GGUF_BOOL) return reader.u8();
-  if (type === GGUF_UINT16 || type === GGUF_INT16) return reader.u32() & 0xffff;
+  if (type === GGUF_UINT16) return reader.u16();
+  if (type === GGUF_INT16) return reader.i16();
   if (type === GGUF_UINT32) return reader.u32();
   if (type === GGUF_INT32) return reader.i32();
   if (type === GGUF_FLOAT32) return reader.f32();
