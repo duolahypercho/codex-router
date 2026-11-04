@@ -175,6 +175,7 @@ export async function resolveProviderApiKeyForRequest(
   provider,
   {
     sessionId,
+    stable = false,
     now = Date.now(),
     poolStatePath,
     credentialStorePath,
@@ -231,6 +232,7 @@ export async function resolveProviderApiKeyForRequest(
     selection = await selectProviderApiKey(provider.id, {
       filePath: poolStatePath,
       sessionId,
+      stable,
       now,
       waitMs,
       retryMs,
