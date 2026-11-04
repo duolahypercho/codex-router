@@ -62,7 +62,7 @@ export function auditCatalogSourceIds(requested = "all", providers = PROVIDERS) 
 }
 
 async function auditCredential(provider) {
-  return (await resolveProviderApiKeyForRequest(provider)).credential;
+  return (await resolveProviderApiKeyForRequest(provider, { stable: true })).credential;
 }
 
 async function defaultReadiness(provider) {

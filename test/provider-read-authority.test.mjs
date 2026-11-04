@@ -69,3 +69,68 @@ test("catalog and quota use the pool account and never fall around paused or inv
   await discovery(); await usage();
   assert.deepEqual(seen, ["SYNTHETIC_LEGACY", "SYNTHETIC_LEGACY"]);
 });
+
+
+test("pooled catalog identity survives dispatch rotation but rejects real credential replacement", async () => {
+  process.env.CODEX_ROUTER_NO_DISCOVERY = "0";
+  process.env.DEEPSEEK_API_KEY = "SYNTHETIC_SECOND";
+  writeProviderCredential("deepseek", "SYNTHETIC_FIRST");
+  const first = ensureCredentialReference({ providerId: "deepseek", kind: "api_key",
+    secretRef: { type: "provider-file" } }, store).credential;
+  const second = ensureCredentialReference({ providerId: "deepseek", kind: "api_key",
+    secretRef: { type: "environment", name: "DEEPSEEK_API_KEY" } }, store).credential;
+  for (const entry of [first, second]) await addStoredCredentialToPool("deepseek", entry.id,
+    { credentialStorePath: store, poolStatePath: pool });
+  const { setProviderApiKeyPoolPolicy, selectProviderApiKeyLocked } = await import("../src/provider-api-key-pool.mjs");
+  const { resolveStoredCredential } = await import("../src/provider-api-key-routing.mjs");
+  const { PROVIDERS } = await import("../src/model-registry.mjs");
+  const provider = PROVIDERS.get("deepseek");
+  await setProviderApiKeyPoolPolicy("deepseek", { strategy: "round-robin", priorityOrder: [first.id, second.id] }, { filePath: pool });
+  const dispatch = () => selectProviderApiKeyLocked("deepseek", { filePath: pool,
+    resolveCredential: id => resolveStoredCredential(provider, id, store) });
+  let fetched = 0;
+  const loadPayload = async (_provider, identity) => {
+    fetched++;
+    assert.equal(identity.credential.value, "SYNTHETIC_FIRST");
+    const before = readFileSync(pool);
+    assert.equal((await dispatch()).credentialId, first.id);
+    assert.notDeepEqual(readFileSync(pool), before, "real dispatch must advance the cursor");
+    return { data: [{ id: "synthetic-stable" }] };
+  };
+  const fresh = await discoverProviderModels("deepseek", { refresh: true, loadPayload });
+  assert.equal(fresh.cached, false);
+  const afterDispatch = readFileSync(pool);
+  assert.equal((await discoverProviderModels("deepseek", { loadPayload })).cached, true);
+  assert.equal(fetched, 1, "cursor rotation alone must not invalidate the cached account");
+  assert.deepEqual(readFileSync(pool), afterDispatch, "catalog reads must not commit selection");
+  assert.equal((await dispatch()).credentialId, second.id, "dispatch retains round-robin");
+  const { upsertProviderApiKey, selectProviderApiKey } = await import("../src/provider-api-key-pool.mjs");
+  await setProviderApiKeyPoolPolicy("deepseek", { strategy: "quota" }, { filePath: pool });
+  for (const [entry, remaining] of [[first, 10], [second, 90]]) {
+    await upsertProviderApiKey("deepseek", { id: entry.id, quota: { limit: 100, remaining } }, { filePath: pool });
+  }
+  const preview = await selectProviderApiKey("deepseek", { filePath: pool,
+    resolveCredential: id => resolveStoredCredential(provider, id, store) });
+  assert.equal(preview.credentialId, second.id, "dispatch preview still follows quota ranking");
+  assert.equal((await discoverProviderModels("deepseek", { loadPayload })).cached, true);
+  assert.equal(fetched, 1, "quota ranking alone must not invalidate catalog provenance");
+  const audit = await auditProviderModels({ requested: "deepseek", discover: async () => {
+    throw new Error("Account SYNTHETIC_FIRST rejected");
+  }});
+  assert.equal(audit.results[0].error, "Account [redacted] rejected");
+
+  await assert.rejects(discoverProviderModels("deepseek", { refresh: true, loadPayload: async () => {
+    writeProviderCredential("deepseek", "SYNTHETIC_REPLACEMENT");
+    return { data: [{ id: "must-not-publish" }] };
+  }}), /credentials changed/);
+  await setStoredCredentialPoolState("deepseek", first.id, true, { credentialStorePath: store, poolStatePath: pool });
+  let replacementFetches = 0;
+  assert.equal((await discoverProviderModels("deepseek", { loadPayload: async (_provider, identity) => {
+    replacementFetches++;
+    assert.equal(identity.credential.value, "SYNTHETIC_SECOND");
+    return { data: [{ id: "second-account-only" }] };
+  }})).cached, false, "paused catalog credential invalidates its stored list");
+  assert.equal(replacementFetches, 1);
+  await setStoredCredentialPoolState("deepseek", second.id, true, { credentialStorePath: store, poolStatePath: pool });
+  await assert.rejects(discoverProviderModels("deepseek", { loadPayload: () => assert.fail("cached data cannot bypass paused authority") }), /pool is unavailable/);
+});

@@ -231,7 +231,7 @@ async function providerDiscoveryIdentity(provider) {
     const { readDevinSession } = await import("./devin-cli-session.mjs");
     return { kind: "devin", session: readDevinSession() };
   }
-  const routing = await resolveProviderApiKeyForRequest(provider);
+  const routing = await resolveProviderApiKeyForRequest(provider, { stable: true });
   const credential = routing.credential;
   if (!credential) throw new Error(routing.pooled
     ? `Provider API-key pool is unavailable: ${routing.reason || "no eligible credential"}.`
