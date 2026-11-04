@@ -1,0 +1,1 @@
+- **macOS service regeneration preserves the custom tool-result archive directory.** Updates and repairs retain the existing LaunchAgent's setting when the installing environment is silent; an explicit value replaces it and an empty value restores the default.
