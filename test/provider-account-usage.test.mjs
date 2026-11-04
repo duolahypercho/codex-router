@@ -784,11 +784,12 @@ test("MiniMax token plan usage surfaces an API error status", async () => {
     const snapshot = await providerAccountUsageSnapshot({
       providerIds: ["minimax-token-plan"],
       fetchImpl: async () => new Response(JSON.stringify({
-        base_resp: { status_code: 1004, status_msg: "invalid api key" },
+        base_resp: { status_code: 1004, status_msg: "invalid api key TEST_MINIMAX_ERROR_KEY" },
       })),
     });
     assert.equal(snapshot["minimax-token-plan"].status, "unavailable");
-    assert.match(snapshot["minimax-token-plan"].message, /invalid api key/);
+    assert.match(snapshot["minimax-token-plan"].message, /MiniMax.*1004/);
+    assert.doesNotMatch(JSON.stringify(snapshot), /TEST_MINIMAX_ERROR_KEY|invalid api key/);
   } finally {
     if (saved === undefined) delete process.env.MINIMAX_API_KEY;
     else process.env.MINIMAX_API_KEY = saved;
@@ -1256,4 +1257,44 @@ test("Vertex usage does not probe Google Cloud and reports router traffic only",
   });
   assert.equal(snapshot.vertex.status, "local-only");
   assert.match(snapshot.vertex.message, /Google Cloud Console/);
+});
+
+test("MiniMax malformed quota JSON does not expose its response text", async () => {
+  const saved = process.env.MINIMAX_API_KEY;
+  process.env.MINIMAX_API_KEY = "BADKEY_74";
+  try {
+    const snapshot = await providerAccountUsageSnapshot({
+      providerIds: ["minimax-token-plan"],
+      fetchImpl: async (_url, options) => {
+        assert.equal(options.headers.Authorization, "Bearer BADKEY_74");
+        return new Response("BADKEY_74 <invalid-json>");
+      },
+    });
+    assert.equal(snapshot["minimax-token-plan"].status, "unavailable");
+    assert.equal(snapshot["minimax-token-plan"].message, "MiniMax coding plan response was not valid JSON");
+    assert.doesNotMatch(JSON.stringify(snapshot), /BADKEY_74|invalid-json/);
+  } finally {
+    if (saved === undefined) delete process.env.MINIMAX_API_KEY;
+    else process.env.MINIMAX_API_KEY = saved;
+  }
+});
+
+test("Z.ai quota errors omit upstream text that echoes the credential", async () => {
+  const saved = process.env.ZAI_API_KEY;
+  process.env.ZAI_API_KEY = "TEST_ZAI_ERROR_KEY";
+  try {
+    const snapshot = await providerAccountUsageSnapshot({
+      providerIds: ["zai-coding"],
+      fetchImpl: async (_url, options) => {
+        assert.equal(options.headers.Authorization, "Bearer TEST_ZAI_ERROR_KEY");
+        return new Response(JSON.stringify({ success: false, code: 401, msg: "Rejected TEST_ZAI_ERROR_KEY" }), { status: 401 });
+      },
+    });
+    assert.equal(snapshot["zai-coding"].status, "unavailable");
+    assert.equal(snapshot["zai-coding"].message, "Z.ai quota API returned HTTP 401");
+    assert.doesNotMatch(JSON.stringify(snapshot), /TEST_ZAI_ERROR_KEY|Rejected/);
+  } finally {
+    if (saved === undefined) delete process.env.ZAI_API_KEY;
+    else process.env.ZAI_API_KEY = saved;
+  }
 });

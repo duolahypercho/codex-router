@@ -131,6 +131,10 @@ Windows の `.\codex-router.ps1 curate-models PROVIDER` で使うモデルを選
 詳しくは[プロバイダーとモデル](docs/ja/PROVIDERS.md)、
 [Codex の設定](docs/ja/CODEX.md)、[モデルレジストリ](https://github.com/duolahypercho/codex-router/tree/main/config/)をご覧ください。
 
+### Free Auto（`free/auto`）
+
+`./bin/providers enable free` を実行すると、モデル **Free Auto**（`free/auto`）が 1 つ追加されます。API キーは不要です。各リクエストは Kilo と OpenCode Zen の匿名無料モデルへ順番に送られます。回答前にレート制限、クォータ切れ、利用不可になったモデルはスキップされ、クールダウンの間は枯渇扱いになります。これはすべてのモデルが枯渇するまで続きます。Codex のモデルピッカーで選ぶか、ローカルの Responses / Chat Completions API に `"model": "free/auto"` を送って使います。Control Center の使用量ページでは、各リクエストを処理したバックエンド、フォールバック、枯渇状態、トークン数を確認できます。詳しくは [Free Auto](docs/PROVIDERS.md#free-auto-one-model-many-free-backends-freeauto) を参照してください。
+
 ## よく使うコマンド
 
 インストール済みソースディレクトリで実行します。

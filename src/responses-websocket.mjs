@@ -9,6 +9,7 @@ import {
   MAX_BUFFERED_RESPONSE_BYTES,
   readResponseBody,
 } from "./http-utils.mjs";
+import { responseOutcomeFromPayload } from "./response-outcome.mjs";
 import { HeaderlessSseDetector } from "./sse-prefix.mjs";
 import {
   MAX_FRAGMENT_FRAMES,
@@ -668,7 +669,9 @@ async function relaySse(body, onEvent, { signal, maxEventBytes }) {
     if (text && (await consumeLine(text)) === false) return;
     await dispatch();
   } finally {
-    await reader.cancel().catch(() => {});
+    // Cancellation is initiated, but transport cleanup cannot keep a logically
+    // finished generation at the head of the WebSocket request queue.
+    reader.cancel().catch(() => {});
     reader.releaseLock?.();
   }
 }
@@ -1136,7 +1139,6 @@ class ResponsesWebSocketPeer {
       let continuationOverflow = false;
       let completed;
       let terminalFailure = false;
-      let terminalSeen = false;
       await relaySse(
         upstream.body,
         async (data) => {
@@ -1149,8 +1151,6 @@ class ResponsesWebSocketPeer {
             throw error;
           }
           if (!event || typeof event !== "object" || Array.isArray(event)) return true;
-          // Do not let post-terminal trailers mutate interruption snapshots.
-          if (terminalSeen) return true;
           if (active.interrupted) return false;
           if (Number.isSafeInteger(event.sequence_number) && event.sequence_number >= 0) {
             active.nextSequence = Math.max(active.nextSequence, event.sequence_number + 1);
@@ -1176,10 +1176,9 @@ class ResponsesWebSocketPeer {
             active.pendingBytes -= Buffer.byteLength(active.pendingItems.get(event.output_index) || "");
             active.pendingItems.delete(event.output_index);
           }
-          // Match the Responses client: the first terminal event ends the
-          // logical response. Drain the HTTP body for clean accounting and
-          // connection reuse, but never graft a provider trailer onto the next
-          // continuation baseline.
+          // Match the client: a logical terminal settles generation ownership.
+          // Stop reading there; HTTP EOF and provider trailers cannot delay or
+          // mutate the next continuation baseline.
           // Native Codex maps WebSocket `error` events only when they carry
           // an HTTP failure status. SSE can instead signal failure by ending
           // its body; the persistent socket has no such turn boundary.
@@ -1187,7 +1186,8 @@ class ResponsesWebSocketPeer {
               !(Number.isInteger(event.status) && event.status >= 400 && event.status <= 599)) {
             event = { ...event, status: 502 };
           }
-          if (["response.completed", "response.failed", "response.incomplete", "error"].includes(event.type)) {
+          const terminalOutcome = responseOutcomeFromPayload(event);
+          if (terminalOutcome !== undefined) {
             active.terminalSent = true;
             if (active.id) this.lastResponseId = active.id;
           }
@@ -1209,19 +1209,11 @@ class ResponsesWebSocketPeer {
             }
           }
           if (!(await this.sendJsonWithBackpressure(event))) return false;
-          if (event.type === "response.completed") {
-            completed = event.response;
-            terminalSeen = true;
-            return true;
-          }
-          if (["error", "response.failed", "response.incomplete"].includes(event.type)) {
-            terminalFailure = true;
-            terminalSeen = true;
-            // Codex ends the turn on this event and may send its retry on the
-            // same socket, where it queues behind this drain. A gateway that
-            // holds the stream open after a failure must not stall that retry.
-            setTimeout(() => controller.abort(), 5_000).unref?.();
-            return true;
+          if (terminalOutcome !== undefined) {
+            if (terminalOutcome === "completed" && event.response &&
+                typeof event.response === "object" && !Array.isArray(event.response)) completed = event.response;
+            else terminalFailure = true;
+            return false;
           }
           return true;
         },

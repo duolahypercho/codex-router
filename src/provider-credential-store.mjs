@@ -1,22 +1,18 @@
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import {
   chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
   readFileSync,
-  unlinkSync,
 } from "node:fs";
 import path from "node:path";
 
 import { withAtomicStateLock } from "./atomic-state-lock.mjs";
-import { credentialPaths } from "./provider-credentials.mjs";
 import { writePrivateFile } from "./file-security.mjs";
 import { normalizeGenericProviderId } from "./generic-provider-identity.mjs";
 import { PROVIDERS } from "./model-registry.mjs";
 import {
-  CODEX_HOME,
-  PROVIDER_CREDENTIAL_MIGRATIONS_DIR,
   PROVIDER_CREDENTIAL_STORE_PATH,
   ROUTER_PLANE_TARGET,
   STATE_DIR,
@@ -40,7 +36,6 @@ const SENSITIVE_KEY = /(?:authorization|api[-_]?key|access[-_]?token|refresh[-_]
 const CREDENTIAL_ID = /^cred_[A-Za-z0-9_-]{16,64}$/;
 const LABEL_LIMIT = 160;
 const STORE_KEYS = new Set(["schemaVersion", "credentials"]);
-const LEGACY_STORE_KEYS = new Set(["version", "credentials"]);
 const CREDENTIAL_KEYS = new Set([
   "id",
   "providerId",
@@ -106,28 +101,14 @@ function assertNoSymlinkComponents(target, field, boundary) {
   }
 }
 
-function managedStatePath(value, field, { allowDirectory = false } = {}) {
+function managedStatePath(value, field) {
   if (typeof value !== "string" || !path.isAbsolute(value)) {
     throw new Error(`${field} must be an absolute path.`);
   }
   const target = path.resolve(value);
   const base = path.resolve(STATE_DIR);
-  if (!isWithin(base, target) || (!allowDirectory && target === base)) {
+  if (!isWithin(base, target) || target === base) {
     throw new Error(`${field} must stay inside the router state directory.`);
-  }
-  assertNoSymlinkComponents(target, field, base);
-  return target;
-}
-
-function managedSourcePath(value, field) {
-  if (typeof value !== "string" || !path.isAbsolute(value)) {
-    throw new Error(`${field} must be an absolute path.`);
-  }
-  const target = path.resolve(value);
-  const bases = [path.resolve(CODEX_HOME), path.resolve(STATE_DIR)];
-  const base = bases.find((candidate) => isWithin(candidate, target));
-  if (!base || target === base) {
-    throw new Error(`${field} must stay inside a managed credential directory.`);
   }
   assertNoSymlinkComponents(target, field, base);
   return target;
@@ -148,31 +129,16 @@ function readRegularBytes(filePath, field) {
   return readFileSync(target);
 }
 
-function atomicPrivateBytes(filePath, bytes, { directoryMode = 0o700 } = {}) {
+function atomicPrivateBytes(filePath, bytes) {
   const target = managedStatePath(filePath, "target path");
   const directory = path.dirname(target);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
-  chmodSync(directory, directoryMode);
+  chmodSync(directory, 0o700);
   return writePrivateFile(target, bytes);
-}
-
-function restoreMigrationTarget(target, before, after) {
-  const current = readRegularBytes(target, "credential store");
-  const afterDigest = sha256(after);
-  if (current === undefined || sha256(current) !== afterDigest) return;
-  if (before === undefined) {
-    unlinkSync(target);
-  } else {
-    atomicPrivateBytes(target, before);
-  }
 }
 
 function serializedStore(store) {
   return Buffer.from(`${JSON.stringify(store, null, 2)}\n`, "utf8");
-}
-
-function sha256(bytes) {
-  return createHash("sha256").update(bytes).digest("hex");
 }
 
 function now() {
@@ -219,16 +185,6 @@ export function generatedCredentialId(random = randomBytes) {
   return `cred_r${opaque}`;
 }
 
-function migratedCredentialId(providerId, kind) {
-  // Migration uses a deterministic form so running it twice never creates
-  // duplicate references.
-  const digest = createHash("sha256")
-    .update(`codex-router-provider-credential:${providerId}:${kind}`)
-    .digest("base64url")
-    .slice(0, 24);
-  return `cred_${digest}`;
-}
-
 function assertNoSecretFields(value, context = "credential metadata") {
   if (!value || typeof value !== "object") return;
   for (const [key, child] of Object.entries(value)) {
@@ -239,7 +195,7 @@ function assertNoSecretFields(value, context = "credential metadata") {
   }
 }
 
-function normalizeSecretRef(value, providerId, { legacy = false, providerType } = {}) {
+function normalizeSecretRef(value, providerId, { providerType } = {}) {
   plainObject(value, "secretRef");
   assertNoSecretFields(value, "secretRef");
   assertAllowedKeys(value, SECRET_REF_KEYS, "secretRef");
@@ -255,7 +211,7 @@ function normalizeSecretRef(value, providerId, { legacy = false, providerType } 
   if (referenceProviderId !== providerId) {
     throw new Error("secretRef.providerId must match providerId.");
   }
-  const target = value.target === undefined && legacy ? ROUTER_PLANE_TARGET : normalizeText(
+  const target = normalizeText(
     value.target,
     "secretRef.target",
     { max: 20, required: true },
@@ -298,7 +254,7 @@ function normalizeSecretRef(value, providerId, { legacy = false, providerType } 
   return normalized;
 }
 
-function normalizeCredential(raw, { legacy = false } = {}) {
+function normalizeCredential(raw) {
   plainObject(raw, "credential");
   assertNoSecretFields(raw, "credential metadata");
   assertAllowedKeys(raw, CREDENTIAL_KEYS, "credential");
@@ -308,13 +264,10 @@ function normalizeCredential(raw, { legacy = false } = {}) {
   if (providerType !== undefined && providerType !== "generic") {
     throw new Error(`Unsupported providerType: ${providerType}`);
   }
-  if (legacy && providerType !== undefined) {
-    throw new Error("Legacy credentials cannot declare providerType.");
-  }
   const providerId = providerType === "generic"
     ? normalizeGenericProviderId(raw.providerId, { reservedProviderIds: PROVIDERS })
     : validateProviderId(raw.providerId);
-  const kind = normalizeText(raw.kind || (legacy ? "api_key" : undefined), "credential kind", {
+  const kind = normalizeText(raw.kind, "credential kind", {
     max: 20,
     required: true,
   });
@@ -325,7 +278,7 @@ function normalizeCredential(raw, { legacy = false } = {}) {
     throw new Error("Generic providers support only api_key credentials.");
   }
   const id = validateCredentialId(raw.id);
-  const secretRef = normalizeSecretRef(raw.secretRef, providerId, { legacy, providerType });
+  const secretRef = normalizeSecretRef(raw.secretRef, providerId, { providerType });
   const state = normalizeText(raw.state || "active", "credential state", { max: 20, required: true });
   if (!["active", "paused", "revoked"].includes(state)) {
     throw new Error(`Unsupported credential state: ${state}`);
@@ -359,18 +312,18 @@ function normalizeCredential(raw, { legacy = false } = {}) {
   return result;
 }
 
-function normalizeStore(raw, { legacy = false } = {}) {
+function normalizeStore(raw) {
   plainObject(raw, "Credential store");
   assertNoSecretFields(raw, "Credential store");
-  assertAllowedKeys(raw, legacy ? LEGACY_STORE_KEYS : STORE_KEYS, "Credential store");
+  assertAllowedKeys(raw, STORE_KEYS, "Credential store");
   if (!Array.isArray(raw.credentials)) throw new Error("Credential store credentials must be an array.");
-  if (!legacy && raw.schemaVersion !== PROVIDER_CREDENTIAL_SCHEMA_VERSION) {
+  if (raw.schemaVersion !== PROVIDER_CREDENTIAL_SCHEMA_VERSION) {
     throw new Error("Unsupported provider credential store schema.");
   }
   const entries = raw.credentials;
   const seen = new Set();
   const credentials = entries.map((entry) => {
-    const normalized = normalizeCredential(entry, { legacy });
+    const normalized = normalizeCredential(entry);
     if (seen.has(normalized.id)) throw new Error(`Duplicate credential id: ${normalized.id}`);
     seen.add(normalized.id);
     return normalized;
@@ -378,7 +331,7 @@ function normalizeStore(raw, { legacy = false } = {}) {
   return { schemaVersion: PROVIDER_CREDENTIAL_SCHEMA_VERSION, credentials };
 }
 
-function parseStore(contents, { allowLegacy = false } = {}) {
+function parseStore(contents) {
   if (typeof contents !== "string" && !Buffer.isBuffer(contents)) {
     throw new Error("Credential store contents must be bytes.");
   }
@@ -391,18 +344,6 @@ function parseStore(contents, { allowLegacy = false } = {}) {
   if (parsed?.schemaVersion === PROVIDER_CREDENTIAL_SCHEMA_VERSION) {
     return normalizeStore(parsed);
   }
-  if (
-    allowLegacy &&
-    ((parsed?.version === 1) || (parsed?.schemaVersion === 1)) &&
-    Array.isArray(parsed.credentials)
-  ) {
-    assertAllowedKeys(
-      parsed,
-      parsed.version === 1 ? LEGACY_STORE_KEYS : new Set(["schemaVersion", "credentials"]),
-      "Credential store",
-    );
-    return normalizeStore({ version: 1, credentials: parsed.credentials }, { legacy: true });
-  }
   throw new Error("Unsupported provider credential store schema.");
 }
 
@@ -413,8 +354,8 @@ export function readProviderCredentialStore(filePath = PROVIDER_CREDENTIAL_STORE
     return parseStore(readRegularBytes(target, "credential store"));
   } catch {
     // A malformed store must not become a source of credentials. Returning an
-    // empty, safe state lets health/catalog paths continue while migration and
-    // explicit writes remain strict and report the repair needed.
+    // empty, safe state lets health/catalog paths continue while explicit
+    // writes remain strict and report the repair needed.
     return emptyStore();
   }
 }
@@ -608,206 +549,4 @@ export function redactCredentialObject(value, knownSecrets = []) {
       : redactCredentialObject(child, knownSecrets);
   }
   return result;
-}
-
-function migrationTimestamp() {
-  return `${new Date().toISOString().replaceAll(":", "-").replaceAll(".", "-")}-${process.pid}-${randomBytes(6).toString("hex")}`;
-}
-
-function migrationManifestPath(directory) {
-  return path.join(directory, "migration.json");
-}
-
-function readMigrationManifest(manifestPath, migrationDirectory, expectedTarget) {
-  const selected = managedStatePath(manifestPath, "migration manifest path");
-  const directory = managedStatePath(migrationDirectory, "migration directory", { allowDirectory: true });
-  if (!isWithin(directory, selected) || path.basename(selected) !== "migration.json") {
-    throw new Error("Migration manifest must stay inside the migration directory.");
-  }
-  const parsed = JSON.parse(readRegularBytes(selected, "migration manifest").toString("utf8"));
-  plainObject(parsed, "migration manifest");
-  assertAllowedKeys(parsed, new Set([
-    "schemaVersion", "createdAt", "targetPath", "previousExists", "previousPath", "previousSha256", "afterSha256",
-  ]), "migration manifest");
-  if (parsed.schemaVersion !== PROVIDER_CREDENTIAL_SCHEMA_VERSION || typeof parsed.targetPath !== "string") {
-    throw new Error("Unsupported provider credential migration snapshot.");
-  }
-  const target = managedStatePath(parsed.targetPath, "migration target path");
-  if (target !== expectedTarget) throw new Error("Migration target does not match the requested store.");
-  if (typeof parsed.afterSha256 !== "string" || !/^[a-f0-9]{64}$/.test(parsed.afterSha256)) {
-    throw new Error("Migration snapshot has no valid post-migration digest.");
-  }
-  if (typeof parsed.previousExists !== "boolean") throw new Error("Migration snapshot has invalid previous state.");
-  if (parsed.previousExists) {
-    const previous = managedStatePath(parsed.previousPath, "migration rollback path");
-    if (path.dirname(previous) !== path.dirname(selected) || path.basename(previous) !== "provider-credentials.before-migration.json") {
-      throw new Error("Migration rollback path is outside its snapshot directory.");
-    }
-    if (typeof parsed.previousSha256 !== "string" || !/^[a-f0-9]{64}$/.test(parsed.previousSha256)) {
-      throw new Error("Migration snapshot has no valid previous digest.");
-    }
-    parsed.previousPath = previous;
-  } else if (parsed.previousPath !== null || parsed.previousSha256 !== null) {
-    throw new Error("Migration snapshot has an unexpected previous path.");
-  }
-  parsed.targetPath = target;
-  return parsed;
-}
-
-function existingProviderFileReferences() {
-  const entries = [];
-  const seen = new Set();
-  for (const provider of PROVIDERS.values()) {
-    if (provider.kind !== "openai-compatible" || !provider.credential) continue;
-    const providerId = provider.variantOf || provider.id;
-    const referenceKey = `${providerId}:api_key`;
-    if (seen.has(referenceKey)) continue;
-    const file = credentialPaths(provider).map((candidate) => {
-      try {
-        const managed = managedSourcePath(candidate, "provider credential path");
-        return readRegularBytes(managed, "provider credential") === undefined ? undefined : managed;
-      } catch {
-        return undefined;
-      }
-    }).find(Boolean);
-    if (!file) continue;
-    seen.add(referenceKey);
-    entries.push({
-      id: migratedCredentialId(providerId, "api_key"),
-      providerId,
-      kind: "api_key",
-      label: provider.credential.label,
-      secretRef: { type: "provider-file", providerId, target: ROUTER_PLANE_TARGET },
-      state: "active",
-      createdAt: now(),
-      updatedAt: now(),
-    });
-  }
-  return entries;
-}
-
-export function migrateProviderCredentialStore(
-  filePath = PROVIDER_CREDENTIAL_STORE_PATH,
-  { migrationDirectory = PROVIDER_CREDENTIAL_MIGRATIONS_DIR } = {},
-) {
-  const target = managedStatePath(filePath, "credential store path");
-  const migrations = managedStatePath(migrationDirectory, "migration directory", { allowDirectory: true });
-  const existing = readRegularBytes(target, "credential store");
-  if (existing !== undefined) {
-    try {
-      const current = parseStore(existing);
-      return { migrated: false, store: current };
-    } catch {
-      const legacy = parseStore(existing, { allowLegacy: true });
-      const directory = path.join(migrations, migrationTimestamp());
-      mkdirSync(directory, { recursive: true, mode: 0o700 });
-      const previousPath = path.join(directory, "provider-credentials.before-migration.json");
-      const store = {
-        schemaVersion: PROVIDER_CREDENTIAL_SCHEMA_VERSION,
-        credentials: legacy.credentials,
-      };
-      const after = serializedStore(store);
-      const manifestPath = migrationManifestPath(directory);
-      try {
-        atomicPrivateBytes(previousPath, existing);
-        atomicPrivateBytes(manifestPath, Buffer.from(JSON.stringify({
-          schemaVersion: PROVIDER_CREDENTIAL_SCHEMA_VERSION,
-          createdAt: now(),
-          targetPath: target,
-          previousExists: true,
-          previousPath,
-          previousSha256: sha256(existing),
-          afterSha256: sha256(after),
-        }, null, 2) + "\n"));
-        atomicPrivateBytes(target, after);
-        atomicPrivateBytes(path.join(migrations, "latest.json"), Buffer.from(JSON.stringify({
-          schemaVersion: PROVIDER_CREDENTIAL_SCHEMA_VERSION,
-          manifestPath,
-        }, null, 2) + "\n"));
-      } catch (error) {
-        try {
-          restoreMigrationTarget(target, existing, after);
-        } catch (rollbackError) {
-          error.rollbackError = rollbackError;
-        }
-        throw error;
-      }
-      return { migrated: true, store, legacy: true, manifestPath };
-    }
-  }
-
-  const entries = existingProviderFileReferences();
-  const store = { schemaVersion: PROVIDER_CREDENTIAL_SCHEMA_VERSION, credentials: entries };
-  const after = serializedStore(store);
-  mkdirSync(migrations, { recursive: true, mode: 0o700 });
-  const directory = path.join(migrations, migrationTimestamp());
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const snapshot = {
-    schemaVersion: PROVIDER_CREDENTIAL_SCHEMA_VERSION,
-    createdAt: now(),
-    targetPath: target,
-    previousExists: false,
-    previousPath: null,
-    previousSha256: null,
-    afterSha256: sha256(after),
-  };
-  const manifestPath = migrationManifestPath(directory);
-  try {
-    atomicPrivateBytes(manifestPath, Buffer.from(`${JSON.stringify(snapshot, null, 2)}\n`));
-    atomicPrivateBytes(target, after);
-    atomicPrivateBytes(path.join(migrations, "latest.json"), Buffer.from(`${JSON.stringify({
-      schemaVersion: PROVIDER_CREDENTIAL_SCHEMA_VERSION,
-      manifestPath,
-    }, null, 2)}\n`));
-  } catch (error) {
-    try {
-      restoreMigrationTarget(target, undefined, after);
-    } catch (rollbackError) {
-      error.rollbackError = rollbackError;
-    }
-    throw error;
-  }
-  return { migrated: true, store, manifestPath };
-}
-
-export function rollbackProviderCredentialStore(
-  manifestPath,
-  {
-    migrationDirectory = PROVIDER_CREDENTIAL_MIGRATIONS_DIR,
-    targetPath = PROVIDER_CREDENTIAL_STORE_PATH,
-  } = {},
-) {
-  const migrations = managedStatePath(migrationDirectory, "migration directory", { allowDirectory: true });
-  const target = managedStatePath(targetPath, "credential store path");
-  let selected = manifestPath ? managedStatePath(manifestPath, "migration manifest path") : undefined;
-  if (!selected) {
-    const latestPath = path.join(migrations, "latest.json");
-    const latest = readRegularBytes(latestPath, "latest migration pointer");
-    if (!latest) throw new Error("No provider credential migration snapshot is available.");
-    const parsed = JSON.parse(latest.toString("utf8"));
-    plainObject(parsed, "latest migration pointer");
-    assertAllowedKeys(parsed, new Set(["schemaVersion", "manifestPath"]), "latest migration pointer");
-    if (parsed.schemaVersion !== PROVIDER_CREDENTIAL_SCHEMA_VERSION || typeof parsed.manifestPath !== "string") {
-      throw new Error("Unsupported latest migration pointer.");
-    }
-    selected = managedStatePath(parsed.manifestPath, "migration manifest path");
-  }
-  if (!selected || !existsSync(selected)) throw new Error("Provider credential migration snapshot is missing.");
-  const manifest = readMigrationManifest(selected, migrations, target);
-  const current = readRegularBytes(target, "credential store");
-  if (current !== undefined && sha256(current) !== manifest.afterSha256) {
-    throw new Error("Refusing rollback because the credential store changed after migration.");
-  }
-  if (manifest.previousExists) {
-    const previous = readRegularBytes(manifest.previousPath, "migration rollback snapshot");
-    if (!previous || sha256(previous) !== manifest.previousSha256) {
-      throw new Error("Provider credential rollback snapshot is missing.");
-    }
-    atomicPrivateBytes(target, previous);
-  } else if (current !== undefined) {
-    const stat = lstatSync(target);
-    if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("Credential store is not a regular file.");
-    unlinkSync(target);
-  }
-  return { rolledBack: true, targetPath: target };
 }

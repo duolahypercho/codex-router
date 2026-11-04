@@ -1,0 +1,1 @@
+- Preserve successful assistant output through the reasoning compatibility bridge without guessing completeness from its wording or punctuation; retain repairs backed by conflicting reasoning events.

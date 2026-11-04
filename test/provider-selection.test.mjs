@@ -69,6 +69,8 @@ test("provider selection keeps backward compatibility and can hide the final pro
     // has to authenticate before it counts.
     assert.deepEqual(configuredProviderIds(), [
       "custom",
+      "free",
+      "free-opencode",
       "kilo-free",
       "lmstudio",
       "local",
@@ -81,6 +83,8 @@ test("provider selection keeps backward compatibility and can hide the final pro
     assert.deepEqual(configuredProviderIds(), [
       "custom",
       "deepseek",
+      "free",
+      "free-opencode",
       "kilo-free",
       "lmstudio",
       "local",

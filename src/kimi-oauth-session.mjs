@@ -13,24 +13,11 @@ import { discoveryDisabled } from "./discovery-mode.mjs";
 import { acquireFileLock, runWithLockRelease } from "./file-lock.mjs";
 
 import { writePrivateFile } from "./file-security.mjs";
-import { kimiCodeHome, resolveKimiCodeEnvironment } from "./kimi-region.mjs";
+import { resolveKimiCodeEnvironment } from "./kimi-region.mjs";
 import { VERSION } from "./version.mjs";
 
 const KIMI_CLIENT_ID = "17e5f671-d194-4dfb-9706-5516cb48c098";
-const KIMI_CODE_HOME = kimiCodeHome();
-const OAUTH_LOCK_TARGET = path.join(KIMI_CODE_HOME, "oauth", "kimi-code");
-const DEVICE_ID_PATH = path.join(KIMI_CODE_HOME, "device_id");
 let refreshInFlight;
-
-// Resolved per call so a `kimi login` into the other region (kimi.com vs
-// kimi.ai) while the forwarder is running is picked up without a restart.
-function credentialsPath() {
-  return resolveKimiCodeEnvironment().credentialsPath;
-}
-
-function oauthHost() {
-  return resolveKimiCodeEnvironment().oauthHost;
-}
 
 function oauthError(message, { code = "oauth_error", status = 502 } = {}) {
   const error = new Error(message);
@@ -66,10 +53,10 @@ function macOSProductVersion() {
   }
 }
 
-function readDeviceId() {
+function readDeviceId(context) {
   let value;
   try {
-    value = readFileSync(DEVICE_ID_PATH, "utf8").trim();
+    value = readFileSync(path.join(context.home, "device_id"), "utf8").trim();
   } catch {
     throw unauthorizedError("Kimi device id is missing; run `kimi login` first.");
   }
@@ -79,8 +66,9 @@ function readDeviceId() {
   return value;
 }
 
-export function kimiIdentityHeaders() {
+export function kimiIdentityHeaders(context) {
   if (discoveryDisabled()) throw unauthorizedError("Credential discovery is disabled; re-run setup to enable it.");
+  context ||= resolveKimiCodeEnvironment();
   const platform =
     os.type() === "Darwin"
       ? `macOS ${macOSProductVersion() || os.release()} ${os.arch()}`
@@ -92,7 +80,7 @@ export function kimiIdentityHeaders() {
     "X-Msh-Device-Name": asciiHeader(os.hostname()),
     "X-Msh-Device-Model": asciiHeader(platform),
     "X-Msh-Os-Version": asciiHeader(os.release()),
-    "X-Msh-Device-Id": asciiHeader(readDeviceId()),
+    "X-Msh-Device-Id": asciiHeader(readDeviceId(context)),
   };
 }
 
@@ -129,9 +117,9 @@ function validateToken(value) {
   };
 }
 
-export function readKimiOAuthToken() {
+export function readKimiOAuthToken(context) {
   if (discoveryDisabled()) throw unauthorizedError("Credential discovery is disabled; re-run setup to enable it.");
-  const file = credentialsPath();
+  const file = (context || resolveKimiCodeEnvironment()).credentialsPath;
   if (!existsSync(file)) {
     throw unauthorizedError("Kimi OAuth credentials were not found; run `kimi login`.");
   }
@@ -163,8 +151,8 @@ function sameToken(left, right) {
   );
 }
 
-function atomicSaveToken(token) {
-  const file = credentialsPath();
+function atomicSaveToken(token, context) {
+  const file = context.credentialsPath;
   const directory = path.dirname(file);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   chmodSync(directory, 0o700);
@@ -186,16 +174,16 @@ function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-async function refreshToken(refreshTokenValue) {
+async function refreshToken(refreshTokenValue, context) {
   const retryable = new Set([429, 500, 502, 503, 504]);
   let lastError;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     let response;
     try {
-      response = await fetch(`${oauthHost()}/api/oauth/token`, {
+      response = await fetch(`${context.oauthHost}/api/oauth/token`, {
         method: "POST",
         headers: {
-          ...kimiIdentityHeaders(),
+          ...kimiIdentityHeaders(context),
           Accept: "application/json",
           "Content-Type": "application/x-www-form-urlencoded",
         },
@@ -245,29 +233,33 @@ async function refreshToken(refreshTokenValue) {
   throw lastError || transientError("Kimi OAuth refresh failed.");
 }
 
-export async function ensureFreshKimiOAuthToken({ force = false } = {}) {
+export async function ensureFreshKimiOAuthToken({ force = false, context } = {}) {
   if (discoveryDisabled()) throw unauthorizedError("Credential discovery is disabled; re-run setup to enable it.");
+  context ||= resolveKimiCodeEnvironment();
   const current = refreshInFlight;
   if (current) {
-    if (!force || current.force) return current.promise;
+    const sameContext = current.context.credentialsPath === context.credentialsPath
+      && current.context.oauthHost === context.oauthHost;
+    if (sameContext && (!force || current.force)) return current.promise;
     try {
       await current.promise;
     } catch {
       // The original caller owns its failure. A forced caller still needs its
       // own attempt because the non-forced refresh may have kept the old token.
     }
-    return ensureFreshKimiOAuthToken({ force: true });
+    return ensureFreshKimiOAuthToken({ force, context });
   }
 
   const promise = (async () => {
-    const initial = readKimiOAuthToken();
+    const initial = readKimiOAuthToken(context);
+    const lockTarget = path.join(context.home, "oauth", "kimi-code");
     if (!force && !shouldRefresh(initial)) return initial.access_token;
 
     let release;
     try {
-      mkdirSync(path.dirname(OAUTH_LOCK_TARGET), { recursive: true, mode: 0o700 });
-      writeFileSync(OAUTH_LOCK_TARGET, "", { flag: "a", mode: 0o600 });
-      release = await acquireFileLock(OAUTH_LOCK_TARGET, {
+      mkdirSync(path.dirname(lockTarget), { recursive: true, mode: 0o700 });
+      writeFileSync(lockTarget, "", { flag: "a", mode: 0o600 });
+      release = await acquireFileLock(lockTarget, {
         retries: { retries: 120, factor: 1, minTimeout: 500, maxTimeout: 1_000 },
         stale: 5_000,
         realpath: false,
@@ -278,21 +270,21 @@ export async function ensureFreshKimiOAuthToken({ force = false } = {}) {
     }
 
     return runWithLockRelease(async () => {
-      const latest = readKimiOAuthToken();
+      const latest = readKimiOAuthToken(context);
       if (!force && !shouldRefresh(latest)) return latest.access_token;
       if (force && !sameToken(initial, latest)) return latest.access_token;
       try {
-        const refreshed = await refreshToken(latest.refresh_token);
-        atomicSaveToken(refreshed);
+        const refreshed = await refreshToken(latest.refresh_token, context);
+        atomicSaveToken(refreshed, context);
         return refreshed.access_token;
       } catch (error) {
         if (error?.code === "oauth_unauthorized") {
           await delay(100);
-          const recovered = readKimiOAuthToken();
+          const recovered = readKimiOAuthToken(context);
           if (recovered.refresh_token !== latest.refresh_token) {
             return recovered.access_token;
           }
-          atomicSaveToken(revokedTombstone(latest));
+          atomicSaveToken(revokedTombstone(latest), context);
         } else if (error?.code === "oauth_transient" && !force && !isHardExpired(latest)) {
           return latest.access_token;
         }
@@ -302,6 +294,6 @@ export async function ensureFreshKimiOAuthToken({ force = false } = {}) {
   })().finally(() => {
     if (refreshInFlight?.promise === promise) refreshInFlight = undefined;
   });
-  refreshInFlight = { promise, force };
+  refreshInFlight = { promise, force, context };
   return promise;
 }

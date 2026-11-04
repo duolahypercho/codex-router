@@ -1,0 +1,1 @@
+- **Preserve explicit custom endpoint destinations.** A curated per-model endpoint stays independent when a preset uses the same upstream model ID, so a local model cannot silently become an alias for the preset's public cloud endpoint. Existing slug and gateway-ID collision checks remain in force.

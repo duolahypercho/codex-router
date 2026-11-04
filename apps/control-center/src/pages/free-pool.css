@@ -1,0 +1,109 @@
+.fp-panel {
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+}
+
+.fp-heading-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fp-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.fp-summary > div {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-1);
+}
+
+.fp-summary dt {
+  color: var(--ink-faint);
+  font-size: 11px;
+}
+
+.fp-summary dd {
+  margin: 2px 0 0;
+  color: var(--ink-strong);
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+.fp-catalog,
+.fp-empty,
+.fp-error {
+  margin: 0;
+  color: var(--ink-faint);
+  font-size: 12px;
+}
+
+.fp-subheading {
+  margin: 6px 0 0;
+  font-size: 13px;
+}
+
+.fp-member-row,
+.fp-recent-row {
+  display: grid;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+
+.fp-member-row {
+  /* Fixed state column: every row is its own grid, so an auto column would
+     shift the lane and served columns on a row with a long drain badge. */
+  grid-template-columns: 24px minmax(180px, 1fr) 100px 90px 230px;
+}
+
+.fp-member-row > :last-child {
+  justify-self: end;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fp-recent-row {
+  grid-template-columns: 150px minmax(180px, 1fr) 44px minmax(120px, 1fr) 120px;
+}
+
+.fp-member-row:last-child,
+.fp-recent-row:last-child {
+  border-bottom: 0;
+}
+
+.fp-member-row code,
+.fp-recent-row code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fp-position,
+.fp-lane,
+.fp-served,
+.fp-detail,
+.fp-tokens,
+.fp-recent-row time {
+  color: var(--ink-faint);
+}
+
+.fp-ok {
+  color: var(--success, #2e9e5b);
+  font-variant-numeric: tabular-nums;
+}
+
+.fp-bad {
+  color: var(--danger, #d04a4a);
+  font-variant-numeric: tabular-nums;
+}

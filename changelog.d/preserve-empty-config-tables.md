@@ -1,0 +1,1 @@
+- Stop cosmetically deleting empty TOML tables so router enable/disable preserves table-shaped text inside multiline instructions.

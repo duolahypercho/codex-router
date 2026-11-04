@@ -618,10 +618,11 @@ export async function readRequestBody(
 // built-in Response helpers buffer first, which lets a provider-controlled
 // error or relay response consume unbounded memory before the caller can
 // reject it. Cancellation releases the upstream stream as soon as the limit
-// is crossed.
+// is crossed. A caller reading only one tee branch can opt out of awaiting
+// cancellation: that promise also waits for the separately owned branch.
 export async function readResponseBody(
   upstream,
-  { maxBytes = MAX_BUFFERED_RESPONSE_BYTES, signal } = {},
+  { maxBytes = MAX_BUFFERED_RESPONSE_BYTES, signal, awaitCancellation = true } = {},
 ) {
   if (!upstream?.body) return Buffer.alloc(0);
   const reader = upstream.body.getReader();
@@ -639,7 +640,6 @@ export async function readResponseBody(
         : new Uint8Array(result.value || []);
       total += chunk.byteLength;
       if (total > limit) {
-        await reader.cancel().catch(() => {});
         const error = new Error(`Upstream response exceeds ${limit} bytes.`);
         error.status = 502;
         error.code = "ERR_UPSTREAM_RESPONSE_TOO_LARGE";
@@ -648,7 +648,8 @@ export async function readResponseBody(
       chunks.push(Buffer.from(chunk));
     }
   } catch (error) {
-    await reader.cancel().catch(() => {});
+    const cancellation = reader.cancel().catch(() => {});
+    if (awaitCancellation) await cancellation;
     throw error;
   } finally {
     reader.releaseLock?.();

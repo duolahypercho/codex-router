@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "free/auto",
+      "gatewayModel": "free-auto",
+      "upstreamModel": "kilo-auto/free",
+      "provider": "free",
+      "listed": true,
+      "freePool": true,
+      "isFree": true,
+      "failoverCandidate": false,
+      "displayName": "Free Auto",
+      "description": "One free model that needs no API key. Tries the anonymous Kilo free pool and the OpenCode Zen free lane in order and moves to the next free model on a rate limit, quota, or outage before any text has streamed. Prompts sent to free models may be logged and used for training by the upstream.",
+      "priority": 141,
+      "defaultEffort": "medium",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Fast reasoning for simple edits"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced reasoning for everyday coding"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning for harder problems"
+        }
+      ],
+      "contextWindow": 200000,
+      "autoCompact": 180000,
+      "inputModalities": [
+        "text"
+      ],
+      "compHash": "free-auto-v1"
+    }
+  ]
+}

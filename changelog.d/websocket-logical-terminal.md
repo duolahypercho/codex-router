@@ -1,0 +1,1 @@
+- Release WebSocket turns at their shared completion, cancellation or failure terminal instead of HTTP EOF, preserving completed routed usage and continuation state.

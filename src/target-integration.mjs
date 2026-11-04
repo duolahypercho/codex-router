@@ -5,7 +5,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
-  CONFIG_PATH,
   DSH_CATALOG_PATH,
   CURSOR_CATALOG_PATH,
   CLAUDE_CATALOG_PATH,
@@ -18,11 +17,6 @@ import {
 } from "./paths.mjs";
 import { routedHarnesses } from "./routed-harness-catalog.mjs";
 
-// The begin markers config-manager.mjs writes around every block it owns,
-// including the legacy kimi-era pairs it still recognizes. config-manager.mjs
-// is a command-line script, so the prefix is restated here rather than
-// imported; the markers are a compatibility surface that lives in users'
-// config files and cannot change without a migration anyway.
 import { clientRestartNotice } from "./client-restart-notice.mjs";
 import { routerNodeBinary } from "./node-runtime.mjs";
 import {
@@ -32,7 +26,8 @@ import {
   runProcessTree,
 } from "./process-tree.mjs";
 
-const managedMarkerPattern = /^# BEGIN (?:kimi-)?codex-(?:router|proxy)-/m;
+import { codexIntegrationInstalled, installedTargets } from "./client-installation-state.mjs";
+export { installedTargets };
 const DEFAULT_TARGET_PUBLICATION_MS = 5 * 60_000;
 const MAX_TARGET_PUBLICATION_MS = 5 * 60_000;
 
@@ -161,53 +156,6 @@ export function targetRestartHint() {
  * Refreshing only whichever target the current command happens to run under
  * is how one client ends up advertising a model the other just gained or lost.
  */
-/**
- * Which client integrations are currently published.
- *
- * The service, gateway, ports, and credentials are one shared plane -- see the
- * note on `ROUTER_PLANE_TARGET` in paths.mjs. Turning one client off is not a
- * reason to tear that plane down while another client is still pointed at it,
- * which is how disabling the harness used to stop Codex working too.
- */
-export function installedTargets() {
-  const installed = [];
-  // Codex counts as installed while its config still carries a managed block.
-  // The cached native catalog is deliberately retained across uninstalls, so
-  // its presence says a catalog was once published, not that Codex is still
-  // pointed at the plane -- keying on it left the service and its LaunchAgent
-  // behind after the last integration was removed.
-  if (codexIntegrationInstalled()) installed.push("codex");
-  if (existsSync(DSH_CATALOG_PATH)) installed.push("dsh");
-  if (existsSync(GEMINI_CATALOG_PATH)) installed.push("gemini");
-  if (existsSync(CURSOR_CATALOG_PATH)) installed.push("cursor");
-  if (existsSync(CLAUDE_CATALOG_PATH)) installed.push("claude");
-  if (existsSync(OPENCLAW_CATALOG_PATH)) installed.push("openclaw");
-  // The document-configured harnesses (opencode, pi, omp, Command Code,
-  // Hermes) are published clients like any other, so a live publication keeps
-  // the shared plane alive for them too. They are not `MODEL_ROUTER_TARGET`
-  // values -- nothing installs *as* one of them -- but `bin/disable` retires
-  // the service only once this list is empty, and forgetting them here is how
-  // turning Codex off would stop opencode working.
-  for (const harness of routedHarnesses()) {
-    if (existsSync(ROUTED_HARNESS_CATALOG_PATHS[harness.id])) installed.push(harness.id);
-  }
-  return installed;
-}
-
-function codexIntegrationInstalled() {
-  if (!existsSync(CONFIG_PATH)) return false;
-  try {
-    return managedMarkerPattern.test(readFileSync(CONFIG_PATH, "utf8"));
-  } catch {
-    // The file exists and cannot be read — Codex mid-write, an AV lock, a
-    // permission hiccup. This answer feeds retire-the-service-if-unused, so
-    // "cannot tell" must count as installed: tearing down the shared service
-    // because a read flaked is the unrecoverable direction, while keeping it
-    // alive one cycle longer costs nothing.
-    return true;
-  }
-}
-
 export async function refreshTargetPickerIfInstalled({ signal, deadline } = {}) {
   // Every publisher inherits the operation's one absolute deadline and runs
   // in a separately terminable process tree. The initial check prevents an

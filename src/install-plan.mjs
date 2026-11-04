@@ -36,11 +36,15 @@ export const SOURCE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.u
 // select affected multidict or urllib3 releases again. LiteLLM 1.96.2 fixes
 // GHSA-3cv6-jpf6-8222; multidict 6.9.1 fixes GHSA-54p9-h82j-f925; urllib3
 // 2.8.0 fixes GHSA-gh4c-6fx4-qh6g, GHSA-vxq7-64xx-v4gw and GHSA-8988-9cw3-xx77.
+// certifi 2026.10.23 removes the compromised emSign roots covered by
+// GHSA-6q48-6c7w-9gw2 while retaining the unaffected G1 root. Keep it direct:
+// a transitive-only lock can undo an operator's security update on reinstall.
 export const PYTHON_REQUIREMENTS = [
   "litellm[proxy]==1.96.2",
   "fastapi==0.139.2",
   "multidict==6.9.1",
   "urllib3==2.8.0",
+  "certifi==2026.10.23",
 ];
 
 // Pinning only the gateway requirements left their transitive tree floating:

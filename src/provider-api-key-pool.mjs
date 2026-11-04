@@ -716,7 +716,13 @@ async function selectFromState(providerOrId, options = {}) {
   let selectedByPolicy = false;
   if (!selectedEntry) {
     selectedByPolicy = true;
-    selectedEntry = { meta: chooseMeta(pool, resolved.entries.map((entry) => entry.meta), at) };
+    const candidates = resolved.entries.map((entry) => entry.meta);
+    // Catalog provenance needs a stable account while ordinary traffic moves
+    // the cursor or updates quota rankings. Only non-committing previews may
+    // opt in; eligibility and the locked dispatch policy remain authoritative.
+    selectedEntry = { meta: options.commit === false && options.stable === true
+      ? orderMeta(pool, candidates)[0]
+      : chooseMeta(pool, candidates, at) };
     selectedEntry.value = resolved.entries.find((entry) => entry.meta.id === selectedEntry.meta.id)?.value;
     rebound = Boolean(bound && selectedEntry.meta && selectedEntry.meta.id !== bound.credentialId);
   }
@@ -1038,6 +1044,7 @@ export async function runProviderApiKeyAttempts(providerOrId, {
   const startedAt = now();
   const limit = Math.min(DEFAULT_ATTEMPT_LIMIT, Math.max(1, Math.floor(maxAttempts)));
   for (let index = 0; index < limit; index += 1) {
+    if (index > 0 && now() - startedAt >= budgetMs) break;
     if (typeof isResponseCommitted === "function" && isResponseCommitted()) {
       return { configured: true, valid: true, providerId: provider, attempts, committed: true, reason: "response_committed" };
     }
@@ -1056,6 +1063,8 @@ export async function runProviderApiKeyAttempts(providerOrId, {
     if (!selection.credentialId || !selection.credentialValue) {
       return { configured: true, valid: true, providerId: provider, attempts, reason: selection.reason };
     }
+    // Selection can wait on a lock; the budget bounds extra dispatches, not the first request.
+    if (index > 0 && now() - startedAt >= budgetMs) break;
     attempted.add(selection.credentialId);
     let result;
     let error;

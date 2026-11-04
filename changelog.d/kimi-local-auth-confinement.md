@@ -1,0 +1,1 @@
+- Keep all accepted local service authentication headers out of Kimi upstream requests.

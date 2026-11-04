@@ -10,7 +10,7 @@ import {
 } from "./github-copilot-session.mjs";
 import { kimiOAuthStatus } from "./oauth-status.mjs";
 import { PROVIDERS } from "./model-registry.mjs";
-import { resolveProviderCredential } from "./provider-credentials.mjs";
+import { resolveProviderApiKeyForRequest } from "./provider-api-key-routing.mjs";
 import {
   OPENCODE_SESSION_FALLBACKS,
   openCodeSessionHeaders,
@@ -18,6 +18,14 @@ import {
 import { cooldownUntil } from "./rate-limit-headers.mjs";
 import { rateLimitSnapshotFor } from "./rate-limit-state.mjs";
 import { VERSION } from "./version.mjs";
+
+// Account views use the same non-committing pool preview as the request path.
+// A present unusable pool must not open an unrelated legacy account.
+async function accountCredential(providerOrId) {
+  const provider = typeof providerOrId === "string" ? PROVIDERS.get(providerOrId) : providerOrId;
+  const { credential } = await resolveProviderApiKeyForRequest(provider);
+  return credential;
+}
 
 const REQUEST_TIMEOUT_MS = 8_000;
 
@@ -541,7 +549,7 @@ async function requestJson(url, key, headers = {}, fetchImpl = fetch) {
 }
 
 async function deepSeekAccount(fetchImpl) {
-  const credential = resolveProviderCredential("deepseek");
+  const credential = await accountCredential("deepseek");
   if (!credential) return { status: "not-configured", source: "official-api", metrics: [] };
   const configuredBase = process.env.DEEPSEEK_API_BASE_URL?.trim();
   if (configuredBase && new URL(configuredBase).origin !== "https://api.deepseek.com") {
@@ -565,7 +573,7 @@ async function deepSeekAccount(fetchImpl) {
 // and this probe is parameterized rather than pinned to one of them.
 async function kimiApiAccount(fetchImpl, providerId = "kimi-api") {
   const provider = PROVIDERS.get(providerId);
-  const credential = resolveProviderCredential(provider);
+  const credential = await accountCredential(provider);
   if (!credential) return { status: "not-configured", source: "official-api", metrics: [] };
   const baseURL = (process.env[provider.baseUrlEnv] || provider.baseUrl).replace(/\/+$/, "");
   const host = new URL(baseURL).hostname;
@@ -584,7 +592,7 @@ async function kimiApiAccount(fetchImpl, providerId = "kimi-api") {
 // is never queried: an operator-pointed endpoint is not StepFun's billing API.
 async function stepFunAccount(fetchImpl, providerId) {
   const provider = PROVIDERS.get(providerId);
-  const credential = resolveProviderCredential(provider);
+  const credential = await accountCredential(provider);
   if (!credential) return { status: "not-configured", source: "official-api", metrics: [] };
   const baseURL = (process.env[provider.baseUrlEnv] || provider.baseUrl).replace(/\/+$/, "");
   const host = new URL(baseURL).hostname;
@@ -602,7 +610,7 @@ async function stepFunAccount(fetchImpl, providerId) {
 
 async function chutesAccount(fetchImpl) {
   const provider = PROVIDERS.get("chutes");
-  const credential = resolveProviderCredential(provider);
+  const credential = await accountCredential(provider);
   if (!credential) return { status: "not-configured", source: "official-api", metrics: [] };
   const baseURL = (process.env[provider.baseUrlEnv] || provider.baseUrl).replace(/\/+$/, "");
   if (new URL(baseURL).origin !== "https://llm.chutes.ai") {
@@ -638,7 +646,7 @@ async function chutesAccount(fetchImpl) {
 
 async function opencodeGoAccount(fetchImpl) {
   const provider = PROVIDERS.get("opencode-go");
-  const credential = resolveProviderCredential(provider);
+  const credential = await accountCredential(provider);
   if (!credential) return { status: "not-configured", source: "official-api", metrics: [] };
   const baseURL = (process.env[provider.baseUrlEnv] || provider.baseUrl).replace(/\/+$/, "");
   if (new URL(baseURL).origin !== "https://opencode.ai") {
@@ -657,20 +665,23 @@ const MINIMAX_ACCOUNT_HOSTS = new Set(["api.minimax.io", "api.minimaxi.com"]);
 
 async function minimaxTokenPlanAccount(fetchImpl) {
   const provider = PROVIDERS.get("minimax-token-plan");
-  const credential = resolveProviderCredential(provider);
+  const credential = await accountCredential(provider);
   if (!credential) return { status: "not-configured", source: "official-api", metrics: [] };
   const baseURL = (process.env[provider.baseUrlEnv] || provider.baseUrl).replace(/\/+$/, "");
   if (!MINIMAX_ACCOUNT_HOSTS.has(new URL(baseURL).hostname)) {
     return localOnly("Plan usage is unavailable for a custom MiniMax endpoint");
   }
-  const payload = await requestJson(`${baseURL}/coding_plan/remains`, credential.value, {}, fetchImpl);
+  let payload;
+  try {
+    payload = await requestJson(`${baseURL}/coding_plan/remains`, credential.value, {}, fetchImpl);
+  } catch (error) {
+    // JSON parser errors can quote the upstream body, including an echoed key.
+    if (error instanceof SyntaxError) throw new Error("MiniMax coding plan response was not valid JSON");
+    throw error;
+  }
   const status = payload?.base_resp?.status_code;
   if (status !== undefined && status !== 0) {
-    throw new Error(
-      typeof payload?.base_resp?.status_msg === "string" && payload.base_resp.status_msg
-        ? payload.base_resp.status_msg
-        : `MiniMax coding plan API returned status ${status}`,
-    );
+    throw new Error(`MiniMax coding plan API returned status ${Number.isInteger(status) ? status : "unknown"}`);
   }
   const metrics = minimaxQuotaMetrics(payload);
   if (!metrics.length) throw new Error("MiniMax coding plan response was incomplete");
@@ -680,11 +691,12 @@ async function minimaxTokenPlanAccount(fetchImpl) {
 async function kimiOAuthAccount(fetchImpl) {
   const status = kimiOAuthStatus();
   if (!status.configured) return { status: "not-configured", source: "official-api", metrics: [] };
-  const accessToken = await ensureFreshKimiOAuthToken();
+  const context = resolveKimiCodeEnvironment();
+  const accessToken = await ensureFreshKimiOAuthToken({ context });
   const payload = await requestJson(
-    `${resolveKimiCodeEnvironment().apiBase}/usages`,
+    `${context.apiBase}/usages`,
     accessToken,
-    kimiIdentityHeaders(),
+    kimiIdentityHeaders(context),
     fetchImpl,
   );
   const metrics = kimiQuotaMetrics(payload);
@@ -838,7 +850,7 @@ export function zaiQuotaMetrics(data) {
 }
 
 async function zaiCodingAccount(fetchImpl) {
-  const credential = resolveProviderCredential("zai-coding");
+  const credential = await accountCredential("zai-coding");
   if (!credential) return { status: "not-configured", source: "official-api", metrics: [] };
   const response = await fetchImpl(ZAI_QUOTA_URL, {
     headers: {
@@ -849,11 +861,7 @@ async function zaiCodingAccount(fetchImpl) {
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok || payload?.success !== true || payload?.code !== 200) {
-    throw new Error(
-      typeof payload?.msg === "string" && payload.msg
-        ? payload.msg
-        : `Z.ai quota API returned HTTP ${response.status}`,
-    );
+    throw new Error(`Z.ai quota API returned HTTP ${response.status}`);
   }
   const metrics = zaiQuotaMetrics(payload.data);
   if (!metrics.length) throw new Error("Z.ai quota response was incomplete");
@@ -873,7 +881,7 @@ async function zaiCodingAccount(fetchImpl) {
 // Studio link and observed router traffic instead of an error state.
 async function commandCodeAccount(fetchImpl) {
   const provider = PROVIDERS.get("commandcode");
-  const credential = resolveProviderCredential(provider);
+  const credential = await accountCredential(provider);
   if (!credential) return { status: "not-configured", source: "official-api", metrics: [] };
   const fallback = (message) => ({
     ...withHeaderQuota("commandcode", localOnly(message)),
@@ -906,7 +914,7 @@ async function commandCodeAccount(fetchImpl) {
 }
 
 async function githubCopilotAccount(fetchImpl) {
-  const credential = resolveProviderCredential("github-copilot");
+  const credential = await accountCredential("github-copilot");
   if (!credential) return { status: "not-configured", source: "official-api", metrics: [] };
   const token = assertGitHubCopilotCredential(credential.value);
   const response = await fetchImpl("https://api.github.com/copilot_internal/user", {
@@ -933,7 +941,7 @@ async function githubCopilotAccount(fetchImpl) {
 
 async function veniceAccount(fetchImpl) {
   const provider = PROVIDERS.get("venice");
-  const credential = resolveProviderCredential(provider);
+  const credential = await accountCredential(provider);
   if (!credential) return { status: "not-configured", source: "official-api", metrics: [] };
   const fallback = (message) => ({
     ...withHeaderQuota("venice", localOnly(message)),
@@ -969,7 +977,7 @@ async function veniceAccount(fetchImpl) {
 
 async function openRouterAccount(fetchImpl) {
   const provider = PROVIDERS.get("openrouter");
-  const credential = resolveProviderCredential(provider);
+  const credential = await accountCredential(provider);
   if (!credential) return { status: "not-configured", source: "official-api", metrics: [] };
   const fallback = (message) => ({
     ...withHeaderQuota("openrouter", localOnly(message)),
@@ -1016,7 +1024,7 @@ async function accountUsageFor(providerId, fetchImpl) {
     if (providerId === "kimi-oauth") return await kimiOAuthAccount(fetchImpl);
     if (providerId === "grok-oauth") return await grokOAuthAccount(fetchImpl);
     if (providerId === "grok-api") {
-      return resolveProviderCredential("grok-api")
+      return await accountCredential("grok-api")
         ? withHeaderQuota(
             providerId,
             localOnly("xAI API account balance is unavailable; showing router traffic"),
@@ -1024,7 +1032,7 @@ async function accountUsageFor(providerId, fetchImpl) {
         : { status: "not-configured", source: "official-api", metrics: [] };
     }
     if (providerId === "anthropic-api") {
-      return resolveProviderCredential("anthropic-api")
+      return await accountCredential("anthropic-api")
         ? withHeaderQuota(
             providerId,
             localOnly("Anthropic API account balance is unavailable; showing router traffic"),
@@ -1036,7 +1044,7 @@ async function accountUsageFor(providerId, fetchImpl) {
       // The quota route zai-coding polls reports a Coding Plan's windows; a
       // pay-per-token platform key has no plan behind it and Z.ai publishes no
       // balance API, so link the billing page instead of inventing a number.
-      return resolveProviderCredential("zai-api")
+      return await accountCredential("zai-api")
         ? {
             ...withHeaderQuota(
               providerId,
@@ -1049,7 +1057,7 @@ async function accountUsageFor(providerId, fetchImpl) {
     if (providerId === "qwen-plan") {
       // Alibaba plan quotas are only visible behind a console session; never
       // import browser cookies. Link to the console instead.
-      return resolveProviderCredential("qwen-plan")
+      return await accountCredential("qwen-plan")
         ? {
             ...withHeaderQuota(
               providerId,
@@ -1060,7 +1068,7 @@ async function accountUsageFor(providerId, fetchImpl) {
         : { status: "not-configured", source: "official-api", metrics: [] };
     }
     if (providerId === "ollama-cloud") {
-      return resolveProviderCredential("ollama-cloud")
+      return await accountCredential("ollama-cloud")
         ? {
             ...withHeaderQuota(
               providerId,
@@ -1074,7 +1082,7 @@ async function accountUsageFor(providerId, fetchImpl) {
     if (providerId === "venice") return await veniceAccount(fetchImpl);
     if (providerId === "openrouter") return await openRouterAccount(fetchImpl);
     if (providerId === "aimlapi") {
-      return resolveProviderCredential("aimlapi")
+      return await accountCredential("aimlapi")
         ? {
             ...localOnly("Showing router traffic; check AI/ML API for account usage and limits"),
             dashboardUrl: "https://aimlapi.com/app/",
@@ -1086,7 +1094,7 @@ async function accountUsageFor(providerId, fetchImpl) {
       // browser: the inference API answers 404 on both /credits and /key, so
       // there is no number to fetch and inventing one would be worse than the
       // link. Router traffic still fills the usage card.
-      return resolveProviderCredential("nousresearch")
+      return await accountCredential("nousresearch")
         ? {
             ...withHeaderQuota(
               providerId,

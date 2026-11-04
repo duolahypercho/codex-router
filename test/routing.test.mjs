@@ -2860,6 +2860,149 @@ test("router synthesizes routed compaction and safely replays it to native model
   }
 });
 
+test("routed compaction requires a successful terminal before replacing history", async () => {
+  let source;
+  let submissions = 0;
+  let quotaRefusal;
+  let jsonReply = false;
+  let jsonStatus;
+  const gateway = await mockServer(async (request, response) => {
+    const body = await bodyJson(request);
+    submissions += 1;
+    if (quotaRefusal) {
+      if (body.model === "deepseek-v4-pro") {
+        if (quotaRefusal === "sse") {
+          response.writeHead(429, { "Content-Type": "text/event-stream" });
+          response.end('data: {"type":"error","message":"Usage limit reached"}\n\n');
+        } else {
+          json(response, 429, { error: { message: "Usage limit reached" } });
+        }
+      } else {
+        json(response, 200, { output_text: "A complete fallback summary." });
+      }
+      return;
+    }
+    if (jsonReply) {
+      json(response, 200, {
+        output_text: "PARTIAL_COMPACTION_JSON",
+        usage: { input_tokens: 37, output_tokens: 3 },
+        ...(jsonStatus === undefined ? {} : { status: jsonStatus }),
+      });
+      return;
+    }
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    response.end(source);
+  });
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), "compaction-terminal-evidence-"));
+  writeFileSync(path.join(stateDir, "deepseek-api-key.secret"), "TEST_DEEPSEEK_KEY\n");
+  writeFileSync(path.join(stateDir, "xai-api-key.secret"), "TEST_XAI_KEY\n");
+  writeFileSync(path.join(stateDir, "enabled-providers.json"), JSON.stringify({ version: 1, providers: ["deepseek", "grok-api"] }));
+  writeFileSync(path.join(stateDir, "failover.json"), JSON.stringify({ version: 1, enabled: true, chain: ["grok-api/grok-4.5"] }));
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    MODEL_ROUTER_STATE_DIR: stateDir,
+    DEEPSEEK_API_KEY: "TEST_DEEPSEEK_KEY", XAI_API_KEY: "TEST_XAI_KEY",
+    CODEX_ROUTER_NO_DISCOVERY: "0",
+    CODEX_ROUTER_QUIET: "1",
+  });
+  const terminal = (status) => ({ type: "response.completed", response: {
+    id: "resp_summary", status,
+    usage: { input_tokens: 37, output_tokens: 3 },
+    output: [{ type: "message", content: [{ type: "output_text", text: "A complete summary." }] }],
+  } });
+  const delta = { type: "response.output_text.delta", delta: "A partial summary" };
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    for (const [events, expected] of [
+      [[delta], 502],
+      [[delta, terminal("incomplete")], 502],
+      [[delta, terminal("failed")], 502],
+      [[delta, terminal("in_progress")], 502],
+      [[delta, terminal("unknown")], 502],
+      [[delta, { type: "response.completed", response: [] }], 502],
+      [[delta, { type: "response.cancelled" }], 502],
+      [[delta, { type: "response.incomplete", response: { status: "incomplete", usage: { input_tokens: 37, output_tokens: 3 } } }], 502],
+      [[delta, { type: "response.usage", usage: { input_tokens: 37, output_tokens: 3 } }], 502],
+      [[delta, { type: "error", error: { message: "synthetic failure" } }], 502],
+      [[delta, { type: "response.failed" }, terminal("completed")], 502],
+      [[delta, terminal("completed")], 200],
+      [[terminal(undefined)], 200],
+      [[{ ...terminal("completed"), type: "response.done" }], 200],
+      [[delta, { type: "provider_transport_error" }], 502],
+      [[delta, { type: "context_length_exceeded: maximum context length is 1000000 tokens" }], 502],
+    ]) {
+      source = events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("");
+      for (const v1 of [false, true]) {
+        const before = submissions;
+        const response = await fetch(`${routerBase(routerPort)}/responses${v1 ? "/compact" : ""}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model: "deepseek/deepseek-v4-pro", stream: false, input: [
+            { type: "message", role: "user", content: [{ type: "input_text", text: "Preserve the actual task." }] },
+            ...(!v1 ? [{ type: "compaction_trigger" }] : []),
+          ] }),
+        });
+        const text = await response.text();
+        assert.equal(response.status, expected, text);
+        assert.equal(submissions - before, 1, "partial generation diagnostics cannot authorize replay");
+        if (expected !== 200) {
+          assert.doesNotMatch(text, /kcr2:|BEGIN_CODEX_ROUTER_CHECKPOINT/);
+          if (events.some((event) => event.response?.usage || event.usage)) {
+            const metered = await waitForUsageEvents(stateDir, submissions, router);
+            assert.equal(metered.at(-1).inputTokens, 37);
+            assert.equal(metered.at(-1).outputTokens, 3);
+            assert.equal(metered.at(-1).generationOutcome, "failed");
+          }
+        }
+      }
+    }
+    jsonReply = true;
+    for (jsonStatus of ["incomplete", "failed", "in_progress", "cancelled", "unknown", "completed", undefined]) {
+      for (const v1 of [false, true]) {
+        const before = submissions;
+        const response = await fetch(`${routerBase(routerPort)}/responses${v1 ? "/compact" : ""}`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model: "deepseek/deepseek-v4-pro", input: [
+            { type: "message", role: "user", content: [{ type: "input_text", text: "Preserve the actual task." }] },
+            ...(!v1 ? [{ type: "compaction_trigger" }] : []),
+          ] }),
+        });
+        const text = await response.text();
+        const valid = jsonStatus === undefined || jsonStatus === "completed";
+        assert.equal(response.status, valid ? 200 : 502, `JSON ${jsonStatus}: ${text}`);
+        assert.equal(submissions - before, 1, "an explicit incomplete status cannot authorize replay");
+        if (!valid) {
+          assert.doesNotMatch(text, /kcr2:|BEGIN_CODEX_ROUTER_CHECKPOINT|PARTIAL_COMPACTION_JSON/);
+          const events = await waitForUsageEvents(stateDir, submissions, router);
+          assert.equal(events.at(-1).inputTokens, 37);
+          assert.equal(events.at(-1).outputTokens, 3);
+          assert.equal(events.at(-1).generationOutcome, "failed");
+        }
+      }
+    }
+    jsonReply = false;
+    // Explicit HTTP refusals keep their original status and intentional fallback,
+    // regardless of whether the refusal body is JSON or SSE.
+    for (quotaRefusal of ["sse", "json"]) {
+      const before = submissions;
+      const fallback = await fetch(`${routerBase(routerPort)}/responses/compact`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "deepseek/deepseek-v4-pro", input: [
+          { type: "message", role: "user", content: [{ type: "input_text", text: "Preserve the actual task." }] },
+        ] }),
+      });
+      assert.equal(fallback.status, 200, await fallback.text());
+      assert.equal(submissions - before, 2, `HTTP 429 ${quotaRefusal}: alternative is genuinely available`);
+    }
+  } finally {
+    await stopChild(router);
+    await closeServer(gateway.server);
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
 test("compaction never treats reasoning as final text and falls back to chat content", async () => {
   let requestCount = 0;
   const contract = (objective) => JSON.stringify({
@@ -4781,7 +4924,7 @@ test("API forwarder downgrades forced tool choices for DeepSeek thinking models"
   }
 });
 
-test("API forwarder coalesces consecutive assistant messages so tool results follow tool calls", async () => {
+test("API forwarder folds assistant tool history without discarding reasoning or vendor metadata", async () => {
   const upstreamRequests = [];
   const upstream = await mockServer(async (request, response) => {
     upstreamRequests.push({ headers: request.headers, body: await bodyJson(request) });
@@ -4821,21 +4964,40 @@ test("API forwarder coalesces consecutive assistant messages so tool results fol
           model: "deepseek-v4-pro",
           messages: [
             { role: "user", content: "run it" },
-            { role: "assistant", tool_calls: [toolCall] },
-            { role: "assistant", content: "Running the command now." },
+            { role: "assistant", reasoning_content: "first thought", tool_calls: [toolCall] },
+            { role: "assistant", content: "Running the command now.", reasoning_content: "second thought", vendor_state: { signature: "synthetic-signature" } },
             { role: "tool", tool_call_id: "call_A", content: "done" },
           ],
         }),
       },
     );
-    assert.equal(response.status, 200);
+    assert.equal(response.status, 200, await response.text());
     const messages = upstreamRequests[0].body.messages;
     assert.equal(messages.length, 3);
     assert.equal(messages[1].role, "assistant");
     assert.equal(messages[1].content, "Running the command now.");
     assert.deepEqual(messages[1].tool_calls, [toolCall]);
+    assert.equal(messages[1].reasoning_content, "first thought\nsecond thought");
+    assert.deepEqual(messages[1].vendor_state, { signature: "synthetic-signature" });
     assert.equal(messages[2].role, "tool");
     assert.equal(messages[2].tool_call_id, "call_A");
+
+    // Different opaque signatures cannot be represented on one assistant
+    // message. Preserve that history and its real result instead of inventing
+    // a merged signature or a replacement tool result.
+    const conflicting = [
+      { role: "user", content: "run it" },
+      { role: "assistant", tool_calls: [toolCall], reasoning_content: "first thought", vendor_state: { signature: "first" } },
+      { role: "assistant", content: "Running the command now.", vendor_state: { signature: "second" } },
+      { role: "tool", tool_call_id: "call_A", content: "actual result" },
+    ];
+    const ambiguous = await fetch(`http://127.0.0.1:${forwarderPort}/v1/chat/completions`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${INTERNAL_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "deepseek-v4-pro", messages: conflicting }),
+    });
+    assert.equal(ambiguous.status, 200);
+    assert.deepEqual(upstreamRequests.at(-1).body.messages, conflicting);
   } finally {
     await stopChild(forwarder);
     await closeServer(upstream.server);
@@ -8860,6 +9022,41 @@ test("an exhausted native reviewer moves later approvals to the configured revie
     await closeServer(native.server);
     await closeServer(gateway.server);
     rmSync(testRoot, { recursive: true, force: true });
+  }
+});
+
+test("an oversized native-review error survives a bounded classifier peek", async () => {
+  const diagnostic = JSON.stringify({ error: { message: "synthetic diagnostic ".repeat(64) } });
+  let submissions = 0;
+  const native = await mockServer(async (request, response) => {
+    await bodyJson(request);
+    submissions += 1;
+    response.writeHead(400, { "Content-Type": "application/json", "X-Original-Error": "preserved" });
+    response.end(diagnostic);
+  });
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${native.port}/backend-api/codex`,
+    CODEX_ROUTER_MAX_BUFFERED_RESPONSE_BYTES: "16",
+    CODEX_ROUTER_QUIET: "1",
+  });
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    const response = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: { Authorization: "Bearer CODEX_CALLER_SECRET", "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "codex-auto-review", input: "review synthetic command" }),
+      signal: AbortSignal.timeout(3_000),
+    });
+    const actual = await response.text();
+    assert.equal(response.status, 400, actual);
+    assert.equal(response.headers.get("x-original-error"), "preserved");
+    assert.equal(actual, diagnostic);
+    assert.equal(submissions, 1);
+  } finally {
+    await stopChild(router);
+    await closeServer(native.server);
   }
 });
 

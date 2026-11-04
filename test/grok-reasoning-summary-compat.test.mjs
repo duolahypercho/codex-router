@@ -444,7 +444,7 @@ test("keeps a finished answer that LiteLLM closes as reasoning_text after a dist
   assert.equal(completed?.response?.output?.[0]?.id, message.id);
 });
 
-test("does not complete an unfinished ImageGen prefix LiteLLM closed as output_text", async () => {
+test("preserves completed output_text without guessing whether the answer is finished", async () => {
   const { EmptyCompletionGuard } = await import("../src/empty-completion-guard.mjs");
   const { Readable, Writable } = await import("node:stream");
   const { pipeline } = await import("node:stream/promises");
@@ -471,15 +471,16 @@ test("does not complete an unfinished ImageGen prefix LiteLLM closed as output_t
   ].join("");
   const repaired = await transformed(input);
   const output = events(repaired);
-  assert.equal(output.some((event) => event.type === "response.output_text.delta"), false);
+  assert.equal(repaired, input);
+  assert.equal(output.some((event) => event.type === "response.output_text.delta"), true);
   assert.equal(
     output.some((event) => event.type === "response.output_item.done" && event.item?.type === "message"),
-    false,
+    true,
   );
   const completed = output.find((event) => event.type === "response.completed");
   assert.ok(completed);
-  assert.deepEqual(completed.response.output, []);
-  assert.equal(repaired.includes(prefix), false);
+  assert.deepEqual(completed.response.output, [message]);
+  assert.equal(repaired.includes(prefix), true);
 
   const guard = new EmptyCompletionGuard("text/event-stream");
   const chunks = [];
@@ -493,76 +494,66 @@ test("does not complete an unfinished ImageGen prefix LiteLLM closed as output_t
       },
     }),
   );
-  assert.equal(guard.isEmpty(), true);
-  assert.equal(guard.hasContent(), false);
+  assert.equal(guard.isEmpty(), false);
+  assert.equal(guard.hasContent(), true);
 });
 
-test("keeps an unpunctuated stream marker LiteLLM closed as output_text", async () => {
-  const marker = "CODEX_ROUTER_STREAM_OK";
-  const message = {
-    id: "msg_stream_ok",
-    type: "message",
-    role: "assistant",
-    status: "completed",
-    content: [{ type: "output_text", text: marker, annotations: [] }],
-  };
-  const input = [
-    namedBlock({ type: "response.created", response: { id: "resp_stream_ok", status: "in_progress" } }),
-    namedBlock({ type: "response.output_item.added", output_index: 0, item: { ...message, status: "in_progress", content: [] } }),
-    namedBlock({ type: "response.content_part.added", item_id: message.id, output_index: 0, content_index: 0, part: { type: "output_text", text: "", annotations: [] } }),
-    namedBlock({ type: "response.output_text.delta", item_id: message.id, output_index: 0, content_index: 0, delta: marker }),
-    namedBlock({ type: "response.output_text.done", item_id: message.id, output_index: 0, content_index: 0, text: marker }),
-    namedBlock({ type: "response.content_part.done", item_id: message.id, output_index: 0, content_index: 0, part: { type: "output_text", text: marker, annotations: [] } }),
-    namedBlock({ type: "response.output_item.done", output_index: 0, item: message }),
-    namedBlock({
-      type: "response.completed",
-      response: { id: "resp_stream_ok", status: "completed", output: [message] },
-    }),
-  ].join("");
-  const repaired = await transformed(input);
-  const output = events(repaired);
-  assert.deepEqual(
-    output.filter((event) => event.type === "response.output_text.delta").map((event) => event.delta),
-    [marker],
-  );
-  const completed = output.find((event) => event.type === "response.completed");
-  assert.equal(completed?.response?.status, "completed");
-  assert.equal(completed?.response?.output?.[0]?.id, message.id);
-  assert.equal(repaired.includes(marker), true);
+test("keeps canonical completed answers independent of wording, framing, and optional part closes", async () => {
+  for (const answer of [
+    "CODEX_ROUTER_STREAM_OK",
+    "I am MiniMax M3 through OpenCode Go",
+    "I will help",
+    "{",
+    "An example:",
+    "a list of",
+    "回答：",
+    "42",
+  ]) {
+    for (const frame of [block, namedBlock]) {
+      for (const closePart of [false, true]) {
+        const message = {
+          id: "msg_answer",
+          type: "message",
+          role: "assistant",
+          status: "completed",
+          content: [{ type: "output_text", text: answer, annotations: [] }],
+        };
+        const input = [
+          { type: "response.output_item.added", output_index: 0, item: { ...message, status: "in_progress", content: [] } },
+          { type: "response.content_part.added", item_id: message.id, output_index: 0, content_index: 0, part: { type: "output_text", text: "", annotations: [] } },
+          { type: "response.output_text.delta", item_id: message.id, output_index: 0, content_index: 0, delta: answer },
+          { type: "response.output_text.done", item_id: message.id, output_index: 0, content_index: 0, text: answer },
+          ...(closePart ? [{ type: "response.content_part.done", item_id: message.id, output_index: 0, content_index: 0, part: message.content[0] }] : []),
+          { type: "response.output_item.done", output_index: 0, item: message },
+          { type: "response.completed", response: { id: "resp_answer", status: "completed", output: [message] } },
+        ].map((event) => frame(event, "\r\n")).join("");
+        assert.equal(await transformed(input, 1), input, `${answer}: ${frame.name}, close=${closePart}`);
+      }
+    }
+  }
 });
 
-test("keeps an unpunctuated identity answer LiteLLM closed as output_text", async () => {
-  const answer = "I am MiniMax M3 through OpenCode Go";
+test("keeps an unpunctuated answer distinct from a reasoning_text close", async () => {
+  const answer = "I will help";
   const message = {
-    id: "msg_identity",
+    id: "msg_distinct",
     type: "message",
     role: "assistant",
     status: "completed",
     content: [{ type: "output_text", text: answer, annotations: [] }],
   };
   const input = [
-    namedBlock({ type: "response.created", response: { id: "resp_identity", status: "in_progress" } }),
-    namedBlock({ type: "response.output_item.added", output_index: 0, item: { ...message, status: "in_progress", content: [] } }),
-    namedBlock({ type: "response.content_part.added", item_id: message.id, output_index: 0, content_index: 0, part: { type: "output_text", text: "", annotations: [] } }),
-    namedBlock({ type: "response.output_text.delta", item_id: message.id, output_index: 0, content_index: 0, delta: answer }),
-    namedBlock({ type: "response.output_text.done", item_id: message.id, output_index: 0, content_index: 0, text: answer }),
-    namedBlock({ type: "response.content_part.done", item_id: message.id, output_index: 0, content_index: 0, part: { type: "output_text", text: answer, annotations: [] } }),
-    namedBlock({ type: "response.output_item.done", output_index: 0, item: message }),
-    namedBlock({
-      type: "response.completed",
-      response: { id: "resp_identity", status: "completed", output: [message] },
-    }),
-  ].join("");
-  const repaired = await transformed(input);
-  const output = events(repaired);
-  assert.deepEqual(
-    output.filter((event) => event.type === "response.output_text.delta").map((event) => event.delta),
-    [answer],
-  );
-  const completed = output.find((event) => event.type === "response.completed");
-  assert.equal(completed?.response?.status, "completed");
-  assert.equal(completed?.response?.output?.[0]?.id, message.id);
-  assert.equal(repaired.includes(answer), true);
+    { type: "response.output_item.added", output_index: 0, item: { ...message, status: "in_progress", content: [] } },
+    { type: "response.output_text.delta", item_id: message.id, output_index: 0, content_index: 0, delta: answer },
+    { type: "response.output_text.done", item_id: message.id, output_index: 0, content_index: 0, text: answer },
+    { type: "response.content_part.done", item_id: message.id, output_index: 0, content_index: 0, part: { type: "reasoning_text", reasoning: "A private summary unrelated to the answer" } },
+    { type: "response.output_item.done", output_index: 0, item: message },
+    { type: "response.completed", response: { id: "resp_distinct", status: "completed", output: [message] } },
+  ].map((event) => block(event)).join("");
+  const output = events(await transformed(input));
+  assert.deepEqual(output.filter((event) => event.type === "response.output_text.delta").map((event) => event.delta), [answer]);
+  assert.deepEqual(output.find((event) => event.type === "response.content_part.done").part, message.content[0]);
+  assert.deepEqual(output.at(-1).response.output, [message]);
 });
 
 test("repairs one-byte CRLF chunks without changing their framing", async () => {

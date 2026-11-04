@@ -133,6 +133,19 @@ test("OpenCode curation keeps each endpoint family on its documented protocol", 
     /Google's native protocol/,
   );
   assert.equal(curatedModelBlockReason("opencode-go", "grok-4.5"), undefined);
+  // #1131: each id's OpenCode Go catalog `api` object names exactly one wire.
+  // minimax-m3 is Messages while minimax-m3.1-flash is Chat, so these stay
+  // explicit per-id entries rather than a family prefix.
+  for (const [model, provider] of [
+    ["gpt-6-luna", "opencode-go-responses"],
+    ["claude-haiku-5-5", "opencode-go-messages"],
+    ["minimax-m3.1-flash", "opencode-go"],
+    ["kimi-k3.1-pro", "opencode-go"],
+    ["minimax-m3", "opencode-go-messages"],
+  ]) {
+    assert.equal(curatedModelBlockReason("opencode-go", model), undefined, model);
+    assert.equal(curatedModelProviderId("opencode-go", model), provider, model);
+  }
   assert.equal(curatedModelBlockReason("opencode-go", "gemini-4-argon-contributor"), undefined);
   assert.equal(
     curatedModelProviderId("opencode-go", "gemini-4-argon-contributor"),
@@ -255,39 +268,23 @@ test("scripted OpenCode curation refuses an uncertified discovered protocol rout
   }
 });
 
-// OpenCode answers a free-tier request that did not come from its own client
-// with `FreeTierError: OpenCode's free tier can only be used from within
-// OpenCode`. Curating such an id would hand the operator a picker entry that
-// fails on its first request, which is the exact outcome the unverified-
-// protocol refusal beside it exists to prevent, so the gate refuses it too --
-// and says the provider's policy is the cause, not this router's coverage.
-test("client-gated OpenCode Free ids are refused, and the one that answers is not", () => {
+// OpenCode free ids that need the public CLI fingerprint are curatable now
+// that the free lane sends it. Withdrawn free ids stay refused.
+test("fingerprint free ids can be curated; withdrawn OpenCode Free ids stay refused", () => {
   for (const id of [
     "big-pickle",
+    "beam-free",
+    "flint-40b-free",
     "mimo-v2.6-flash-free",
     "deepseek-v4.1-flash-free",
     "glm-5.3-flash-free",
-    "jev-1.13-free",
     "nemotron-3.5-lightning-free",
     "nemotron-3.5-super-vl-free",
   ]) {
-    const reason = curatedModelBlockReason("opencode-free", id);
-    assert.equal(typeof reason, "string", `${id} is not refused`);
-    assert.match(reason, /only to its own client/);
-    assert.match(reason, /can only be used from within OpenCode/);
-    // The cause has to be named as the provider's, or the message reads like a
-    // missing feature somebody could wait for this repository to ship.
-    assert.match(reason, /access policy rather than a router compatibility limitation/);
-    assert.throws(() => curatedModelProviderId("opencode-free", id), /only to its own client/);
-    // The Responses half of the same provider pair answers identically.
-    assert.match(
-      curatedModelBlockReason("opencode-free-responses", id) || "",
-      /only to its own client/,
-    );
+    assert.equal(curatedModelBlockReason("opencode-free", id), undefined, id);
+    assert.equal(curatedModelProviderId("opencode-free", id), "opencode-free", id);
   }
-  // The ids Zen has withdrawn are refused for their own reason, not the
-  // gate's: the id no longer exists, so the cause is not OpenCode's access
-  // policy and the message must not point at it.
+  // The ids Zen has withdrawn are refused: the id no longer exists.
   for (const id of [
     "deepseek-v4-flash-free",
     "hy3-free",
@@ -300,12 +297,11 @@ test("client-gated OpenCode Free ids are refused, and the one that answers is no
     const reason = curatedModelBlockReason("opencode-free", id);
     assert.equal(typeof reason, "string", `${id} is not refused`);
     assert.match(reason, /has withdrawn/);
-    assert.doesNotMatch(reason, /only to its own client/);
     assert.throws(() => curatedModelProviderId("opencode-free", id), /has withdrawn/);
   }
 });
 
-// The gate withholds a route's first appearance. It must not reach a row the
+// Withdrawn / previously gated ids already curated must still resolve. A row the
 // operator already has: curation resolves every stored entry through the same
 // function, and refusing those would strand them short of their documented
 // provider and metadata.
@@ -332,10 +328,10 @@ test("a gated id already curated still resolves to its documented route", () => 
   assert.equal(normalized.autoCompact, 850_000);
 });
 
-test("scripted OpenCode Free curation refuses a client-gated id by name", () => {
-  const dir = mkdtempSync(path.join(os.tmpdir(), "curate-models-opencode-free-gated-"));
+test("scripted OpenCode Free curation refuses a withdrawn id by name", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "curate-models-opencode-free-withdrawn-"));
   const fixture = path.join(dir, "models.json");
-  writeFileSync(fixture, JSON.stringify({ data: [{ id: "mimo-v2.6-flash-free" }] }));
+  writeFileSync(fixture, JSON.stringify({ data: [{ id: "hy3-free" }] }));
   try {
     const result = spawnSync(
       process.execPath,
@@ -343,7 +339,7 @@ test("scripted OpenCode Free curation refuses a client-gated id by name", () => 
         path.join(root, "src", "curate-models.mjs"),
         "opencode-free",
         "--models",
-        "mimo-v2.6-flash-free",
+        "hy3-free",
         "--fixture",
         fixture,
         "--no-apply",
@@ -360,7 +356,7 @@ test("scripted OpenCode Free curation refuses a client-gated id by name", () => 
       },
     );
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /mimo-v2\.6-flash-free only to its own client/);
+    assert.match(result.stderr, /has withdrawn hy3-free/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -1734,5 +1730,41 @@ test("scripted curation records that a served window and modalities came from th
     assert.match(silent.description, /conservative default metadata/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("interactive image choice overrides advertised modalities in the saved model", () => {
+  for (const contextLength of [undefined, 131072]) for (const acceptImage of [false, true]) {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "curate-image-choice-"));
+    const fixture = path.join(dir, "models.json");
+    const file = path.join(dir, "user-models.json");
+    writeFileSync(fixture, JSON.stringify({ data: [{ id: "vendor/vision", ...(contextLength ? { context_length: contextLength } : {}), input_modalities: ["text", "image"] }] }));
+    const source = `
+      import { registerHooks } from 'node:module';
+      import { pathToFileURL } from 'node:url';
+      registerHooks({ load(url, context, nextLoad) {
+        if (url.endsWith('/src/setup-shared.mjs')) return { format: 'module', shortCircuit: true,
+          source: 'let toggles=0; export function promptLine(label){return label.startsWith("Toggle numbers") && toggles++===0 ? "1" : "";} export function confirm(label){return label.includes("image input") ? ${acceptImage} : true;}' };
+        return nextLoad(url, context);
+      }});
+      Object.defineProperty(process.stdin, 'isTTY', { value: true });
+      process.argv = [process.execPath, ${JSON.stringify(path.join(root, "src", "curate-models.mjs"))}, 'openrouter', '--fixture', ${JSON.stringify(fixture)}, '--no-apply'];
+      await import(pathToFileURL(process.argv[1]).href);
+    `;
+    try {
+      const result = spawnSync(process.execPath, ["--input-type=module", "--eval", source], {
+        cwd: root, encoding: "utf8", env: { ...process.env,
+          HOME: path.join(dir, "home"), USERPROFILE: path.join(dir, "home"), CODEX_HOME: path.join(dir, "codex"),
+          MODEL_ROUTER_STATE_DIR: dir, CODEX_ROUTER_STATE_DIR: dir, MODEL_ROUTER_USER_MODELS: file,
+          MODEL_ROUTER_MODEL_PICKER_STATE: path.join(dir, "picker.json"), CODEX_ROUTER_NO_DISCOVERY: "1" },
+      });
+      assert.equal(result.status, 0, result.stderr);
+      const model = JSON.parse(readFileSync(file, "utf8")).models.find((entry) => entry.upstreamModel === "vendor/vision");
+      assert.ok(model);
+      assert.deepEqual(model.inputModalities, acceptImage ? ["text", "image"] : ["text"]);
+      if (!acceptImage) assert.doesNotMatch(model.description, /input modalities as advertised/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   }
 });

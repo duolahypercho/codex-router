@@ -1,0 +1,1 @@
+- Remove the unreachable array form of the desktop picker operation; the existing boolean show-all control performs one publication.

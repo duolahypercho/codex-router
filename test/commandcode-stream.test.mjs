@@ -188,15 +188,18 @@ test("anthropic tool calls become a tool_use block with json deltas", () => {
   assert.equal(events.find((entry) => entry.event === "message_delta").data.delta.stop_reason, "tool_use");
 });
 
-test("a stream that stops without a terminal event still terminates cleanly", () => {
-  const { sse } = run([
-    { type: "start" },
-    { type: "text-start", id: "t" },
-    { type: "text-delta", id: "t", text: "half" },
-  ]);
-  const chunks = openAiChunks(sse);
-  assert.equal(chunks.at(-1).choices[0].finish_reason, "stop");
-  assert.ok(sse.endsWith("data: [DONE]\n\n"));
+test("clean EOF without a finish event retains main's compatibility convention", () => {
+  for (const protocol of ["openai", "anthropic"]) {
+    const { sse, translator } = run([
+      { type: "start" }, { type: "text-start", id: "t" },
+      { type: "text-delta", id: "t", text: "half" },
+    ], { protocol });
+    assert.equal(translator.error, undefined);
+    const body = translator.body();
+    assert.equal(protocol === "openai" ? body.choices[0].finish_reason : body.stop_reason,
+      protocol === "openai" ? "stop" : "end_turn");
+    assert.match(sse, protocol === "openai" ? /data: \[DONE\]/ : /event: message_stop/);
+  }
 });
 
 test("the whole answer is assembled for a caller that did not ask to stream", () => {
@@ -246,9 +249,192 @@ test("a data-prefixed line and a [DONE] sentinel are tolerated", async () => {
   const events = [];
   const body = Readable.from([
     Buffer.from('data: {"type":"start"}\n', "utf8"),
-    Buffer.from("not json\n", "utf8"),
     Buffer.from("[DONE]\n", "utf8"),
   ]);
   for await (const event of readGenerateEvents(body)) events.push(event);
   assert.deepEqual(events, [{ type: "start" }]);
+});
+
+test("malformed or invalid UTF-8 events become a safe explicit error", async () => {
+  for (const bytes of [Buffer.from("not json\n"), Buffer.from("[]\n"), Buffer.from([0xff]), Buffer.from([0xe4, 0xb8])]) {
+    const events = [];
+    for await (const event of readGenerateEvents(Readable.from([bytes]))) events.push(event);
+    assert.deepEqual(events, [{ type: "error", message: "Command Code sent an unreadable generation event." }]);
+  }
+});
+
+test("one-byte Unicode chunks and valid terminal reasons retain their meaning", async () => {
+  const event = { type: "text-delta", id: "t", text: "中文🙂" };
+  const bytes = Buffer.from(`${JSON.stringify(event)}\n`);
+  const events = [];
+  for await (const parsed of readGenerateEvents(Readable.from(Array.from(bytes, (byte) => Buffer.from([byte]))))) events.push(parsed);
+  assert.deepEqual(events, [event]);
+  for (const [reason, openai, anthropic] of [
+    ["stop", "stop", "end_turn"], ["tool-calls", "tool_calls", "tool_use"],
+    ["length", "length", "max_tokens"], ["content-filter", "content_filter", "end_turn"],
+  ]) {
+    for (const [protocol, expected] of [["openai", openai], ["anthropic", anthropic]]) {
+      const { translator } = run([{ type: "finish", finishReason: reason }], { protocol });
+      assert.equal(translator.error, undefined);
+      const body = translator.body();
+      assert.equal(protocol === "openai" ? body.choices[0].finish_reason : body.stop_reason, expected);
+    }
+  }
+});
+
+
+test("buffered Anthropic tool arguments are never repaired to an empty object", () => {
+  for (const raw of ['{"path":', "null", "[]", '"text"']) {
+    const events = [
+      { type: "tool-input-start", id: "t", toolName: "read_file" },
+      { type: "tool-input-delta", id: "t", delta: raw },
+      { type: "tool-input-end", id: "t" },
+      { type: "finish-step", finishReason: "tool-calls" },
+    ];
+    const translator = new GenerateTranslator({ protocol: "anthropic" });
+    for (const event of events) translator.push(event);
+    assert.equal(translator.body(), undefined);
+    assert.match(translator.error, /unreadable tool arguments/);
+    assert.equal(translator.finish(), "");
+    // Streaming forwards the original argument fragments. It never parses and
+    // replaces them with an invented object on the caller's behalf.
+    const { sse } = run(events, { protocol: "anthropic" });
+    const args = anthropicEvents(sse)
+      .filter(({ data }) => data.delta?.type === "input_json_delta")
+      .map(({ data }) => data.delta.partial_json).join("");
+    assert.equal(args, raw);
+  }
+  for (const raw of ["{}", '{"path":"readme.md"}']) {
+    const translator = new GenerateTranslator({ protocol: "anthropic" });
+    for (const event of [
+      { type: "tool-input-start", id: "t", toolName: "read_file" },
+      { type: "tool-input-delta", id: "t", delta: raw },
+      { type: "finish-step", finishReason: "tool-calls" },
+    ]) translator.push(event);
+    assert.deepEqual(translator.body().content[0].input, JSON.parse(raw));
+  }
+});
+
+test("received finish events retain legacy reason fallback without an origin-completion claim", () => {
+  for (const reason of ["unknown", "other", "future-reason", undefined]) {
+    for (const protocol of ["openai", "anthropic"]) {
+      const { translator, sse } = run([
+        { type: "text-start", id: "answer" },
+        { type: "text-delta", id: "answer", text: "Partial answer" },
+        // SDK flush can synthesize both events without an origin finish reason.
+        { type: "text-end", id: "answer" },
+        { type: "finish", finishReason: reason },
+      ], { protocol });
+      assert.equal(translator.error, undefined);
+      const body = translator.body();
+      assert.equal(protocol === "openai" ? body.choices[0].finish_reason : body.stop_reason,
+        protocol === "openai" ? "stop" : "end_turn");
+      assert.match(sse, protocol === "openai" ? /data: \[DONE\]/ : /event: message_stop/);
+    }
+  }
+});
+
+test("SSE comment lines are ignored across byte boundaries without hiding malformed data", async () => {
+  const expected = [{ type: "text-delta", id: "t", text: "完整" }, { type: "finish", finishReason: "stop" }];
+  const bytes = Buffer.from(`: keepalive\r\ndata: ${JSON.stringify(expected[0])}\r\n\r\n:\r\n` +
+    `data: ${JSON.stringify(expected[1])}\n\n: trailing comment`);
+  const parsed = [];
+  for await (const event of readGenerateEvents(Readable.from(Array.from(bytes, (byte) => Buffer.from([byte]))))) parsed.push(event);
+  assert.deepEqual(parsed, expected);
+  const malformed = [];
+  for await (const event of readGenerateEvents(Readable.from([Buffer.from(": keepalive\ndata: {bad\n")]))) malformed.push(event);
+  assert.deepEqual(malformed, [{ type: "error", message: "Command Code sent an unreadable generation event." }]);
+});
+
+test("both caller protocols reject malformed tool arguments before any successful terminal", () => {
+  for (const protocol of ["openai", "anthropic"]) {
+    for (const raw of ['{"path":', "null", "[]", '"text"']) {
+      const events = [
+        { type: "tool-input-start", id: "call", toolName: "read_file" },
+        { type: "tool-input-delta", id: "call", delta: raw },
+        { type: "tool-input-end", id: "call" },
+        { type: "finish", finishReason: "tool-calls" },
+      ];
+      const { translator, sse } = run(events, { protocol });
+      assert.equal(translator.body(), undefined);
+      assert.match(translator.error, /unreadable tool arguments/);
+      assert.doesNotMatch(sse, /data: \[DONE\]|event: message_stop/);
+      assert.equal(translator.finish(), "");
+    }
+  }
+});
+
+test("an explicit empty tool-call input completes an argument-free incremental call once", () => {
+  for (const protocol of ["openai", "anthropic"]) {
+    const { translator, sse } = run([
+      { type: "tool-input-start", id: "clock", toolName: "get_time" },
+      { type: "tool-input-end", id: "clock" },
+      { type: "tool-call", toolCallId: "clock", toolName: "get_time", input: {} },
+      { type: "finish", finishReason: "tool-calls" },
+    ], { protocol });
+    assert.equal(translator.error, undefined);
+    const body = translator.body();
+    if (protocol === "openai") {
+      assert.equal(body.choices[0].message.tool_calls.length, 1);
+      assert.equal(body.choices[0].message.tool_calls[0].function.arguments, "{}");
+      const calls = openAiChunks(sse).flatMap((part) => part.choices[0].delta.tool_calls || []);
+      assert.equal(calls.filter((call) => call.id).length, 1);
+      assert.equal(calls.map((call) => call.function?.arguments || "").join(""), "{}");
+      assert.match(sse, /data: \[DONE\]/);
+    } else {
+      assert.deepEqual(body.content, [{ type: "tool_use", id: "clock", name: "get_time", input: {} }]);
+      const events = anthropicEvents(sse);
+      const starts = events.filter(({ data }) => data.content_block?.type === "tool_use");
+      assert.equal(starts.length, 1);
+      assert.deepEqual(starts[0].data.content_block.input, {});
+      // The start already carries {}, so no delta may target its closed block.
+      assert.equal(events.filter(({ data }) => data.delta?.type === "input_json_delta").length, 0);
+      assert.equal(events.filter(({ event }) => event === "content_block_stop").length, 1);
+      assert.match(sse, /event: message_stop/);
+    }
+  }
+});
+
+test("empty-tool compatibility does not repair nonempty malformed input", () => {
+  for (const protocol of ["openai", "anthropic"]) {
+    for (const input of [[], "{}", 0]) {
+      const { translator, sse } = run([
+        { type: "tool-call", toolCallId: "bad", toolName: "run", input },
+        { type: "finish", finishReason: "tool-calls" },
+      ], { protocol });
+      assert.equal(translator.body(), undefined);
+      assert.match(translator.error, /unreadable tool arguments/);
+      assert.doesNotMatch(sse, /data: \[DONE\]|event: message_stop/);
+    }
+    for (const raw of ["{bad", " ", "null", "[]"]) {
+      const { translator, sse } = run([
+        { type: "tool-input-start", id: "bad", toolName: "run" },
+        { type: "tool-input-delta", id: "bad", delta: raw },
+        { type: "tool-input-end", id: "bad" },
+        { type: "tool-call", toolCallId: "bad", toolName: "run", input: {} },
+        { type: "finish", finishReason: "tool-calls" },
+      ], { protocol });
+      assert.equal(translator.body(), undefined);
+      assert.match(translator.error, /unreadable tool arguments/);
+      assert.doesNotMatch(sse, /data: \[DONE\]|event: message_stop/);
+    }
+  }
+});
+
+
+test("missing final input and delta-free calls retain main's empty-object compatibility", () => {
+  for (const protocol of ["openai", "anthropic"]) {
+    for (const events of [
+      [{ type: "tool-call", toolCallId: "empty", toolName: "ping" }],
+      [{ type: "tool-call", toolCallId: "empty", toolName: "ping", input: null }],
+      [{ type: "tool-input-start", id: "empty", toolName: "ping" }, { type: "tool-input-end", id: "empty" }],
+    ]) {
+      const { translator, sse } = run([...events, { type: "finish", finishReason: "tool-calls" }], { protocol });
+      assert.equal(translator.error, undefined);
+      const body = translator.body();
+      if (protocol === "openai") assert.equal(body.choices[0].message.tool_calls[0].function.arguments, "{}");
+      else assert.deepEqual(body.content[0].input, {});
+      assert.match(sse, protocol === "openai" ? /data: \[DONE\]/ : /event: message_stop/);
+    }
+  }
 });

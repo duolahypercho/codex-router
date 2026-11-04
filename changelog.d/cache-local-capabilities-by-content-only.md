@@ -1,0 +1,1 @@
+- Cache local model capabilities only when a content ID is available, so replacing a tag cannot reuse old tools or image support during publication.

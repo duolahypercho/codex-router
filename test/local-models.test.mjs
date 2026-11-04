@@ -19,6 +19,7 @@ const {
   fitAdvisory,
   isLocalModelEnabled,
   localModelInventory,
+  localModelCapabilities,
   localModelStatusInputs,
   localModelsSnapshot,
   machineCapacity,
@@ -26,7 +27,6 @@ const {
   parseOllamaList,
   rateModelFit,
   readLocalModelSelection,
-  removeLocalModel,
   renderLocalModels,
   runningLocalModels,
   setLocalModelEnabled,
@@ -133,38 +133,6 @@ test("the snapshot joins installed, checked, loaded, and vision state", () => {
   // None of these can call tools, so none can be a Codex chat model.
   assert.equal(snapshot.usableAsChat, 0);
   assert.deepEqual(snapshot.runtime, { installed: true, running: true, version: "0.1.0" });
-});
-
-test("removing a model needs explicit consent and unchecks it", () => {
-  setLocalModelEnabled("doomed:latest", true, NO_OLLAMA);
-  assert.throws(
-    () => removeLocalModel("doomed:latest", { spawn: () => ({ status: 0 }) }),
-    /deletes it from disk/,
-  );
-  // Refused without consent, so it is still checked and still on disk.
-  assert.ok(readLocalModelSelection().enabled.includes("doomed:latest"));
-
-  let called;
-  removeLocalModel("doomed:latest", {
-    ...NO_OLLAMA,
-    confirmed: true,
-    spawn: (bin, args) => { called = { bin, args }; return { status: 0 }; },
-  });
-  assert.deepEqual(called, { bin: "ollama", args: ["rm", "doomed:latest"] });
-  // A model that is gone must not stay checked.
-  assert.ok(!readLocalModelSelection().enabled.includes("doomed:latest"));
-});
-
-test("a failed removal surfaces ollama's own message", () => {
-  assert.throws(
-    () =>
-      removeLocalModel("missing", {
-        ...NO_OLLAMA,
-        confirmed: true,
-        spawn: () => ({ status: 1, stderr: "model 'missing' not found" }),
-      }),
-    /model 'missing' not found/,
-  );
 });
 
 test("ollama's reported capabilities are parsed, not guessed from the name", async () => {
@@ -646,6 +614,12 @@ function ggufHeader(pairs, { magic = 0x46554747, declaredPairs } = {}) {
   for (const [key, type, value] of pairs) {
     chunks.push(str(key), u32(type));
     if (type === 8) chunks.push(str(value));
+    else if (type === 2 || type === 3) {
+      const bytes = Buffer.alloc(2);
+      if (type === 2) bytes.writeUInt16LE(value);
+      else bytes.writeInt16LE(value);
+      chunks.push(bytes);
+    }
     else if (type === 4) chunks.push(u32(value));
     else if (type === 10) chunks.push(u64(value));
     else if (type === 9) {
@@ -731,4 +705,30 @@ test("the listing says how little room Codex leaves in the window", () => {
   // the measurement cannot drift apart.
   assert.match(rendered, new RegExp(`${Math.round(CODEX_PROMPT_TOKENS / 1000)}K of the 32K window`));
   assert.match(rendered, /agent-check/);
+});
+
+test("16-bit GGUF values preserve the following context metadata", () => {
+  for (const [type, value] of [[2, 65535], [3, -7]]) {
+    const buffer = ggufHeader([["small.value", type, value], ["llama.context_length", 4, 32768]]);
+    assert.equal(parseGgufContextLength(buffer), 32768);
+    assert.equal(parseGgufContextLength(ggufHeader([["llama.context_length", type, 16384]])), 16384);
+    assert.equal(parseGgufContextLength(buffer.subarray(0, 30)), undefined);
+  }
+});
+
+test("capabilities without a content ID ignore old tag cache entries", () => {
+  const cache = { "retagged:latest": ["completion", "tools", "vision"] };
+  let shows = 0;
+  const spawn = (_command, args) => {
+    if (args[0] !== "show") return { status: 0, stdout: "ollama version 1" };
+    shows += 1;
+    return { status: 0, stdout: "Capabilities\n    completion\n" };
+  };
+  assert.deepEqual(localModelCapabilities("retagged:latest", undefined, { spawn, cache }), ["completion"]);
+  assert.deepEqual(localModelCapabilities("retagged:latest", undefined, { spawn, cache }), ["completion"]);
+  assert.equal(shows, 2, "a mutable tag must be inspected on each publication");
+  assert.deepEqual(cache["retagged:latest"], ["completion", "tools", "vision"]);
+  assert.deepEqual(localModelCapabilities("retagged:latest", "new-content-id", { spawn, cache }), ["completion"]);
+  assert.deepEqual(localModelCapabilities("retagged:latest", "new-content-id", { spawn, cache }), ["completion"]);
+  assert.equal(shows, 3, "unchanged content retains the polling cache");
 });

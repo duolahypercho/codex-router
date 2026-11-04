@@ -484,18 +484,18 @@ export async function ensureOllamaHeadless({
     closeSync(logFd);
   }
   child?.unref?.();
-  const ready = await waitForOllama({ baseUrl, fetchImpl, timeoutMs });
-  if (!ready.reachable) {
-    throw new Error(
-      `Ollama was started headlessly but did not become ready${ready.error ? `: ${ready.error}` : "."}`,
-    );
-  }
-  const identity = processIdentity(child?.pid);
-  if (!identity) {
-    child?.kill?.("SIGTERM");
-    throw new Error("Ollama started, but Codex Router could not verify ownership of its process.");
-  }
+  let ready;
   try {
+    ready = await waitForOllama({ baseUrl, fetchImpl, timeoutMs });
+    if (!ready.reachable) {
+      throw new Error(
+        `Ollama was started headlessly but did not become ready${ready.error ? `: ${ready.error}` : "."}`,
+      );
+    }
+    const identity = processIdentity(child?.pid);
+    if (!identity) {
+      throw new Error("Ollama started, but Codex Router could not verify ownership of its process.");
+    }
     writePrivateJson(OLLAMA_RUNTIME_STATE_PATH, {
       version: 1,
       managed: true,
@@ -507,9 +507,7 @@ export async function ensureOllamaHeadless({
       logPath: OLLAMA_LOG_PATH,
     });
   } catch (error) {
-    // A daemon whose ownership record could not be persisted would be
-    // indistinguishable from an external server on shutdown. Do not leave it
-    // behind after reporting startup failure.
+    // Until durable adoption succeeds, this operation owns the spawned child.
     child?.kill?.("SIGTERM");
     throw error;
   }

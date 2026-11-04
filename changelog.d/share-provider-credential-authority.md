@@ -1,0 +1,1 @@
+- Resolve model discovery and provider account usage through the existing API-key pool authority; an unusable configured pool no longer falls back to a different legacy account. Catalog discovery uses a stable eligible account so ordinary round-robin traffic and quota ranking updates do not invalidate its account provenance.

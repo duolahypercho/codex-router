@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -8,6 +8,8 @@ import { privateFileIsProtected } from "../src/file-security.mjs";
 
 const stateDir = mkdtempSync(path.join(os.tmpdir(), "presence-state-test-"));
 process.env.CODEX_ROUTER_STATE_DIR = stateDir;
+process.env.CODEX_HOME = path.join(stateDir, "codex");
+process.env.MODEL_ROUTER_CURSOR_LAUNCHER = path.join(stateDir, "cursor-router-agent");
 
 // A PATH with no `codex` on it, so the terminal-client probe answers no unless
 // a test puts one there. Set before the module loads: the probe memoizes.
@@ -40,7 +42,8 @@ const {
   terminalCodexInstalled,
 } = await import("../src/presence-state.mjs");
 
-const { DSH_CATALOG_PATH } = await import("../src/paths.mjs");
+const { DSH_CATALOG_PATH, GEMINI_CATALOG_PATH, CURSOR_CATALOG_PATH, CURSOR_LAUNCHER_PATH,
+  CLAUDE_CATALOG_PATH, OPENCLAW_CATALOG_PATH, ROUTED_HARNESS_CATALOG_PATHS } = await import("../src/paths.mjs");
 
 function publishHarness() {
   writeFileSync(DSH_CATALOG_PATH, JSON.stringify({ models: [] }), "utf8");
@@ -168,3 +171,20 @@ test("presence falls back to always when the state file is unusable", () => {
   writeFileSync(PRESENCE_STATE_PATH, JSON.stringify({ version: 1, mode: "nonsense" }), "utf8");
   assert.equal(readPresenceMode(), PRESENCE_ALWAYS);
 });
+
+test("each published companion pins presence and removal restores the raw preference", () => {
+  setPresenceMode(PRESENCE_FOLLOW_CODEX);
+  for (const target of [GEMINI_CATALOG_PATH, CURSOR_CATALOG_PATH, CLAUDE_CATALOG_PATH,
+    OPENCLAW_CATALOG_PATH, ...Object.values(ROUTED_HARNESS_CATALOG_PATHS), CURSOR_LAUNCHER_PATH]) {
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, target === CURSOR_LAUNCHER_PATH ? "# codex-router-cursor-launcher" : "{}");
+    try {
+      assert.equal(terminalCodexInstalled(), false);
+      assert.equal(effectivePresenceMode(), PRESENCE_ALWAYS, target);
+      assert.equal(readPresenceMode(), PRESENCE_FOLLOW_CODEX);
+    } finally { rmSync(target, { force: true }); }
+    assert.equal(effectivePresenceMode(), PRESENCE_FOLLOW_CODEX, target);
+  }
+});
+
+test.after(() => rmSync(stateDir, { recursive: true, force: true }));

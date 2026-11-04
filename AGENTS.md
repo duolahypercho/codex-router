@@ -919,23 +919,23 @@ so the unit of evidence is always the slug, never the model name.
    failure, and a stale `checking` record is retryable. Explicit registry-v1
    routes are settled decisions and are never re-opened by this local probe;
    registry-v2 routes need no compatibility probe.
-2. `multi-agent-proofs.json` is diagnostic application evidence only. Local
-   `candidate`, and legacy `experimental` / `proven`, records cannot change the
-   catalog's `multi_agent_version`, managed agent definitions, or any client
-   route. `applySubagentProofs` deliberately returns the registry capabilities
-   unchanged. An unreadable proofs file therefore authorizes and promotes
-   nothing.
+2. `multi-agent-proofs.json` is diagnostic history only. Local records,
+   including `candidate`, `experimental`, `proven`, and historical `verified`,
+   never grant or revoke subagent capabilities. Publication uses registry
+   capabilities and explicit operator selection through
+   `applyMultiAgentCapabilities`; unreadable diagnostic history changes
+   neither.
 3. The compatibility probe is not the native collaboration proof. It does not
    exercise Codex's encrypted child payload relay, a marker-return spawn, or a
    same-thread follow-up. A successful ordinary chat/tool request must never be
    presented as evidence that the model can hold the native v2 child role.
-4. Only the exact checked-in registry route may assert v2. The route's slug,
-   provider, and upstream model must match an accepted artifact under
-   `v2_agent/`, and the accepted artifact and `multiAgentVersion: "v2"` change
-   land in the same pull request. CI enforces the implication in both
-   directions for every post-workflow promotion. Six exact Kimi/Grok route
-   identities certified before the artifact gate are grandfathered; changing
-   any part of one identity loses that exception.
+4. Only the exact checked-in registry route may assert shipped v2
+   certification. The route's slug, provider, and upstream model must match an
+   accepted artifact under `v2_agent/`, and the accepted artifact and
+   `multiAgentVersion: "v2"` change land in the same pull request. CI enforces
+   the implication in both directions for every post-workflow promotion.
+   Six exact Kimi/Grok route identities certified before the artifact gate
+   are grandfathered; changing any part of one identity loses that exception.
 5. `control subagents verify [SLUG ...]` re-researches explicitly (foreground,
    about two requests per unknown candidate); with no slugs it sweeps the
    enabled list. Select-all and mode changes never trigger probes. Provider,
@@ -985,16 +985,14 @@ so the unit of evidence is always the slug, never the model name.
    Codex collaboration: tool calls work, encrypted subagent payload relay works
    without disclosure, a marker-return spawn succeeds, and a same-thread
    follow-up succeeds. Otherwise omit it and retain conservative v1 behavior.
-   The registry is not the only way a route reaches v2. The operator's own
-   selection promotes it — `subagents mode selected` plus `subagents set <slug>
-   on`, or `mode all` — and so does a completed local verification of all five
-   checks recorded in `multi-agent-proofs.json`. Selection is the ordinary path
-   and the one the Control Center switch uses; the registry exists so nobody
-   has to select a proven route by hand. None of this loosens the gate: an
-   explicit `off` beats every mode, a hidden model is never promoted, a partial
-   verification or a mismatched slug promotes nothing, the legacy diagnostic
-   statuses promote nothing, and only the pull request that moves the registry
-   entry may accept a `v2_agent/` application. Read
+   The operator's own selection can also offer a route as v2 — `subagents mode
+   selected` plus `subagents set <slug> on`, or `mode all`. Selection is intent,
+   not certification, and is the ordinary path the Control Center switch uses.
+   The registry exists so nobody has to select a proven route by hand. An
+   explicit `off` beats every mode and a hidden model is never promoted. Local
+   diagnostic records, including historical `verified` records, never grant or
+   revoke this role. Only the pull request that moves the registry entry may
+   accept a `v2_agent/` application. Read
    `docs/SUBAGENT-CERTIFICATION.md` in full before changing
    `src/subagent-*.mjs`, `src/multi-agent-state.mjs`, `v2_agent/`, or the
    Subagents column — it records which questions have already been answered at
@@ -1426,6 +1424,37 @@ curation never takes a model out of a user's configuration.
 Do not try to get past that gate. The restriction is the provider's access
 policy, stated in its own error, so reproducing whatever identifies OpenCode's
 client would be circumventing it rather than fixing a compatibility problem.
+
+## `free/auto` is one picker entry over a pool of anonymous free models
+
+`config/free/auto.json` publishes exactly one listed model, `free/auto`. Its
+members are generated at registry load by `withFreePoolMembers`
+(`src/model-registry.mjs`) from `src/free-pool-catalog.mjs`. They are unlisted,
+so they must never reach the picker, `/v1/models`, Cursor, DSH or Gemini
+publication. `test/free-pool-router.test.mjs` asserts this.
+
+- **Endpoints.** Members use only the two documented anonymous endpoints
+  pinned in `ANONYMOUS_ENDPOINTS`: Kilo's `:free` gateway and the OpenCode Zen
+  free lane. Do not add a member that needs a key, a borrowed credential, a
+  spoofed client header, or anything else that identifies as another product.
+  OpenCode ids in `OPENCODE_FREE_CLIENT_GATED` or `OPENCODE_FREE_WITHDRAWN` are
+  filtered out of the lane by `openCodeFreeIdRefused`.
+- **Walking the pool.** `src/router.mjs` walks the members under the same rule
+  as model failover: only before the first relayed byte. A member that streamed
+  text keeps the turn. `classifyFreePoolFailure` in `src/free-pool.mjs` decides
+  whether a failure moves the turn on and for how long it drains. An ordinary
+  400 is returned as it is.
+- **Drains.** Drains live in `free-pool-drains.json`, never in
+  `provider-cooldowns.json`. A drained free member must not cool down the
+  user's own `kilo-free` or `opencode-free` routes.
+- **Refresh.** `./bin/control free-pool refresh` and the daily start-up refresh
+  run only once `free` is explicitly enabled and
+  `MODEL_ROUTER_FREE_POOL_REFRESH` is not `0`, so tests make no network calls.
+  A refresh that fails for one lane keeps that lane's last good list.
+- **Usage.** Usage rows carry `freePool` and `freePoolReason` through
+  `usageDiagnosticMetadata`. The Control Center reads them through
+  `control free-pool status` (the `getFreePool` IPC) and never directly from
+  the network.
 
 ## Ox Alpha became GLM-5.3-Flash on OpenCode Go
 
@@ -2578,13 +2607,11 @@ every Chat Completions route (measured on `commandcode/hy4-preview` and
    `The skill is loaded. This is a single concept-sheet generation: a
    GTA-style AAA` as `final_answer`. Hold the done event until the part
    close; if its text is the thinking or a prefix of it, withhold so
-   empty-completion retries. A held done that LiteLLM then closes as
-   `output_text` is still truncated when the snapshot is a mid-clause cut
-   (`I'll use the image generation` after the 14:12 empty-completion retry).
-   Punctuated answers stay answers. A single token with no whitespace
-   (`CODEX_ROUTER_STREAM_OK`) is a finished marker, not a mid-clause cut.
-   If the stream completes without a grown done, withhold the message so
-   empty-completion retries or fails rather than succeeding.
+   empty-completion retries. Only that structural `reasoning_text` conflict
+   authorizes withholding: canonical `output_text` stays byte-identical,
+   regardless of language, punctuation, length, or whether it sounds like a
+   plan. If a structural conflict completes without a grown done, withhold
+   the message so empty-completion retries or fails rather than succeeding.
 2. **Grok's gateway-error wording stays on Grok OAuth.** Only `grok-oauth`
    replaces an untyped LiteLLM error envelope with the fixed local error. Other
    routes relay that envelope byte-identical, after closing the reasoning item

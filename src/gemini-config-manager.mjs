@@ -93,7 +93,8 @@ function assertNoConflicts(document) {
  * `gemini-2.5-pro`, which is not a routed slug, so an integration that left it
  * alone would 404 on the user's first turn. It out-ranks `settings.json`'s
  * `model.name` and is out-ranked by `--model`, which is stated in the docs and
- * is why it can be turned off.
+ * is why it can be turned off. Later publications retain that choice unless
+ * explicitly changed.
  */
 export function refreshCallerCapability() {
   assertStateOwnership("refresh the Gemini CLI caller capability");
@@ -109,10 +110,33 @@ export function refreshCallerCapability() {
 }
 
 export function publishGeminiIntegration({
-  setDefaultModel = true,
+  setDefaultModel,
   routedModels = geminiRoutedModels,
 } = {}) {
   assertStateOwnership("publish the Gemini CLI integration");
+  // An ordinary catalog refresh keeps the user's publication policy. An
+  // explicit option changes it; the first install still supplies a default.
+  if (setDefaultModel === undefined) {
+    setDefaultModel = true;
+    if (existsSync(GEMINI_CATALOG_PATH)) {
+      let previous;
+      try { previous = JSON.parse(readFileSync(GEMINI_CATALOG_PATH, "utf8")); } catch {
+        throw new Error("Gemini publication policy is unreadable; refusing to reset it.");
+      }
+      if (previous && Object.hasOwn(previous, "setDefaultModel")) {
+        if (typeof previous.setDefaultModel !== "boolean") {
+          throw new Error("Gemini publication policy is invalid; refusing to reset it.");
+        }
+        setDefaultModel = previous.setDefaultModel;
+      } else if (previous && Object.hasOwn(previous, "defaultModel") &&
+        (previous.defaultModel === null || typeof previous.defaultModel === "string")) {
+        // Existing catalogs predate the explicit policy field.
+        setDefaultModel = previous.defaultModel !== null;
+      } else {
+        throw new Error("Gemini publication policy is invalid; refusing to reset it.");
+      }
+    }
+  }
   const { models, engine } = routedModels();
   const baseUrl = callerBase();
   const document = readDocument(GEMINI_ENV_PATH);
@@ -134,6 +158,7 @@ export function publishGeminiIntegration({
     updatedAt: new Date().toISOString(),
     baseUrl,
     defaultModel: defaultModel ?? null,
+    setDefaultModel,
     models: models.map((model) => String(model.slug)),
   });
   return { models, engine, defaultModel, baseUrl };
@@ -225,7 +250,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     // left it alone would 404 on the user's first turn.
     install: () =>
       publishGeminiIntegration({
-        setDefaultModel: !process.argv.includes("--no-default-model"),
+        setDefaultModel: process.argv.includes("--no-default-model") ? false : undefined,
       }),
     uninstall: () => removeGeminiIntegration(),
     drift: () => geminiCatalogDrift() ?? { installed: false },

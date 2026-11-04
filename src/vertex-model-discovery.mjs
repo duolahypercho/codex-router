@@ -3,8 +3,6 @@ import path from "node:path";
 
 import {
   providerCatalogIdentityFingerprint,
-  readProviderCatalogCache,
-  withProviderCatalogCacheTransaction,
 } from "./model-catalog-cache.mjs";
 import { mergeDiscoveredModels, normalizeModelMetadata } from "./model-capabilities.mjs";
 import { MODELS } from "./model-registry.mjs";
@@ -437,7 +435,8 @@ function classify(resources, catalog) {
   };
 }
 
-function classifyCached(discovered, catalog) {
+function classifyStaticCatalog(catalog) {
+  const discovered = catalog.models.map((model) => model.id);
   const byCatalogId = new Map(catalog.models.map((model) => [model.id, model]));
   const supportedModels = [];
   const unsupported = [];
@@ -528,7 +527,7 @@ export async function discoverVertexProviderModels(provider, options = {}) {
   const rawCatalog = options.catalog ?? readVertexSupportCatalog();
   const catalog = parseVertexSupportCatalog(rawCatalog);
   if (options.staticCatalog === true) {
-    const classified = classifyCached(catalog.models.map((model) => model.id), catalog);
+    const classified = classifyStaticCatalog(catalog);
     return discoveryResult(provider, classified, {
       contextLengths: Object.fromEntries(
         classified.supportedModels.map((model) => [model.id, model.capabilities.contextWindow]),
@@ -544,66 +543,25 @@ export async function discoverVertexProviderModels(provider, options = {}) {
     ? discoveryIdentity(provider, credential, settings)
     : undefined;
   const fingerprint = identity ? identityFingerprint(identity) : undefined;
-  const storeAnswer = options.cache !== false && fixture === undefined;
-  let cached;
-  if (storeAnswer && !options.refresh) {
-    const held = readProviderCatalogCache(provider.id, { scope: options.scope });
-    if (held?.identityFingerprint === fingerprint) cached = held;
-  }
-
-  let classified;
-  let fetchedAt;
-  let modelMetadata;
-  let contextLengths;
-  if (cached) {
-    classified = classifyCached(cached.discovered, catalog);
-    fetchedAt = cached.fetchedAt;
-    modelMetadata = cached.modelMetadata || metadataMap(catalog, classified.supported);
-    contextLengths = cached.contextLengths || Object.fromEntries(
-      classified.supportedModels.map((model) => [model.id, model.capabilities.contextWindow]),
-    );
-  } else {
-    const resources = await fetchPages(provider, settings, options, credential, fixture);
-    classified = classify(resources, catalog);
-    fetchedAt = new Date().toISOString();
-    modelMetadata = metadataMap(catalog, classified.supported);
-    contextLengths = Object.fromEntries(
-      classified.supportedModels.map((model) => [model.id, model.capabilities.contextWindow]),
-    );
-    if (storeAnswer) {
-      await withProviderCatalogCacheTransaction(async (cacheApi) => {
-        const currentCredential = options.credential || resolveProviderCredential(provider);
-        const currentIdentity = discoveryIdentity(provider, currentCredential, settings);
-        if (identityFingerprint(currentIdentity) !== fingerprint) {
-          throw credentialChangedError(provider);
-        }
-        cacheApi.write(provider.id, {
-          discovered: classified.discovered,
-          contextLengths,
-          modelMetadata,
-          fetchedAt,
-          scope: options.scope,
-          identityFingerprint: fingerprint,
-          provenance: {
-            schema: "codex-router/provider-catalog/v1",
-            providerId: provider.id,
-            endpoint:
-              identity.baseUrl +
-              "/" +
-              trimSlashes(settings.garden.apiVersion || "v1beta1") +
-              "/publishers",
-            identityFingerprint: fingerprint,
-            ...(options.scope ? { scope: options.scope } : {}),
-          },
-        });
-      });
-    }
+  // Live resources are classified once, with publisher provenance intact.
+  // ID-only cached answers cannot establish which publisher actually listed them.
+  const resources = await fetchPages(provider, settings, options, credential, fixture);
+  const classified = classify(resources, catalog);
+  const fetchedAt = new Date().toISOString();
+  const modelMetadata = metadataMap(catalog, classified.supported);
+  const contextLengths = Object.fromEntries(
+    classified.supportedModels.map((model) => [model.id, model.capabilities.contextWindow]),
+  );
+  if (identity) {
+    const currentCredential = options.credential || resolveProviderCredential(provider);
+    const currentIdentity = discoveryIdentity(provider, currentCredential, settings);
+    if (identityFingerprint(currentIdentity) !== fingerprint) throw credentialChangedError(provider);
   }
 
   return discoveryResult(provider, classified, {
     contextLengths,
     modelMetadata,
-    cached,
+    cached: false,
     fetchedAt,
   });
 }

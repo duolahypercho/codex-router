@@ -1,0 +1,1 @@
+- Relay oversized native auto-review errors promptly by canceling the classifier's peek without waiting for the original response branch; preserve the original error body and status.

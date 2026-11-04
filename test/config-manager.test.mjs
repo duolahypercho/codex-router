@@ -461,7 +461,8 @@ test("config manager keeps writing the agents scalar when the codex binary lacks
 test("config manager enables multi_agent_v2 and skips the legacy agents scalar when supported", () => {
   const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-v2-feature-"));
   const configPath = path.join(codexHome, "config.toml");
-  writeFileSync(configPath, `model = "gpt-5.5"\n`, { mode: 0o600 });
+  const original = `model = "gpt-5.5"\n`;
+  writeFileSync(configPath, original, { mode: 0o600 });
 
   try {
     run("enable", codexHome);
@@ -484,7 +485,10 @@ test("config manager enables multi_agent_v2 and skips the legacy agents scalar w
     run("disable", codexHome);
     const restored = readFileSync(configPath, "utf8");
     assert.doesNotMatch(restored, /codex-router-multi-agent-v2-managed|multi_agent_v2/);
-    assert.equal(restored.trimStart(), `model = "gpt-5.5"\n`);
+    // Disabling removes managed values; the empty table needs no cleanup.
+    assert.equal(restored.slice(0, original.length), original);
+    assert.match(restored.slice(original.length), /^\n*\[features\]\n*$/);
+    assert.equal(privateFileIsProtected(configPath), true);
   } finally {
     rmSync(codexHome, { recursive: true, force: true });
   }
@@ -606,7 +610,10 @@ chatgpt_base_url = "https://chat.example/backend-api/"
     assert.match(enabled, /experimental_realtime_ws_base_url = "wss:\/\/voice\.example\/live"/);
 
     run("disable", codexHome);
-    assert.equal(readFileSync(configPath, "utf8"), original);
+    const restored = readFileSync(configPath, "utf8");
+    assert.equal(restored.slice(0, original.length), original);
+    assert.match(restored.slice(original.length), /^\n*\[features\]\n*$/);
+    assert.equal(privateFileIsProtected(configPath), true);
   } finally {
     rmSync(codexHome, { recursive: true, force: true });
   }
@@ -615,12 +622,9 @@ chatgpt_base_url = "https://chat.example/backend-api/"
 test("config manager derives native Voice calls from a custom ChatGPT base URL", () => {
   const codexHome = mkdtempSync(path.join(os.tmpdir(), "codex-router-voice-base-"));
   const configPath = path.join(codexHome, "config.toml");
-  writeFileSync(
-    configPath,
-    `chatgpt_base_url = "https://chat.example/backend-api/"
-`,
-    { mode: 0o600 },
-  );
+  const original = `chatgpt_base_url = "https://chat.example/backend-api/"
+`;
+  writeFileSync(configPath, original, { mode: 0o600 });
 
   try {
     run("enable", codexHome);
@@ -631,11 +635,10 @@ test("config manager derives native Voice calls from a custom ChatGPT base URL",
     );
 
     run("disable", codexHome);
-    assert.equal(
-      readFileSync(configPath, "utf8"),
-      `chatgpt_base_url = "https://chat.example/backend-api/"
-`,
-    );
+    const restored = readFileSync(configPath, "utf8");
+    assert.equal(restored.slice(0, original.length), original);
+    assert.match(restored.slice(original.length), /^\n*\[features\]\n*$/);
+    assert.equal(privateFileIsProtected(configPath), true);
   } finally {
     rmSync(codexHome, { recursive: true, force: true });
   }
@@ -2155,8 +2158,14 @@ ${originalProviderSection}`,
 
     run("login-free-disable", codexHome, stateDir, [], environment);
     const restored = readFileSync(configPath, "utf8");
-    assert.equal(restored, routerBaseline);
-    assert.match(restored, /Authorization = "Bearer REFRESH_LOGIN_FREE_SECRET"/);
+    // This fixture has no multiline strings: only blank table separators may
+    // move after a successful disable. Failure rollback above stays byte-exact.
+    assert.deepEqual(
+      restored.split("\n").filter(Boolean),
+      routerBaseline.split("\n").filter(Boolean),
+    );
+    assert.ok(restored.includes(originalProviderSection), "restore the original provider text byte-for-byte");
+    assert.equal(privateFileIsProtected(configPath), true);
     assert.equal(existsSync(providerModePath), false);
   } finally {
     rmSync(codexHome, { recursive: true, force: true });
@@ -2662,6 +2671,26 @@ test("a multiline model setting is refused without partial deletion", () => {
   try {
     assert.throws(() => run("enable", home), /single-line TOML string/);
     assert.equal(readFileSync(config, "utf8"), contents);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("cleanup preserves empty tables and multiline table examples", () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "router-empty-table-prose-"));
+  const config = path.join(home, "config.toml");
+  const prose = "developer_instructions = '''\n# codex-router-created-agents-table\n[agents]\n[features]\n\n[example]\ntext only\n'''";
+  const contents = `${prose}\nmodel = "gpt-5.6-sol"\n[agents]\n[features]\n`;
+  writeFileSync(config, contents);
+  try {
+    const env = { MODEL_ROUTER_STATE_DIR: path.join(home, "router-state") };
+    run("enable", home, undefined, [], env);
+    assert.ok(readFileSync(config, "utf8").includes(prose));
+    run("disable", home, undefined, [], env);
+    const restored = readFileSync(config, "utf8");
+    assert.ok(restored.includes(prose));
+    assert.match(restored.replace(prose, ""), /\[agents\]\s*\[features\]/);
+    assert.doesNotMatch(restored.replace(prose, ""), /BEGIN codex-router/);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

@@ -1,0 +1,1 @@
+- Bound lifecycle reordering by the shared buffered-response allowance; when it is exhausted, relay retained originals and continue without reordering.
