@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
@@ -241,9 +242,12 @@ test("a native generation redirect cannot certify a previously consumed POST as 
   for (const redirectStatus of [307, 308]) {
     await t.test(`HTTP ${redirectStatus} followed by a refused connect`, async () => {
       let executions = 0;
+      const requests = [];
       const refusedPort = await openPort();
       const native = await mockServer(async (request, response) => {
-        await readBody(request);
+        const body = await readBody(request);
+        if (requests.length < 8) requests.push({ method: request.method, path: request.url,
+          bytes: body.raw.length, bodyHash: createHash("sha256").update(body.raw).digest("hex") });
         executions += 1;
         response.writeHead(redirectStatus, { Location: `http://127.0.0.1:${refusedPort}/responses` });
         response.end();
@@ -270,6 +274,12 @@ test("a native generation redirect cannot certify a previously consumed POST as 
         assert.equal(event.upstreamAttempts.length, 1);
         assert.notEqual(event.upstreamAttempts[0].deliveryState, "not_sent", "the first origin already consumed the complete POST");
         assert.equal(event.upstreamAttempts[0].retryScheduled, false);
+      } catch (error) {
+        const detail = `Redirect fixture diagnostic: ${JSON.stringify({ redirectStatus, nativePort: native.port,
+          routerPort, refusedPort, executions, requests, router: router.testErrors() })}`;
+        error.message += `\n${detail}`;
+        if (typeof error.stack === "string") error.stack += `\n${detail}`;
+        throw error;
       } finally {
         await stopChild(router);
         native.server.closeAllConnections();
