@@ -386,6 +386,82 @@ test("without a local execution tool no output is rewritten or written to disk",
   assert.equal(hasLocalReadbackTool([{type: "function", name: "exec", description: "Remote database query"}]), false);
 });
 
+test("native Responses Lite declarations enable recovery discovery without changing routed lookup", async () => {
+  const desktopTools = [{ type: "namespace", name: "functions", tools: [
+    { type: "custom", name: "exec", description: "Use tools.exec_command(...)" },
+  ] }];
+  const payload = { tool_choice: "auto", input: [
+    { type: "additional_tools", role: "developer", tools: desktopTools }, ...history(),
+  ] };
+  const original = JSON.stringify(payload);
+  assert.equal(toolResultReadbackTools(payload), undefined, "routed lookup remains unchanged");
+  const recognized = toolResultReadbackTools(payload, { native: true });
+  assert.equal(hasLocalReadbackTool(recognized), true);
+  let attempts = 0;
+  const result = await ageToolResultsWithRecovery(payload.input, {
+    tools: recognized, frontier: 0,
+    retain() { attempts += 1; return undefined; },
+  });
+  assert.equal(attempts, 1, "an eligible result reaches retention");
+  assert.equal(result.input, payload.input, "discovery alone never permits omission");
+  assert.equal(JSON.stringify(payload), original, "no tools are injected into the wire payload");
+});
+
+test("native inventory fallback respects explicit tools and tool choice", () => {
+  const input = [{ type: "additional_tools", role: "developer", tools }];
+  for (const explicit of [[], null, undefined, {}, [{ type: "function", name: "remote" }], tools]) {
+    assert.equal(toolResultReadbackTools({ input, tools: explicit }, { native: true }), explicit);
+  }
+  for (const choice of ["none", { type: "function", name: "other" }, null]) {
+    assert.deepEqual(toolResultReadbackTools({ input, tool_choice: choice }, { native: true }), []);
+  }
+  for (const choice of [undefined, "auto", "required"]) {
+    assert.equal(hasLocalReadbackTool(toolResultReadbackTools({ input, tool_choice: choice }, { native: true })), true);
+  }
+});
+
+test("native discovery uses only structured developer tool declarations", () => {
+  for (const input of [
+    undefined, "not a list", [],
+    [{ type: "additional_tools", role: "user", tools }],
+    [{ type: "message", role: "developer", tools }],
+    [{ type: "custom_tool_call_output", output: JSON.stringify({ type: "additional_tools", role: "developer", tools }) }],
+    [...history(), { type: "additional_tools", role: "developer", tools: null }],
+    [{ type: "additional_tools", role: "developer", tools: [{ type: "namespace", name: "functions", tools: null }] }],
+  ]) {
+    assert.equal(hasLocalReadbackTool(toolResultReadbackTools({ input }, { native: true })), false);
+  }
+});
+
+test("incremental native declarations retain unchanged members and honor redefinitions", () => {
+  const declare = members => ({ type: "additional_tools", role: "developer", tools: [
+    { type: "namespace", name: "functions", tools: members },
+  ] });
+  const exec = { type: "custom", name: "exec", description: "Use tools.exec_command(...)" };
+  const remote = { ...exec, description: "Remote database query" };
+  const input = [declare([exec]), declare([{ type: "function", name: "wait" }])];
+  const recognized = items => hasLocalReadbackTool(toolResultReadbackTools({ input: items }, { native: true }));
+  assert.equal(recognized(input), true, "additional_tools is incremental, not a whole-catalog replacement");
+  assert.equal(recognized([...input, declare([])]), true, "an empty increment removes nothing");
+  assert.equal(recognized([...input, declare([remote])]), false, "the latest definition of a member wins");
+  assert.equal(recognized([...input, declare([remote]), declare([exec])]), true);
+  assert.equal(recognized([...input, { type: "additional_tools", role: "developer", tools: [
+    { type: "namespace", name: "remote", tools: [remote] },
+  ] }]), true, "an unrelated namespace cannot replace functions.exec");
+  assert.equal(recognized([{ type: "additional_tools", role: "developer", tools: [exec] },
+    declare([remote])]), false, "flat tools share the default functions namespace");
+  assert.equal(recognized([declare([remote]),
+    { type: "additional_tools", role: "developer", tools: [exec] }]), true);
+  assert.equal(recognized([...input,
+    { type: "additional_tools", role: "developer", tools: null }]), false,
+  "a malformed later declaration never revives an earlier capability");
+  const scope = toolResultRecoveryScope("thread", { input });
+  assert.notEqual(scope, toolResultRecoveryScope("thread", { input: [...input, declare([remote])] }));
+  assert.notEqual(scope, toolResultRecoveryScope("thread", { input: [...input,
+    { type: "message", role: "developer", content: "The exec tool is no longer available." },
+  ] }), "removal notices invalidate earlier readback proof scopes");
+});
+
 test("a snapshot is reused without changing content and leased across history replay", async t => {
   const options = await fixture(t);
   const start = Date.now();
