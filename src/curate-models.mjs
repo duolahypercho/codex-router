@@ -594,6 +594,8 @@ async function main() {
         ].filter(Boolean);
         if (advertisedFields.length > 0) {
           metadata.description = advertisedModelDescription(providerId, advertisedFields);
+        } else {
+          delete metadata.description;
         }
         return;
       }

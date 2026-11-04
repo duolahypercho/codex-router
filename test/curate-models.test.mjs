@@ -1734,11 +1734,11 @@ test("scripted curation records that a served window and modalities came from th
 });
 
 test("interactive image choice overrides advertised modalities in the saved model", () => {
-  for (const acceptImage of [false, true]) {
+  for (const contextLength of [undefined, 131072]) for (const acceptImage of [false, true]) {
     const dir = mkdtempSync(path.join(os.tmpdir(), "curate-image-choice-"));
     const fixture = path.join(dir, "models.json");
     const file = path.join(dir, "user-models.json");
-    writeFileSync(fixture, JSON.stringify({ data: [{ id: "vendor/vision", context_length: 131072, input_modalities: ["text", "image"] }] }));
+    writeFileSync(fixture, JSON.stringify({ data: [{ id: "vendor/vision", ...(contextLength ? { context_length: contextLength } : {}), input_modalities: ["text", "image"] }] }));
     const source = `
       import { registerHooks } from 'node:module';
       import { pathToFileURL } from 'node:url';
