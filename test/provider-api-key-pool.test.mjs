@@ -530,6 +530,8 @@ test("attempts re-read a paused initial candidate before sending", async () => {
 });
 
 test("attempts never retry origin 500 and cap an explicit large attempt request", async () => {
+  // This case measures status and attempt-count policy, not ACL wall time.
+  // Budget expiry during selection/backoff has its own regression below.
   const noRetryPath = path.join(root, "no-retry-500.json");
   for (const id of ["one", "two"]) {
     await upsertProviderApiKey("openrouter", metadata(credential(`five_${id}`, id)), { filePath: noRetryPath });
@@ -543,6 +545,7 @@ test("attempts never retry origin 500 and cap an explicit large attempt request"
       return { status: 500, ok: false, committed: false };
     },
     sleepImpl: async () => {},
+    now: () => NOW,
   });
   assert.equal(calls, 1);
   assert.equal(originFailure.reason, "failed");
@@ -561,6 +564,7 @@ test("attempts never retry origin 500 and cap an explicit large attempt request"
       return { status: 429, ok: false, committed: false };
     },
     sleepImpl: async () => {},
+    now: () => NOW,
   });
   assert.equal(calls, 3);
 });
@@ -704,4 +708,55 @@ test("lock serializes concurrent state updates and preserves every session turn"
   const state = readProviderApiKeyPoolState(filePath, { now: NOW });
   assert.equal(state.providers.openrouter.sessions["session-1"].turns, 12);
   assert.equal(existsSync(`${filePath}.pool-lock`), false);
+});
+
+test("pool retries do not send after backoff or credential selection exhausts the budget", async () => {
+  for (const phase of ["backoff", "first-selection", "retry-selection", "within-budget"]) {
+    const filePath = path.join(root, `budget-${phase}.json`);
+    const first = metadata(credential("budget_first", "FIRST", { priority: 2 }));
+    const second = metadata(credential("budget_second", "SECOND", { priority: 1 }));
+    await upsertProviderApiKey("openrouter", first, { filePath });
+    await upsertProviderApiKey("openrouter", second, { filePath });
+    let elapsed = 0;
+    const sends = [];
+    const result = await runProviderApiKeyAttempts("openrouter", {
+      filePath,
+      now: () => NOW + elapsed,
+      resolveCredential: (id) => {
+        if (phase === "first-selection" || (phase === "retry-selection" && sends.length > 0)) elapsed = 5001;
+        return id === first.id ? "FIRST" : "SECOND";
+      },
+      sleepImpl: async (ms) => { elapsed += ms; },
+      send: async ({ apiKey }) => {
+        sends.push(elapsed);
+        if (apiKey === "FIRST") {
+          elapsed = Math.max(elapsed, ["within-budget", "retry-selection"].includes(phase) ? 100 : 4900);
+          return { status: 429, ok: false, committed: false };
+        }
+        return { status: 200, ok: true, committed: false };
+      },
+    });
+    assert.equal(sends.length, phase === "within-budget" ? 2 : 1);
+    assert.equal(result.reason, phase === "within-budget" ? "success" : "no_retry_candidate");
+    assert.ok(sends.slice(1).every((at) => at < 5000));
+    if (phase === "first-selection") assert.equal(sends[0], 5001);
+  }
+});
+
+
+test("the retry budget never suppresses the first successful pool dispatch", async () => {
+  for (const budgetMs of [0, 5000]) {
+    const filePath = path.join(root, `first-dispatch-${budgetMs}.json`);
+    await upsertProviderApiKey("openrouter", metadata(credential("first_dispatch", "FIRST")), { filePath });
+    let elapsed = 0;
+    let sends = 0;
+    const result = await runProviderApiKeyAttempts("openrouter", {
+      filePath, budgetMs, now: () => NOW + elapsed,
+      resolveCredential: () => { elapsed = 5001; return "FIRST"; },
+      send: async () => { sends += 1; return { status: 200, ok: true, committed: false, bodyText: "first response" }; },
+    });
+    assert.equal(sends, 1);
+    assert.equal(result.reason, "success");
+    assert.equal(result.result.bodyText, "first response");
+  }
 });
