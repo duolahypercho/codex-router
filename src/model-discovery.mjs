@@ -10,6 +10,7 @@ import {
 } from "./model-catalog-cache.mjs";
 import { modelCatalogMetadata } from "./model-catalog-metadata.mjs";
 import {
+  advertisedContextLength,
   mergeDiscoveredModels,
   modelMetadataFromPreset,
   modelMetadataFromProviderRecord,
@@ -189,31 +190,6 @@ export function freeModelIds(payload, provider) {
     .map((item) => String(item.id).trim())
     .filter((id, index, ids) => ids.indexOf(id) === index)
     .sort();
-}
-
-// What a provider says one model's context window is, or undefined when it says
-// nothing usable. OpenAI-compatible catalogs disagree about the key: OpenRouter
-// and most resellers publish `context_length` and repeat the figure the chosen
-// endpoint actually serves under `top_provider`, Copilot puts it in
-// `capabilities.limits`, and a few spell it `context_window`.
-//
-// When more than one is present they are not alternatives, they are limits at
-// different scopes, and the smallest one is the only one the request path can
-// rely on: a model that can do 200K reached through an endpoint that serves
-// 131K is a 131K model here. Anything that is not a positive integer is treated
-// as silence -- a string, a float, or a zero is a catalog quirk, not a size.
-function advertisedContextLength(item) {
-  let smallest;
-  for (const value of [
-    item?.context_length,
-    item?.top_provider?.context_length,
-    item?.context_window,
-    item?.capabilities?.limits?.max_context_window_tokens,
-  ]) {
-    if (!Number.isInteger(value) || value < 1) continue;
-    if (smallest === undefined || value < smallest) smallest = value;
-  }
-  return smallest;
 }
 
 // Model id -> input modalities the provider itself stated for that model.
