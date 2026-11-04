@@ -78,6 +78,8 @@ async function fixture(t) {
   const env = Object.fromEntries([
     "PATH", "Path", "SystemRoot", "SYSTEMROOT", "WINDIR", "COMSPEC",
     "PATHEXT", "TEMP", "TMP", "TMPDIR",
+    // The Windows ACL helper needs its module search path in the isolated child.
+    "PSModulePath",
   ].filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]]));
   Object.assign(env, {
     HOME: path.join(state, "home"), USERPROFILE: path.join(state, "home"),
