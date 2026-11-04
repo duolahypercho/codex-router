@@ -20,6 +20,7 @@ import {
 import { SHUTDOWN_DRAIN_MS, SHUTDOWN_FLUSH_MS } from "./http-utils.mjs";
 import { clearStartupTimeouts, runtimeChildEnvironment, startupTimeoutMs } from "./startup-timeout.mjs";
 import { waitForHealth as pollHealth } from "./health-probe.mjs";
+import { DEFAULT_STARTUP_HOLD_MS } from "./startup-dependency-gate.mjs";
 import { describeChildExit, fatalExitFollowUp } from "./fatal-exit.mjs";
 import { gatewaySupervisorLimits, superviseGateway } from "./gateway-supervisor.mjs";
 import { writeLiteLlmConfig } from "./litellm-config.mjs";
@@ -385,7 +386,28 @@ async function main() {
   const devinForwarder = devinCliRouted
     ? run(process.execPath, [path.join(SOURCE_ROOT, "src", "devin-cli-forwarder.mjs")])
     : undefined;
-  await Promise.all([
+
+  // The router opens its port now rather than after the gateway's cold start.
+  // That wait is what kept the port closed on every restart until Codex's own
+  // retries ran out: `stream disconnected before completion: Connection refused`.
+  // Native turns need nothing below, and the router holds routed turns until the
+  // dependencies are up (src/startup-dependency-gate.mjs). `ready` still means
+  // the whole stack is healthy, because the router's `/health` answers 503 until
+  // it is.
+  const frontend = FRONTEND;
+  const frontendService = frontend.service;
+  const router = run(process.execPath, [path.join(SOURCE_ROOT, "src", frontend.script)], {
+    CODEX_ROUTER_STARTUP_HOLD_MS:
+      process.env.CODEX_ROUTER_STARTUP_HOLD_MS ?? String(DEFAULT_STARTUP_HOLD_MS),
+  });
+  // A router that cannot bind must end startup at once. The dependency waits
+  // below do not watch it, and the gateway's allowance alone is five minutes.
+  const routerExitedEarly = waitForExit(router, frontend.label).then(() => {
+    throw new Error(`${frontend.label} exited before becoming healthy.`);
+  });
+  const unlessRouterExits = (work) => Promise.race([work, routerExitedEarly]);
+
+  await unlessRouterExits(Promise.all([
     ...(kimiForwarder ? [waitForHealth(
       "OAuth forwarder",
       loopback(PORTS.oauth, "/health"),
@@ -438,7 +460,7 @@ async function main() {
         ),
       ]
       : []),
-  ]);
+  ]));
 
   const startGateway = () =>
     run(litellm, [
@@ -475,11 +497,8 @@ async function main() {
       4_000,
     );
   const gateway = executionPlan.needsGateway ? startGateway() : undefined;
-  if (gateway) await gatewayHealthy(gateway);
+  if (gateway) await unlessRouterExits(gatewayHealthy(gateway));
 
-  const frontend = FRONTEND;
-  const frontendService = frontend.service;
-  const router = run(process.execPath, [path.join(SOURCE_ROOT, "src", frontend.script)]);
   await waitForHealth(
     frontend.label,
     loopback(PORTS.router, "/health"),

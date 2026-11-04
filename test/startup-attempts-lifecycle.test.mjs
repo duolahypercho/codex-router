@@ -97,6 +97,7 @@ async function run({ foreground = false, disabled = false, mode = "healthy", see
       }
       if (mode === "child-exited") throw new Error("fixture child exited before becoming healthy");
     } },
+    "./startup-dependency-gate.mjs": { DEFAULT_STARTUP_HOLD_MS: 1 },
     "./fatal-exit.mjs": { describeChildExit: () => "code 0", fatalExitFollowUp: () => undefined },
     "./gateway-supervisor.mjs": { gatewaySupervisorLimits: () => ({}), superviseGateway: async () => {
       events.push("supervise");

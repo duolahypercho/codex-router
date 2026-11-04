@@ -11,7 +11,7 @@ import { clearStartupTimeouts, startupTimeoutMs } from "../src/startup-timeout.m
 // the real activation controller and timeout cleanup. No provider request or
 // credential is needed to reproduce losing the remaining bootstrap allowance.
 const source = readFileSync(new URL("../src/start.mjs", import.meta.url), "utf8");
-const begin = source.indexOf("  const frontend = FRONTEND;");
+const begin = source.indexOf("  await waitForHealth(\n    frontend.label,");
 const end = source.indexOf("  const cursorEdge =", begin);
 assert.ok(begin >= 0 && end > begin, "startup readiness boundary must be present");
 const boundary = source.slice(begin, end);
@@ -32,6 +32,10 @@ const completeStartup = new AsyncFunction("context", `
   const setTimeout = () => ({ unref() {} });
   ${shutdown}
   context.stopSupervisor = stopChildren;
+  // The router is spawned before the dependency waits, above this boundary.
+  const frontend = FRONTEND;
+  const frontendService = frontend.service;
+  const router = run();
   ${boundary.replace('import("./native-catalog-drift.mjs")', "loadPublisher()")}
 `);
 
