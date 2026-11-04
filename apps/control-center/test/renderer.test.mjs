@@ -1772,8 +1772,26 @@ test(`${language} covers every page, dialogs, raw values, English round trips an
         htmlLang: document.documentElement.lang,
         storedLanguage: localStorage.getItem("codex-router-language"),
         headings: [...document.querySelectorAll("h1")].map(element => element.textContent),
+        visibilityState: document.visibilityState,
+        readyState: document.readyState,
+        viewport: { width: innerWidth, height: innerHeight },
+        headingDetails: [...document.querySelectorAll("h1")].slice(0, 8).map(element => {
+          const ancestors = [];
+          for (let current = element; current && ancestors.length < 6; current = current.parentElement) {
+            const style = getComputedStyle(current);
+            const rect = current.getBoundingClientRect();
+            ancestors.push({
+              tag: current.tagName, hidden: current.hidden, inert: current.inert,
+              ariaHidden: current.getAttribute("aria-hidden"), role: current.getAttribute("role"),
+              ariaLabel: current.getAttribute("aria-label"),
+              display: style.display, visibility: style.visibility, opacity: style.opacity,
+              rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+            });
+          }
+          return { text: element.textContent, ancestors };
+        }),
       })).catch(collectionError => ({ collectionError: String(collectionError) }));
-      const detail = `Language transition diagnostic: ${JSON.stringify({ language, ...state, pageErrors: errors, consoleErrors, failedRequests })}`;
+      const detail = `Language transition diagnostic: ${JSON.stringify({ language, expectedHeading: copy.settings, browserVersion: browser.version(), ...state, pageErrors: errors, consoleErrors, failedRequests })}`;
       const originalStack = error.stack;
       error.message += `\n${detail}`;
       if (typeof originalStack === "string") error.stack = `${originalStack}\n${detail}`;
