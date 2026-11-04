@@ -1732,3 +1732,39 @@ test("scripted curation records that a served window and modalities came from th
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("interactive image choice overrides advertised modalities in the saved model", () => {
+  for (const contextLength of [undefined, 131072]) for (const acceptImage of [false, true]) {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "curate-image-choice-"));
+    const fixture = path.join(dir, "models.json");
+    const file = path.join(dir, "user-models.json");
+    writeFileSync(fixture, JSON.stringify({ data: [{ id: "vendor/vision", ...(contextLength ? { context_length: contextLength } : {}), input_modalities: ["text", "image"] }] }));
+    const source = `
+      import { registerHooks } from 'node:module';
+      import { pathToFileURL } from 'node:url';
+      registerHooks({ load(url, context, nextLoad) {
+        if (url.endsWith('/src/setup-shared.mjs')) return { format: 'module', shortCircuit: true,
+          source: 'let toggles=0; export function promptLine(label){return label.startsWith("Toggle numbers") && toggles++===0 ? "1" : "";} export function confirm(label){return label.includes("image input") ? ${acceptImage} : true;}' };
+        return nextLoad(url, context);
+      }});
+      Object.defineProperty(process.stdin, 'isTTY', { value: true });
+      process.argv = [process.execPath, ${JSON.stringify(path.join(root, "src", "curate-models.mjs"))}, 'openrouter', '--fixture', ${JSON.stringify(fixture)}, '--no-apply'];
+      await import(pathToFileURL(process.argv[1]).href);
+    `;
+    try {
+      const result = spawnSync(process.execPath, ["--input-type=module", "--eval", source], {
+        cwd: root, encoding: "utf8", env: { ...process.env,
+          HOME: path.join(dir, "home"), USERPROFILE: path.join(dir, "home"), CODEX_HOME: path.join(dir, "codex"),
+          MODEL_ROUTER_STATE_DIR: dir, CODEX_ROUTER_STATE_DIR: dir, MODEL_ROUTER_USER_MODELS: file,
+          MODEL_ROUTER_MODEL_PICKER_STATE: path.join(dir, "picker.json"), CODEX_ROUTER_NO_DISCOVERY: "1" },
+      });
+      assert.equal(result.status, 0, result.stderr);
+      const model = JSON.parse(readFileSync(file, "utf8")).models.find((entry) => entry.upstreamModel === "vendor/vision");
+      assert.ok(model);
+      assert.deepEqual(model.inputModalities, acceptImage ? ["text", "image"] : ["text"]);
+      if (!acceptImage) assert.doesNotMatch(model.description, /input modalities as advertised/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});

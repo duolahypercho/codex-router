@@ -1,0 +1,1 @@
+- Honor an explicit no-image answer during interactive curation even when image support came only from the provider catalog.
