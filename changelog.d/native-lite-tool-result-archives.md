@@ -1,0 +1,1 @@
+- **Native Responses Lite sessions can archive eligible tool results.** Recognize the client's incremental `additional_tools` declarations when top-level tools are absent, while preserving explicit tool restrictions, full output until signed local readback succeeds, and existing routed behavior.
