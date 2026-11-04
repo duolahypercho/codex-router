@@ -41,8 +41,17 @@ test("catalog and quota use the pool account and never fall around paused or inv
     seen.push(options.headers.Authorization.replace(/^Bearer /, ""));
     return new Response(JSON.stringify({ is_available: true, balance_infos: [{ currency: "USD", total_balance: "1", granted_balance: "0", topped_up_balance: "1" }] }));
   }});
+  const poolBeforeReads = readFileSync(pool);
+  const storeBeforeReads = readFileSync(store);
   await discovery(); await usage();
   assert.deepEqual(seen, ["SYNTHETIC_POOLED", "SYNTHETIC_POOLED"]);
+  const audit = await auditProviderModels({ requested: "deepseek", discover: async () => {
+    throw new Error("Account SYNTHETIC_POOLED rejected");
+  }});
+  assert.equal(audit.summary.failed, 1);
+  assert.equal(audit.results[0].error, "Account [redacted] rejected");
+  assert.deepEqual(readFileSync(pool), poolBeforeReads, "read-only consumers must not advance pool state");
+  assert.deepEqual(readFileSync(store), storeBeforeReads, "read-only consumers must not rewrite credential references");
   seen.length = 0;
   await setStoredCredentialPoolState("deepseek", entry.id, true, { credentialStorePath: store, poolStatePath: pool });
   await assert.rejects(discovery(), /pool is unavailable/);
