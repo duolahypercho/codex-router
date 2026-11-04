@@ -1,0 +1,1 @@
+- Resolve the Kimi credential slot and OAuth host once per refresh, so an official CLI region/account switch cannot redirect an in-flight refresh into another login.

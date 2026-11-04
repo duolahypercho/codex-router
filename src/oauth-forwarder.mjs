@@ -78,7 +78,7 @@ function normalizeKimiBody(buffer, contentType) {
   return Buffer.from(JSON.stringify(payload), "utf8");
 }
 
-function upstreamHeaders(requestHeaders, body) {
+function upstreamHeaders(requestHeaders, context) {
   const headers = {};
   for (const [name, value] of Object.entries(requestHeaders)) {
     const lower = name.toLowerCase();
@@ -88,7 +88,7 @@ function upstreamHeaders(requestHeaders, body) {
     if (lower === "originator" || lower === "user-agent" || lower === "accept-encoding") continue;
     if (value !== undefined) headers[name] = Array.isArray(value) ? value.join(", ") : value;
   }
-  Object.assign(headers, kimiIdentityHeaders());
+  Object.assign(headers, kimiIdentityHeaders(context));
   headers["Accept-Encoding"] = "identity";
   // Content-Length is fetch's to compute. An explicit copy is at best
   // redundant, and the HTTP/1.1 dispatcher rejects the request outright
@@ -115,11 +115,11 @@ function tokenHealth() {
   }
 }
 
-async function requestUpstream(request, target, body, token, signal) {
+async function requestUpstream(request, target, body, token, signal, context) {
   return fetch(target, {
     method: request.method,
     headers: {
-      ...upstreamHeaders(request.headers, body),
+      ...upstreamHeaders(request.headers, context),
       Authorization: `Bearer ${token}`,
     },
     body: body.length ? body : undefined,
@@ -165,13 +165,14 @@ async function handleRequest(request, response) {
   if (route === "/chat/completions") {
     body = normalizeKimiBody(body, request.headers["content-type"]);
   }
-  const target = `${resolveKimiCodeEnvironment().apiBase}${route}${requestUrl.search}`;
-  let token = await ensureFreshKimiOAuthToken();
-  let upstream = await requestUpstream(request, target, body, token, controller.signal);
+  const context = resolveKimiCodeEnvironment();
+  const target = `${context.apiBase}${route}${requestUrl.search}`;
+  let token = await ensureFreshKimiOAuthToken({ context });
+  let upstream = await requestUpstream(request, target, body, token, controller.signal, context);
   if (upstream.status === 401) {
     await upstream.arrayBuffer();
-    token = await ensureFreshKimiOAuthToken({ force: true });
-    upstream = await requestUpstream(request, target, body, token, controller.signal);
+    token = await ensureFreshKimiOAuthToken({ force: true, context });
+    upstream = await requestUpstream(request, target, body, token, controller.signal, context);
     if (upstream.status === 401) {
       await upstream.arrayBuffer();
       writeJson(response, 401, {

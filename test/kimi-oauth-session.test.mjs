@@ -196,3 +196,48 @@ test("Kimi OAuth refresh coordinates with the official CLI and handles terminal 
     rmdirSync(home);
   }
 });
+
+test("a Kimi region switch cannot redirect an in-flight refresh into another credential slot", async () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "kimi-refresh-context-"));
+  mkdirSync(path.join(home, "credentials"), { recursive: true });
+  const aPath = path.join(home, "credentials", "kimi-code.json");
+  const bPath = path.join(home, "credentials", "account-b.json");
+  const configPath = path.join(home, "config.toml");
+  const config = (global) => `[providers."managed:kimi-code"]\nbase_url = "https://api.kimi.${global ? "ai" : "com"}/coding/v1"\n[providers."managed:kimi-code".oauth]\nkey = "oauth/${global ? "account-b" : "kimi-code"}"\noauth_host = "https://auth.kimi.${global ? "ai" : "com"}"\n`;
+  writeFileSync(configPath, config(false));
+  writeFileSync(path.join(home, "device_id"), "FAKE_DEVICE");
+  writeToken(aPath, token("A_OLD", "A_REFRESH", Math.floor(Date.now() / 1000) + 30));
+  writeToken(bPath, token("B_ACCESS", "B_REFRESH", Math.floor(Date.now() / 1000) + 7200));
+  const previous = { home: process.env.KIMI_CODE_HOME, host: process.env.KIMI_CODE_OAUTH_HOST,
+    alternateHost: process.env.KIMI_OAUTH_HOST, discovery: process.env.CODEX_ROUTER_NO_DISCOVERY, fetch: globalThis.fetch };
+  process.env.KIMI_CODE_HOME = home;
+  delete process.env.KIMI_CODE_OAUTH_HOST;
+  delete process.env.KIMI_OAUTH_HOST;
+  process.env.CODEX_ROUTER_NO_DISCOVERY = "0";
+  let calls = 0;
+  let nextAccount;
+  try {
+    globalThis.fetch = async (url) => {
+      assert.equal(url, "https://auth.kimi.com/api/oauth/token");
+      calls += 1;
+      writeFileSync(configPath, config(true));
+      nextAccount = ensureFreshKimiOAuthToken();
+      return new Response(JSON.stringify({ access_token: "A_NEW", refresh_token: "A_REFRESH_NEW", expires_in: 3600 }));
+    };
+    const { ensureFreshKimiOAuthToken } = await import(`../src/kimi-oauth-session.mjs?context-test=${Date.now()}`);
+    assert.equal(await ensureFreshKimiOAuthToken(), "A_NEW");
+    assert.equal(JSON.parse(readFileSync(aPath, "utf8")).access_token, "A_NEW");
+    assert.equal(JSON.parse(readFileSync(bPath, "utf8")).access_token, "B_ACCESS");
+    assert.equal(await nextAccount, "B_ACCESS", "a new account must not join the old account refresh");
+    assert.equal(await ensureFreshKimiOAuthToken(), "B_ACCESS", "the next operation observes the new official selection");
+    assert.equal(calls, 1);
+  } finally {
+    globalThis.fetch = previous.fetch;
+    for (const [key, value] of [["KIMI_CODE_HOME", previous.home], ["KIMI_CODE_OAUTH_HOST", previous.host],
+      ["KIMI_OAUTH_HOST", previous.alternateHost], ["CODEX_ROUTER_NO_DISCOVERY", previous.discovery]]) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+    const { rmSync } = await import("node:fs");
+    rmSync(home, { recursive: true, force: true });
+  }
+});
