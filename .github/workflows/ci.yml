@@ -38,6 +38,11 @@ jobs:
         # Private-file tests launch real PowerShell ACL helpers. Avoid starving
         # their existing deadlines on shared runners; retain every test and
         # all within-file request/race concurrency assertions.
+        # A cold PowerShell launch exceeded 15s on a shared Windows runner.
+        # Give only this test process the existing bounded startup allowance;
+        # the shipped 15s default and ACL verification remain unchanged.
+        env:
+          CODEX_ROUTER_WINDOWS_PRIVATE_SYNC_TIMEOUT_MS: "45000"
         run: node --test --test-timeout=600000 --test-concurrency=2 test/*.test.mjs
       - run: npm audit --omit=dev --audit-level=high
       - name: Test the macOS tray
