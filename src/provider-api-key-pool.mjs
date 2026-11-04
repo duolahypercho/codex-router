@@ -1038,7 +1038,7 @@ export async function runProviderApiKeyAttempts(providerOrId, {
   const startedAt = now();
   const limit = Math.min(DEFAULT_ATTEMPT_LIMIT, Math.max(1, Math.floor(maxAttempts)));
   for (let index = 0; index < limit; index += 1) {
-    if (now() - startedAt >= budgetMs) break;
+    if (index > 0 && now() - startedAt >= budgetMs) break;
     if (typeof isResponseCommitted === "function" && isResponseCommitted()) {
       return { configured: true, valid: true, providerId: provider, attempts, committed: true, reason: "response_committed" };
     }
@@ -1057,8 +1057,8 @@ export async function runProviderApiKeyAttempts(providerOrId, {
     if (!selection.credentialId || !selection.credentialValue) {
       return { configured: true, valid: true, providerId: provider, attempts, reason: selection.reason };
     }
-    // Selection can wait on a lock; backoff may also have crossed the budget.
-    if (now() - startedAt >= budgetMs) break;
+    // Selection can wait on a lock; the budget bounds extra dispatches, not the first request.
+    if (index > 0 && now() - startedAt >= budgetMs) break;
     attempted.add(selection.credentialId);
     let result;
     let error;
