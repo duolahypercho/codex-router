@@ -14587,6 +14587,142 @@ function genericResponsesReasoningFixture() {
   return { dir, providersFile, userModelsFile };
 }
 
+test("Responses child effort overrides survive the real API forwarder without a flat alias", async () => {
+  const upstreamBodies = [];
+  const upstream = await mockServer(async (request, response) => {
+    const body = await bodyJson(request);
+    upstreamBodies.push(body);
+    const answer = {
+      id: "resp_child_effort",
+      object: "response",
+      status: "completed",
+      model: body.model,
+      output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "child ok" }] }],
+    };
+    if (body.stream) {
+      response.writeHead(200, { "Content-Type": "text/event-stream" });
+      response.end(`data: ${JSON.stringify({ type: "response.completed", response: answer })}\n\n`);
+    } else json(response, 200, answer);
+  });
+  const fixture = genericResponsesReasoningFixture();
+  const providers = JSON.parse(readFileSync(fixture.providersFile, "utf8"));
+  providers.providers[0].baseUrl = `http://127.0.0.1:${upstream.port}/v1`;
+  providers.providers[0].allowPrivate = true;
+  writeFileSync(fixture.providersFile, JSON.stringify(providers));
+  const settingsPath = path.join(fixture.dir, "multi-agent-settings.json");
+  const settings = { version: 2, mode: "all", enabled: [], disabled: [], efforts: { "responses-gateway/thinker": "max" } };
+  writeFileSync(settingsPath, JSON.stringify(settings));
+  const forwarderPort = await openPort();
+  const env = {
+    MODEL_ROUTER_STATE_DIR: fixture.dir,
+    MODEL_ROUTER_GENERIC_PROVIDERS: fixture.providersFile,
+    MODEL_ROUTER_USER_MODELS: fixture.userModelsFile,
+    CODEX_ROUTER_QUIET: "1",
+  };
+  const forwarder = run("api-forwarder.mjs", { ...env, CODEX_ROUTER_API_PORT: String(forwarderPort) });
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    ...env,
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${forwarderPort}/v1`,
+  });
+  const turn = (fields, { child = true, stream = false } = {}) => fetch(`${routerBase(routerPort)}/responses`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(child ? { "x-openai-subagent": "fixture-child" } : {}),
+    },
+    body: JSON.stringify({
+      model: "responses-gateway/thinker",
+      stream,
+      input: [{ type: "agent_message", author: "/root", recipient: "/root/worker", content: [
+        { type: "input_text", text: "Message Type: NEW_TASK\nPayload:\n" },
+        { type: "encrypted_content", encrypted_content: "Review the fixture." },
+      ] }],
+      ...fields,
+    }),
+  });
+
+  try {
+    await waitFor(`http://127.0.0.1:${forwarderPort}/health`, forwarder, { Authorization: `Bearer ${INTERNAL_KEY}` });
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    for (const [fields, options, expected] of [
+      [{ reasoning: { effort: "low", summary: "auto" } }, { stream: true }, { effort: "max", summary: "auto" }],
+      [{ reasoning_effort: "low" }, {}, { effort: "max" }],
+      [{ reasoning: { effort: "low", summary: "auto" }, reasoning_effort: "high" }, {}, { effort: "max", summary: "auto" }],
+      [{ reasoning: { effort: "low", summary: "auto" } }, { child: false }, { effort: "low", summary: "auto" }],
+    ]) {
+      const response = await turn(fields, options);
+      const text = await response.text();
+      assert.equal(response.status, 200, `${text}\n${router.testErrors()}\n${forwarder.testErrors()}`);
+      assert.match(text, /child ok/);
+      assert.deepEqual(upstreamBodies.at(-1).reasoning, expected);
+      assert.equal(Object.hasOwn(upstreamBodies.at(-1), "reasoning_effort"), false);
+      assert.equal(upstreamBodies.at(-1).model, "thinker");
+      assert.equal(upstreamBodies.at(-1).input[0].type, "message");
+      assert.deepEqual(upstreamBodies.at(-1).input[0].content.at(-1), { type: "input_text", text: "Review the fixture." });
+    }
+    writeFileSync(settingsPath, JSON.stringify({ ...settings, efforts: {} }));
+    const unconfigured = await turn({ reasoning: { effort: "low", summary: "auto" } });
+    assert.equal(unconfigured.status, 200, await unconfigured.text());
+    assert.deepEqual(upstreamBodies.at(-1).reasoning, { effort: "low", summary: "auto" });
+
+    // The fix is on the child override, not a relaxation of the public adapter:
+    // an ordinary request with conflicting aliases must still fail locally.
+    const seen = upstreamBodies.length;
+    const invalidParent = await turn({ reasoning: { effort: "low" }, reasoning_effort: "high" }, { child: false });
+    assert.equal(invalidParent.status, 400, await invalidParent.text());
+    assert.equal(upstreamBodies.length, seen);
+  } finally {
+    await stopChild(router);
+    await stopChild(forwarder);
+    await closeServer(upstream.server);
+    rmSync(fixture.dir, { recursive: true, force: true });
+  }
+});
+
+test("built-in Responses child overrides also omit inherited flat effort aliases", async () => {
+  const models = ["meta/muse-spark-1.3", "opencode-go-responses/muse-spark-1.3-contributor"];
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), "responses-child-effort-"));
+  writeFileSync(path.join(stateDir, "multi-agent-settings.json"), JSON.stringify({
+    version: 2, mode: "all", enabled: [], disabled: [],
+    efforts: Object.fromEntries(models.map((model) => [model, "max"])),
+  }));
+  const bodies = [];
+  const gateway = await mockServer(async (request, response) => {
+    bodies.push(await bodyJson(request));
+    json(response, 200, {
+      id: "resp_builtin_child_effort", object: "response", status: "completed",
+      output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "ok" }] }],
+    });
+  });
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    MODEL_ROUTER_STATE_DIR: stateDir,
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_QUIET: "1",
+  });
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    for (const model of models) {
+      const response = await fetch(`${routerBase(routerPort)}/responses`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-openai-subagent": "fixture-child" },
+        body: JSON.stringify({ model, stream: false, input: "Review the fixture.",
+          reasoning: { effort: "low", summary: "auto" }, reasoning_effort: "low" }),
+      });
+      assert.equal(response.status, 200, `${model}: ${await response.text()}`);
+      assert.deepEqual(bodies.at(-1).reasoning, { effort: "max", summary: "auto" });
+      assert.equal(Object.hasOwn(bodies.at(-1), "reasoning_effort"), false);
+    }
+  } finally {
+    await stopChild(router);
+    await closeServer(gateway.server);
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
 test("generic openai-responses routes downgrade Codex agent handoffs on turns and compaction", async () => {
   const gatewayBodies = [];
   const gateway = await mockServer(async (request, response) => {
