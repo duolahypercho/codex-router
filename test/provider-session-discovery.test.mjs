@@ -31,6 +31,10 @@ test("direct session readers stop before returning a credential or launching a r
     assert.throws(kimiIdentityHeaders, /discovery is disabled/);
     assert.throws(() => readDevinSession({ credentialsPath: path.join(root, "never-open") }), /discovery is disabled/);
     await assert.rejects(ensureFreshKimiOAuthToken(), /discovery is disabled/);
+    const unreadContext = new Proxy({}, { get() { assert.fail("disabled discovery must not inspect even an explicit request context"); } });
+    assert.throws(() => readKimiOAuthToken(unreadContext), /discovery is disabled/);
+    assert.throws(() => kimiIdentityHeaders(unreadContext), /discovery is disabled/);
+    await assert.rejects(ensureFreshKimiOAuthToken({ force: true, context: unreadContext }), /discovery is disabled/);
     await assert.rejects(ensureFreshGrokOAuthToken(), /discovery is disabled/);
     await assert.rejects(refreshWithOfficialCli({ spawnImpl() { assert.fail("must not spawn"); } }), /discovery is disabled/);
   } finally {
