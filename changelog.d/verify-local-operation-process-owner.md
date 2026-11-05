@@ -1,0 +1,1 @@
+- Verify stored process start identity before cancelling a local download or MLX worker, including the Unix group fallback, so a reused PID is never treated as the old worker. Keep the uninstall worker's process start identity when it replaces the controller handoff, so an active removal remains cancellable.

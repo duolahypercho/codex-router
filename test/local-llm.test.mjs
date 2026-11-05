@@ -264,6 +264,7 @@ test("stale or dead local download workers become retryable errors", () => {
       startedAt: 1_000,
       updatedAt: 1_900,
       workerPid: 42,
+      workerIdentity: "fixture-worker",
     },
     { now: 2_000, kill: () => {}, persist: false },
   );
@@ -277,6 +278,7 @@ test("stale or dead local download workers become retryable errors", () => {
       startedAt: 1_000,
       updatedAt: 1_900,
       workerPid: 42,
+      workerIdentity: "fixture-worker",
     },
     {
       now: 2_000,
@@ -300,6 +302,7 @@ test("stale or dead local download workers become retryable errors", () => {
       startedAt: 1_000,
       updatedAt: 1_000,
       workerPid: 42,
+      workerIdentity: "fixture-worker",
     },
     { now: 1_000_000, kill: () => {}, timeoutMs: 10_000, persist: false },
   );
@@ -328,8 +331,10 @@ test("active local downloads and removals can be cancelled without a second work
     startedAt: 1_000,
     updatedAt: 2_000,
     workerPid: 42,
+    workerIdentity: "fixture-worker",
   });
   const cancelled = cancelLocalDownload("gemma4:12b", {
+    identity: () => "fixture-worker",
     now: () => 2_000,
     kill: (pid, signal) => {
       signals.push([pid, signal]);
@@ -348,8 +353,10 @@ test("active local downloads and removals can be cancelled without a second work
     startedAt: 3_000,
     updatedAt: 4_000,
     workerPid: 43,
+    workerIdentity: "fixture-worker",
   });
   const removal = cancelLocalDownload("gemma4:12b", {
+    identity: () => "fixture-worker",
     now: () => 4_000,
     kill: () => {},
     spawn: (command, args) => {
@@ -827,5 +834,16 @@ test("an unadopted Ollama start cleans up its own child on every failure", async
       processIdentity: () => { throw new Error("synthetic identity failure"); },
     }), phase === "readiness" ? /did not become ready/ : /synthetic identity failure/);
     assert.deepEqual(signals, ["SIGTERM"]);
+  }
+});
+test("local cancellation refuses reused or unverifiable worker PIDs", () => {
+  for (const expected of [undefined, "old-worker"]) {
+    const signals = [];
+    writeLocalDownload({ version: 1, kind: "download", tag: "gemma4:12b", status: "downloading",
+      startedAt: Date.now(), updatedAt: Date.now(), workerPid: 525252, workerIdentity: expected });
+    assert.throws(() => cancelLocalDownload("gemma4:12b", {
+      kill: (_pid, signal) => signals.push(signal), identity: () => "replacement-worker", platform: "linux",
+    }), /identity.*unavailable or changed/);
+    assert.deepEqual(signals, [0]);
   }
 });

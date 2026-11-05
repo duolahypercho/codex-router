@@ -275,6 +275,7 @@ test("a refused stop keeps the operation active instead of reporting false cance
     startedAt: Date.now(),
     updatedAt: Date.now(),
     workerPid: 424242,
+    workerIdentity: "fixture-worker",
     controllerPid: null,
   });
   const kill = (_pid, signal) => {
@@ -283,7 +284,7 @@ test("a refused stop keeps the operation active instead of reporting false cance
     error.code = "EPERM";
     throw error;
   };
-  assert.throws(() => cancelLocalMlxOperation({ kill, platform: "linux" }), /not permitted/);
+  assert.throws(() => cancelLocalMlxOperation({ kill, platform: "linux", identity: () => "fixture-worker" }), /not permitted/);
   assert.equal(readLocalMlxOperation({ kill, persist: false }).status, "downloading");
 });
 
@@ -296,11 +297,12 @@ test("cancellation stops the detached worker process group before recording succ
     startedAt: Date.now(),
     updatedAt: Date.now(),
     workerPid: 525252,
+    workerIdentity: "fixture-worker",
     controllerPid: null,
   });
   const calls = [];
   const kill = (pid, signal) => { calls.push({ pid, signal }); };
-  const result = cancelLocalMlxOperation({ kill, platform: "linux" });
+  const result = cancelLocalMlxOperation({ kill, platform: "linux", identity: () => "fixture-worker" });
   assert.equal(result.cancelled, true);
   assert.deepEqual(calls, [
     { pid: 525252, signal: 0 },
@@ -318,9 +320,11 @@ test("Windows cancellation stops the whole detached worker tree", () => {
     startedAt: Date.now(),
     updatedAt: Date.now(),
     workerPid: 525253,
+    workerIdentity: "fixture-worker",
     controllerPid: null,
   });
   const result = cancelLocalMlxOperation({
+    identity: () => "fixture-worker",
     platform: "win32",
     kill: () => {},
     spawnSyncImpl: (command, args, options) => {
@@ -406,4 +410,27 @@ test("Ollama install and uninstall refuse while the MLX worker is active", () =>
     workerPid: null,
     controllerPid: null,
   });
+});
+
+test("MLX cancellation refuses reused PIDs and rechecks before PID fallback", () => {
+  const seed = (identity) => writeLocalMlxOperation({ version: 1, status: "downloading", startedAt: Date.now(),
+    updatedAt: Date.now(), workerPid: 525252, workerIdentity: identity });
+  for (const expected of [undefined, "old-worker"]) {
+    seed(expected);
+    const signals = [];
+    assert.throws(() => cancelLocalMlxOperation({ platform: "linux", identity: () => "replacement-worker",
+      kill: (_pid, signal) => signals.push(signal) }), /identity.*unavailable or changed/);
+    assert.deepEqual(signals, [0]);
+  }
+  seed("old-worker");
+  let reads = 0;
+  const signals = [];
+  assert.throws(() => cancelLocalMlxOperation({ platform: "linux",
+    identity: () => ++reads === 1 ? "old-worker" : "replacement-worker",
+    kill: (pid, signal) => {
+      signals.push([pid, signal]);
+      if (pid < 0) throw Object.assign(new Error("group gone"), { code: "ESRCH" });
+    },
+  }), /identity changed before/);
+  assert.deepEqual(signals, [[525252, 0], [-525252, "SIGTERM"]]);
 });
