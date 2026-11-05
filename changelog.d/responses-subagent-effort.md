@@ -1,0 +1,1 @@
+- Keep subagent reasoning-effort overrides nested on Responses-native routes so the API forwarder no longer rejects child turns with HTTP 400, while preserving the Chat Completions compatibility alias.

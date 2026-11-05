@@ -4081,10 +4081,12 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
   // LiteLLM's Responses bridge derives its own effort from `reasoning` whenever
   // the client sent one -- and Codex always does -- then that derived value
   // overwrites anything flat the router set, so a flat-only override never
-  // reaches the provider. Set both: `reasoning.effort` is what actually
-  // travels, and the flat field is what a bare chat-completions gateway reads.
+  // reaches the provider. Chat Completions gateways still need the flat
+  // spelling, but a Responses-native route must carry only the nested one:
+  // the API forwarder rejects requests containing both aliases before upstream.
   if (childEffort) {
-    if (!deepSeekResponses) routed.reasoning_effort = childEffort;
+    if (chatCompletionsProvider && !deepSeekResponses) routed.reasoning_effort = childEffort;
+    else delete routed.reasoning_effort;
     routed.reasoning = { ...(routed.reasoning || {}), effort: childEffort };
   }
   normalizeAutoToolChoice(routed, route);
