@@ -173,7 +173,7 @@ export function StatusPage({
       providerId: provider.id,
       providerName: provider.displayName,
     })))
-    .filter((model) => Number.isFinite(Number(model.observedTokensPerSecond)))
+    .filter((model) => Number.isFinite(model.observedTokensPerSecond))
     .sort((left, right) =>
       Number(right.observedTokensPerSecond) - Number(left.observedTokensPerSecond)
       || (right.speedSampleCount || 0) - (left.speedSampleCount || 0),
@@ -210,9 +210,6 @@ export function StatusPage({
   const cachedInputTokens = contextEfficiency?.last24hCachedInputTokens
     ?? eventCachedInputTokens;
   const observedInputTokens = events.reduce((sum, event) => sum + (event.inputTokens || 0), 0);
-  const cacheReusePercent = observedInputTokens > 0
-    ? Math.min(100, (cachedInputTokens / observedInputTokens) * 100)
-    : null;
   const estimatedInputEvents = events.filter((event) =>
     Number.isFinite(Number(event.estimatedInputTokens)),
   ).length;
@@ -414,11 +411,6 @@ export function StatusPage({
                   <dt>{t("status.context.inputObserved")}</dt>
                   <dd>{compactNumber(observedInputTokens)}</dd>
                   <small>{t("status.context.acrossEvents", { count: exactNumber(events.length) })}</small>
-                </div>
-                <div>
-                  <dt>{t("status.context.reuseShare")}</dt>
-                  <dd>{cacheReusePercent == null ? t("status.context.notMeasured") : `${cacheReusePercent.toFixed(1)}%`}</dd>
-                  <small>{t("status.context.reuseShareDesc")}</small>
                 </div>
               </dl>
               <p className="st-telemetry-note">
@@ -661,7 +653,7 @@ function StatusModelRow({ model, peak }: { model: StatusModelUsage; peak: number
   const t = useI18n();
   const total = model.totalTokens || 0;
   const width = Math.max(total > 0 ? 1.5 : 0, (total / peak) * 100);
-  const speed = Number(model.observedTokensPerSecond);
+  const speed = model.observedTokensPerSecond;
   const outcomes = generationOutcomesSummary(model, t);
   return (
     <article className="st-model-row">
@@ -692,7 +684,7 @@ function StatusModelRow({ model, peak }: { model: StatusModelUsage; peak: number
         <span>{t("status.model.output", { count: compactNumber(model.outputTokens || 0) })}</span>
         <span>{t("status.model.requests", { count: exactNumber(model.requests || 0) })}</span>
         {outcomes ? <span>{outcomes}</span> : null}
-        {Number.isFinite(speed) ? <span>{speed.toFixed(1)} tok/s</span> : <span>{t("status.model.speedUnmeasured")}</span>}
+        {speed != null && Number.isFinite(speed) ? <span>{speed.toFixed(1)} tok/s</span> : <span>{t("status.model.speedUnmeasured")}</span>}
         {model.speedSampleCount ? <span>{t("status.model.speedSamples", { count: exactNumber(model.speedSampleCount) })}</span> : null}
       </div>
     </article>

@@ -1,0 +1,1 @@
+- **Unknown model speed stays unmeasured.** Remove numeric coercion of null speed in Status rankings, model facts, and the Dashboard ledger fallback; genuine numeric zero and measured samples retain their values.
