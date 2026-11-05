@@ -223,6 +223,7 @@ for (const platform of ["linux", "macos", "windows"]) {
       };
       const bindings = {
         serviceAppConnectorEnvironment: renderEnvironment,
+        plist: renderEnvironment,
         guardPlistWrite() {}, guardLauncherWrite() {},
         writeUnit: writeDefinition, writePlist: writeDefinition, writeLaunchers: writeDefinition,
         resetStartupAttempts: () => effects.push("reset"),

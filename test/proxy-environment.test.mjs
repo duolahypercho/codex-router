@@ -207,6 +207,7 @@ test("a service rendered with no proxy in the environment still carries the reco
           CODEX_ROUTER_STATE_DIR: stateDir,
           MODEL_ROUTER_TARGET: "codex",
           CODEX_ROUTER_SERVICE_PLATFORM: "darwin",
+          MODEL_ROUTER_LAUNCH_AGENTS_DIR: path.join(testRoot, "LaunchAgents"),
         },
       },
     );

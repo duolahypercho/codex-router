@@ -26,6 +26,7 @@ function serviceEnv(platform, testRoot, target = "codex") {
     CODEX_ROUTER_STATE_DIR: path.join(testRoot, "router state"),
     MODEL_ROUTER_STATE_DIR: path.join(testRoot, `${target} router state`),
     MODEL_ROUTER_TARGET: target,
+    MODEL_ROUTER_LAUNCH_AGENTS_DIR: path.join(testRoot, "LaunchAgents"),
     CODEX_ROUTER_SERVICE_PLATFORM: platform,
     XDG_CONFIG_HOME: path.join(testRoot, "xdg config"),
   };
@@ -55,6 +56,91 @@ function serviceCommand(
 function render(script, platform, testRoot, target = "codex", sourceRoot = root) {
   return serviceCommand(script, platform, testRoot, "render", target, sourceRoot);
 }
+
+test("macOS service regeneration preserves only the selected archive directory", {
+  skip: process.platform !== "darwin",
+}, () => {
+  const testRoot = mkdtempSync(path.join(os.tmpdir(), "archive-service-"));
+  const agents = path.join(testRoot, "LaunchAgents");
+  const file = path.join(agents, "io.github.codex-router.plist");
+  const key = "MODEL_ROUTER_TOOL_RESULT_RETENTION_DIR";
+  const directory = path.join(testRoot, "Archive & <evidence> 'quoted'", "results ");
+  const output = command => JSON.parse(execFileSync("/usr/bin/plutil", [
+    "-convert", "json", "-o", "-", "-",
+  ], { input: command, encoding: "utf8" })).EnvironmentVariables;
+  const run = (command, value) => serviceCommand("service-macos.mjs", "darwin", testRoot,
+    command, "codex", root, { [key]: value });
+  try {
+    const fresh = output(run("render", undefined));
+    assert.equal(Object.hasOwn(fresh, key), false);
+    assert.equal(existsSync(agents), false, "render must not write service state");
+    const configured = run("render", directory);
+    assert.equal(output(configured)[key], directory, "preserve path characters exactly");
+    mkdirSync(agents);
+    writeFileSync(file, configured.replace("<key>PATH</key>",
+      "<key>UNRELATED_SETTING</key><string>must-not-be-copied</string><key>PATH</key>"));
+    execFileSync("/usr/bin/plutil", ["-convert", "binary1", file]);
+    assert.equal(output(run("render", undefined))[key], directory);
+    run("install", undefined);
+    let saved = output(readFileSync(file, "utf8"));
+    assert.equal(saved[key], directory, "maintenance without the original shell keeps the path");
+    assert.equal(Object.hasOwn(saved, "UNRELATED_SETTING"), false);
+    const replacement = path.join(testRoot, "different archive");
+    run("install", replacement);
+    assert.equal(output(readFileSync(file, "utf8"))[key], replacement);
+    run("install", "");
+    saved = output(readFileSync(file, "utf8"));
+    assert.equal(Object.hasOwn(saved, key), false, "explicit empty value resets to default");
+    run("install", undefined);
+    assert.equal(Object.hasOwn(output(readFileSync(file, "utf8")), key), false,
+      "a reset survives later maintenance");
+    assert.equal(statSync(file).mode & 0o777, 0o600);
+  } finally {
+    rmSync(testRoot, { recursive: true, force: true });
+  }
+});
+
+test("macOS invalid saved archive settings fail before service or state replacement", {
+  skip: process.platform !== "darwin",
+}, () => {
+  const testRoot = mkdtempSync(path.join(os.tmpdir(), "archive-service-invalid-"));
+  const agents = path.join(testRoot, "LaunchAgents");
+  const file = path.join(agents, "io.github.codex-router.plist");
+  const state = path.join(testRoot, "codex router state");
+  const attempts = path.join(state, "startup-attempts.json");
+  const marker = JSON.stringify({ version: 1, consecutiveFailures: 3, lastFailureAt: 123,
+    nextAttemptNotBefore: 456 });
+  const key = "MODEL_ROUTER_TOOL_RESULT_RETENTION_DIR";
+  try {
+    mkdirSync(agents);
+    mkdirSync(state);
+    for (const contents of ["not a plist", `<plist version="1.0"><dict><key>EnvironmentVariables</key><dict><key>${key}</key><integer>42</integer></dict></dict></plist>`]) {
+      writeFileSync(file, contents);
+      writeFileSync(attempts, marker);
+      const result = spawnSync(process.execPath, [path.join(root, "src/service-macos.mjs"), "install"], {
+        cwd: root, encoding: "utf8", env: { ...serviceEnv("darwin", testRoot), [key]: undefined },
+      });
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /Cannot preserve the archive directory/);
+      assert.equal(readFileSync(file, "utf8"), contents);
+      assert.equal(readFileSync(attempts, "utf8"), marker, "preflight precedes startup-state reset");
+      assert.doesNotMatch(result.stderr, /not a plist|<integer>/, "never echo saved configuration");
+    }
+    // An explicit replacement can recover from an unusable prior definition.
+    serviceCommand("service-macos.mjs", "darwin", testRoot, "install", "codex", root, { [key]: "" });
+    assert.doesNotMatch(readFileSync(file, "utf8"), /MODEL_ROUTER_TOOL_RESULT_RETENTION_DIR/);
+    const original = path.join(testRoot, "original.plist");
+    const contents = readFileSync(file, "utf8");
+    writeFileSync(original, contents);
+    rmSync(file);
+    symlinkSync(original, file);
+    assert.throws(() => serviceCommand("service-macos.mjs", "darwin", testRoot,
+      "render", "codex", root, { [key]: undefined }), /Cannot preserve the archive directory/);
+    assert.equal(readFileSync(original, "utf8"), contents, "a redirected definition is untouched");
+  } finally {
+    rmSync(testRoot, { recursive: true, force: true });
+  }
+});
 
 test("all service platforms persist a bounded Z.ai idle override", () => {
   const testRoot = mkdtempSync(path.join(os.tmpdir(), "zai-idle-service-"));

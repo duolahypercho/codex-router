@@ -35,6 +35,8 @@ async function run(platform, command, mode = 'success', { wrapper = false } = {}
   const launch = kind => { events.push({ kind: 'launch', verb: kind, blocked: Boolean(record) }); };
   const fs = {
     existsSync: () => true, mkdirSync: () => {}, chmodSync: () => {}, renameSync: () => {},
+    lstatSync: file => { throw Object.assign(new Error('absent fixture file'),
+      { code: 'ENOENT', syscall: 'lstat', path: file }); },
     writeFileSync: () => {
       events.push({ kind: 'launcher-write' });
       if (mode === 'launcher-write-error') throw new Error('fixture launcher write failed');

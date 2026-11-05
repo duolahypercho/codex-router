@@ -3,6 +3,7 @@ import { rotateLog } from "./log-rotation.mjs";
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   renameSync,
   unlinkSync,
@@ -109,6 +110,26 @@ function environmentEntries() {
       ? { CODEX_ROUTER_PACKAGE_MANAGER: process.env.CODEX_ROUTER_PACKAGE_MANAGER }
       : {}),
   };
+  const archiveKey = "MODEL_ROUTER_TOOL_RESULT_RETENTION_DIR";
+  let archiveDirectory = process.env[archiveKey];
+  // Desktop maintenance has no shell overrides; retain only this supported setting.
+  if (archiveDirectory === undefined) {
+    try {
+      if (!lstatSync(LAUNCH_AGENT_PATH).isFile()) throw new Error("Unsafe LaunchAgent");
+      const previous = JSON.parse(execFileSync("/usr/bin/plutil", [
+        "-convert", "json", "-o", "-", LAUNCH_AGENT_PATH,
+      ], { encoding: "utf8", timeout: 5_000, stdio: ["ignore", "pipe", "pipe"] }));
+      archiveDirectory = previous?.EnvironmentVariables?.[archiveKey];
+      if (archiveDirectory !== undefined && typeof archiveDirectory !== "string") {
+        throw new Error("Invalid archive directory");
+      }
+    } catch (error) {
+      if (error.code !== "ENOENT" || error.syscall !== "lstat" || error.path !== LAUNCH_AGENT_PATH) {
+        throw new Error(`Cannot preserve the archive directory from the existing LaunchAgent. Set ${archiveKey} explicitly to replace it, or to an empty string to use the default.`);
+      }
+    }
+  }
+  if (archiveDirectory) values[archiveKey] = archiveDirectory;
   if (process.env.KIMI_CODE_HOME) values.KIMI_CODE_HOME = process.env.KIMI_CODE_HOME;
   return Object.entries(values)
     .map(([key, value]) => `    <key>${xml(key)}</key>\n    <string>${xml(value)}</string>`)
@@ -224,14 +245,14 @@ const guardPlistWrite = () => assertServiceWriteIsolated(LAUNCH_AGENT_PATH, {
   override: "MODEL_ROUTER_LAUNCH_AGENTS_DIR",
 });
 
-function writePlist() {
+function writePlist(contents) {
   guardPlistWrite();
   mkdirSync(path.dirname(LAUNCH_AGENT_PATH), { recursive: true });
   mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 });
   const temporary = `${LAUNCH_AGENT_PATH}.tmp.${process.pid}`;
   // Proxy URLs may carry credentials, so the generated plist is private just
   // like the state it launches with.
-  writeFileSync(temporary, plist(), { encoding: "utf8", mode: 0o600 });
+  writeFileSync(temporary, contents, { encoding: "utf8", mode: 0o600 });
   chmodSync(temporary, 0o600);
   renameSync(temporary, LAUNCH_AGENT_PATH);
 }
@@ -283,6 +304,7 @@ if (command === "render") {
   // machine's running service. writePlist re-checks; the guard is a pure
   // predicate.
   guardPlistWrite();
+  const contents = plist();
   bootout();
   resetStartupAttempts({ required: false });
   // Only safe here. launchd opens StandardOutPath before it execs the service,
@@ -292,7 +314,7 @@ if (command === "render") {
   // bootout and bootstrap nothing holds it and the next start creates a fresh
   // file. Failures are ignored -- housekeeping must not block an install.
   rotateLog(LOG_PATH);
-  writePlist();
+  writePlist(contents);
   bootstrap();
   process.stdout.write(`${JSON.stringify({ installed: true, path: LAUNCH_AGENT_PATH })}\n`);
 } else if (command === "uninstall") {
