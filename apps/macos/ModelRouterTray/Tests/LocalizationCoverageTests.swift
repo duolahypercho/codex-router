@@ -4,8 +4,8 @@ import Testing
 @testable import ModelRouterTray
 
 /// The language tables are only as good as the call sites that read them.
-/// `LocalizationTests` proves the tables agree with each other; this suite
-/// proves the tray actually asks for a string that is in them, so a new button
+/// `LocalizationTests` checks known keys, fallback and format specifiers; this
+/// suite proves the tray asks for a Chinese translation, so a new button
 /// or status line cannot ship as English-only in Chinese by accident.
 ///
 /// It reads the sources rather than running the UI, because the gap this

@@ -2099,7 +2099,7 @@ enum DesktopWidgetPresentation {
     let reset = resetCountdownLabel(
       Date(timeIntervalSince1970: resetAt),
       now: now,
-      chinese: language == .chinese
+      language: language
     )
     return String(
       format: localized("%@, %@, %@, %@"),

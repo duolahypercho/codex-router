@@ -1,0 +1,1 @@
+- **Native language tables use the existing English fallback for untranslated text.** Remove duplicate English entries from Arabic, Hindi, Japanese and Korean while retaining every translation and format argument.

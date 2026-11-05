@@ -1,0 +1,1 @@
+- **Partial panel languages use the existing English savings fallback.** Remove five copied Chinese overrides for Arabic, Hindi, Japanese, Korean, and Spanish, preserving counter interpolation and both complete Chinese translations.
