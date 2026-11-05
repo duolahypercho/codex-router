@@ -7,7 +7,7 @@ import test from "node:test";
 const stateDir = mkdtempSync(path.join(os.tmpdir(), "codex-router-alias-"));
 process.env.MODEL_ROUTER_STATE_DIR = stateDir;
 
-const { buildNativeAliasAssignments, nativeAliasFor, readNativeAliases } = await import(
+const { buildNativeAliasAssignments, nativeAliasFor, readNativeAliases, readNativeAliasSnapshot, resolveNativeAliasRoute } = await import(
   "../src/native-alias.mjs"
 );
 const { NATIVE_ALIAS_PATH } = await import("../src/paths.mjs");
@@ -21,7 +21,7 @@ test("assignments pair listed native slots with external models by priority", ()
     { slug: "gpt-5.5", visibility: "list", priority: 10 },
   ];
   const external = [{ slug: "kimi-oauth/k3" }, { slug: "grok-oauth/grok-4.5" }, { slug: "extra/model" }];
-  const assignments = buildNativeAliasAssignments(native, external);
+  const { assignments } = buildNativeAliasAssignments(native, external);
   assert.deepEqual(
     assignments.map(({ nativeModel, model }) => [nativeModel.slug, model.slug]),
     [
@@ -65,4 +65,33 @@ test("alias reads see a same-size rewrite made within one clock tick", () => {
   // difference distinguishes the two revisions.
   write("kimi-oauth/k9");
   assert.deepEqual(readNativeAliases(), { "gpt-5.5": "kimi-oauth/k9" });
+});
+
+test("alias snapshot routes use one read and distinguish withdrawal from native mode", () => {
+  writeFileSync(NATIVE_ALIAS_PATH, JSON.stringify({ version: 1, mode: "login-free",
+    aliases: { slot1: "custom/a" }, bindings: { slot1: "custom/a", slot2: "custom/b" } }));
+  const snapshot = readNativeAliasSnapshot();
+  const route = { slug: "custom/a" };
+  assert.deepEqual(resolveNativeAliasRoute("slot1", snapshot, () => route), { kind: "active", target: "custom/a", route });
+  assert.deepEqual(resolveNativeAliasRoute("slot1", snapshot, () => undefined), { kind: "withdrawn", target: "custom/a" });
+  assert.deepEqual(resolveNativeAliasRoute("slot2", snapshot, () => assert.fail("withdrawn target must not resolve")), { kind: "withdrawn", target: "custom/b" });
+  writeFileSync(NATIVE_ALIAS_PATH, "not json");
+  assert.equal(resolveNativeAliasRoute("slot1", snapshot, () => route).target, "custom/a", "a request retains its read snapshot");
+  assert.throws(readNativeAliasSnapshot, /unreadable/);
+  assert.equal(resolveNativeAliasRoute("slot1", { ...snapshot, mode: "native", aliases: {} }, () => assert.fail("native must pass through")).kind, "native");
+});
+
+test("bindings survive native-slot priority and availability changes", () => {
+  const native = ["slot-a", "slot-b", "slot-c"].map((slug, priority) => ({ slug, priority, visibility: "list" }));
+  const models = ["custom/a", "custom/b"].map((slug) => ({ slug }));
+  const first = buildNativeAliasAssignments(native, models);
+  const reordered = buildNativeAliasAssignments([...native].reverse().map((slot, priority) => ({ ...slot, priority })), [...models].reverse(), first.bindings);
+  assert.deepEqual(reordered.bindings, first.bindings);
+  assert.deepEqual(Object.fromEntries(reordered.assignments.map(({ nativeModel, model }) => [nativeModel.slug, model.slug])), first.bindings);
+  const unavailable = buildNativeAliasAssignments(native.map((slot) => slot.slug === "slot-a" ? { ...slot, visibility: "hide" } : slot), [...models, { slug: "custom/c" }], first.bindings);
+  assert.equal(unavailable.bindings["slot-a"], "custom/a");
+  assert.equal(unavailable.bindings["slot-c"], "custom/c");
+  assert.ok(!unavailable.assignments.some(({ model }) => model.slug === "custom/a"));
+  const restored = buildNativeAliasAssignments(native, models, unavailable.bindings);
+  assert.equal(restored.assignments.find(({ model }) => model.slug === "custom/a").nativeModel.slug, "slot-a");
 });

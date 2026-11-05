@@ -86,6 +86,48 @@ const STRICT_GENERIC_PROVIDER = {
 
 const TURN_BODY = { model: PRIMARY.slug, input: "hello", stream: true };
 
+test("reserved native aliases cannot silently change destination or become native traffic", async () => {
+  const seen = [];
+  const gw = await gateway(async (request, response) => {
+    seen.push(await bodyJson(request));
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    response.end(contentSse("alias-destination"));
+  });
+  const routerPort = await openPort();
+  const child = run({ ...routerEnv(gw.port, routerPort), CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${gw.port}` }, { chain: null });
+  const aliasFile = path.join(child.stateDir, "native-aliases.json");
+  const slot = "gpt-alias-fixture";
+  const set = (aliases, bindings = { [slot]: PRIMARY.slug }, mode = "login-free") =>
+    writeFileSync(aliasFile, JSON.stringify({ version: 1, mode, aliases, bindings }));
+  try {
+    await waitFor(`http://127.0.0.1:${routerPort}/health`, child);
+    set({ [slot]: PRIMARY.slug });
+    assert.equal((await readRouted(routerPort, { ...TURN_BODY, model: slot })).status, 200);
+    assert.equal(seen.at(-1).model, PRIMARY.gatewayModel);
+    const before = seen.length;
+    set({});
+    for (const endpoint of ["/responses", "/responses/compact"]) {
+      const result = await readRouted(routerPort, { ...TURN_BODY, model: slot }, { endpoint });
+      assert.equal(result.status, 409);
+      assert.equal(JSON.parse(result.body).error.type, "native_alias_unavailable");
+    }
+    set({ [slot]: "missing-provider/removed" }, { [slot]: "missing-provider/removed" });
+    assert.equal((await readRouted(routerPort, { ...TURN_BODY, model: slot })).status, 409);
+    assert.equal(seen.length, before, "withdrawn aliases dispatch neither routed nor native POSTs");
+    writeFileSync(aliasFile, "invalid json");
+    const broken = await readRouted(routerPort, { ...TURN_BODY, model: slot });
+    assert.equal(broken.status, 503);
+    assert.equal(JSON.parse(broken.body).error.type, "native_alias_state_unavailable");
+    assert.equal((await readRouted(routerPort, TURN_BODY)).status, 200, "canonical routes do not depend on alias state");
+    set({}, { [slot]: PRIMARY.slug }, "native");
+    assert.equal((await readRouted(routerPort, { ...TURN_BODY, model: slot })).status, 200);
+    assert.equal(seen.at(-1).model, slot, "explicit native mode retains native passthrough");
+  } finally {
+    await stopChild(child);
+    await closeServer(gw.server);
+  }
+});
+
 // Marker text is what proves whose bytes reached the client.
 function contentSse(marker) {
   return [

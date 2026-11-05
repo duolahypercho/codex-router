@@ -1,0 +1,1 @@
+- Keep native alias slots bound to their canonical destinations across refreshes, visibility changes and removal. Preserve withdrawn reservations and require a Codex reload when switching native/login-free mode; adopt a router with withdrawn-alias rejection before publishing binding changes.

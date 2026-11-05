@@ -1578,13 +1578,13 @@ test("efficient routed execution silently substitutes routine missing tools", ()
 // picker after an update (issue #338).
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-function writeCatalogCodexStub(directory) {
+function writeCatalogCodexStub(directory, nativeModels = [
+  { slug: "gpt-5.6-sol", display_name: "GPT-5.6 Sol", visibility: "list", priority: 10 },
+]) {
   const windows = process.platform === "win32";
   const target = path.join(directory, windows ? "codex-picker.cmd" : "codex-picker");
   const models = JSON.stringify({
-    models: [
-      { slug: "gpt-5.6-sol", display_name: "GPT-5.6 Sol", visibility: "list", priority: 10 },
-    ],
+    models: nativeModels,
   });
   writeFileSync(
     target,
@@ -1819,4 +1819,97 @@ test("hidden entries publish after every visible model so the desktop picker's f
   assert.equal(hidden.length, 121);
   assert.ok(hidden.every((model) => model.priority > 200));
   assert.equal(new Set(hidden.map((model) => model.priority)).size, hidden.length);
+});
+
+test("alias bindings survive repeated real catalog publications and mode changes", { timeout: 120000 }, async () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "catalog-persistent-alias-"));
+  const state = path.join(home, "state");
+  mkdirSync(state, { recursive: true });
+  const put = (name, value) => writeFileSync(path.join(state, name), JSON.stringify(value));
+  const slugs = ["openrouter/slot-a", "openrouter/slot-b", "openrouter/slot-c", "openrouter/slot-d"];
+  const native = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"].map((slug, index) => ({
+    slug, display_name: slug, visibility: "list", priority: 10 + index,
+  }));
+  const aliasPath = path.join(state, "native-aliases.json");
+  const catalogPath = path.join(state, "merged-models.json");
+  writeFileSync(path.join(home, "config.toml"), 'model = "gpt-5.6-sol"\n');
+  writeFileSync(path.join(state, "openrouter-api-key.secret"), "SYNTHETIC_ALIAS_KEY");
+  const provider = JSON.parse(readFileSync(path.join(repoRoot, "config", "openrouter", "openrouter.json"), "utf8")).providers.find((entry) => entry.id === "openrouter");
+  put("registry.json", { version: 1, providers: [provider], models: [] });
+  put("enabled-providers.json", { version: 1, providers: ["openrouter"] });
+  // Existing v1 assignments seed the permanent binding history.
+  put("native-aliases.json", { version: 1, aliases: { [native[1].slug]: slugs[1] } });
+  const env = { ...process.env, HOME: path.join(home, "cli-home"), USERPROFILE: path.join(home, "cli-home"),
+    CODEX_HOME: home, CODEX_BIN: writeCatalogCodexStub(home, native), CODEX_ROUTER_SOURCE_ROOT: repoRoot,
+    CODEX_ROUTER_STATE_DIR: state, MODEL_ROUTER_STATE_DIR: state, MODEL_ROUTER_TARGET: "codex",
+    MODEL_ROUTER_REGISTRY: path.join(state, "registry.json"),
+    MODEL_ROUTER_API_KEY_POOL_PATH: path.join(state, "pools.json"),
+    MODEL_ROUTER_PROVIDER_CREDENTIAL_STORE: path.join(state, "credentials.json"),
+    MODEL_ROUTER_USER_MODELS: path.join(state, "user-models.json"),
+    MODEL_ROUTER_GENERIC_PROVIDERS: path.join(state, "generic-providers.json"),
+    MODEL_ROUTER_MODEL_PICKER_STATE: path.join(state, "model-picker.json"), CODEX_ROUTER_NO_DISCOVERY: "0",
+    OPENROUTER_API_KEY: "SYNTHETIC_ALIAS_KEY" };
+  const select = (present, visible, priorities = {}) => {
+    put("user-models.json", { version: 1, models: present.map((slug, index) => userModelEntry({
+      providerId: "openrouter", upstreamId: slug.slice("openrouter/".length), priority: priorities[slug] ?? 100 + index,
+      metadata: { displayName: slug },
+    })) });
+    put("model-picker.json", { version: 1, hidden: slugs.filter((slug) => !visible.includes(slug)), visible, seeded: slugs });
+  };
+  const run = (loginFree = "1") => spawnSync(process.execPath, [path.join(repoRoot, "src", "catalog.mjs"), "--refresh-native"], {
+    cwd: repoRoot, encoding: "utf8", env: { ...env, MODEL_ROUTER_LOGIN_FREE: loginFree },
+  });
+  const publish = (loginFree) => {
+    const result = run(loginFree);
+    assert.equal(result.status, 0, result.stderr);
+    return { state: JSON.parse(readFileSync(aliasPath, "utf8")), result: JSON.parse(result.stdout), stderr: result.stderr };
+  };
+  const { readNativeAliasSnapshot, resolveNativeAliasRoute } = await import("../src/native-alias.mjs");
+  try {
+    select(slugs.slice(0, 2), slugs.slice(0, 2));
+    const first = publish().state;
+    assert.equal(first.version, 1);
+    assert.deepEqual(first.bindings, { [native[1].slug]: slugs[1], [native[0].slug]: slugs[0] });
+    assert.deepEqual(first.aliases, { [native[0].slug]: slugs[0], [native[1].slug]: slugs[1] });
+    select(slugs.slice(0, 2), slugs.slice(0, 2), { [slugs[0]]: 999, [slugs[1]]: 1 });
+    writeCatalogCodexStub(home, native.map((slot, index) => ({ ...slot, priority: 100 - index })));
+    const reordered = publish().state;
+    assert.deepEqual(reordered.aliases, first.aliases, "priority changes cannot rename either destination");
+    select(slugs.slice(0, 3), [slugs[1], slugs[2]]);
+    const hidden = publish().state;
+    assert.deepEqual(hidden.aliases, { [native[1].slug]: slugs[1], [native[2].slug]: slugs[2] });
+    assert.equal(hidden.bindings[native[0].slug], slugs[0]);
+    assert.equal(resolveNativeAliasRoute(native[0].slug, hidden, () => ({})).kind, "withdrawn");
+    select([slugs[0], slugs[2], slugs[3]], [slugs[2], slugs[3]]);
+    const removed = publish().state;
+    assert.deepEqual(removed.aliases, { [native[2].slug]: slugs[2] });
+    assert.equal(removed.bindings[native[1].slug], slugs[1]);
+    assert.ok(!Object.values(removed.aliases).includes(slugs[3]), "new models cannot borrow withdrawn slots");
+    select(slugs, slugs.slice(0, 3));
+    const restored = publish().state;
+    assert.deepEqual(restored.aliases, { [native[0].slug]: slugs[0], [native[1].slug]: slugs[1], [native[2].slug]: slugs[2] });
+    assert.equal(resolveNativeAliasRoute(native[2].slug, restored, () => undefined).kind, "withdrawn", "active metadata cannot authorize an unloaded route");
+    const nativeMode = publish("0");
+    assert.equal(nativeMode.state.mode, "native");
+    assert.deepEqual(nativeMode.state.aliases, {});
+    assert.deepEqual(nativeMode.state.bindings, restored.bindings);
+    assert.equal(resolveNativeAliasRoute(native[0].slug, nativeMode.state, () => assert.fail("native passthrough must not resolve a historical external target")).kind, "native");
+    assert.equal(nativeMode.result.client_reload_required, true);
+    assert.match(nativeMode.stderr, /restart Codex/);
+    const returned = publish("1");
+    assert.deepEqual(returned.state.aliases, restored.aliases);
+    assert.equal(returned.result.client_reload_required, true);
+    const beforeAlias = readFileSync(aliasPath);
+    const beforeCatalog = readFileSync(catalogPath);
+    writeFileSync(aliasPath, "not json");
+    const refused = run();
+    assert.notEqual(refused.status, 0);
+    assert.match(refused.stderr, /alias state is unreadable/);
+    assert.equal(readFileSync(aliasPath, "utf8"), "not json");
+    assert.deepEqual(readFileSync(catalogPath), beforeCatalog);
+    writeFileSync(aliasPath, beforeAlias);
+    assert.deepEqual(readNativeAliasSnapshot(aliasPath), returned.state);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 });

@@ -718,7 +718,9 @@ test("login-free control selects a ready external model and restores Codex defau
     const aliases = JSON.parse(readFileSync(path.join(stateDir, "native-aliases.json"), "utf8"));
     assert.deepEqual(aliases, {
       version: 1,
+      mode: "login-free",
       aliases: { "gpt-5.6-sol": "deepseek/deepseek-v4-flash" },
+      bindings: { "gpt-5.6-sol": "deepseek/deepseek-v4-flash" },
     });
 
     // A later catalog rebuild has no mode-toggle override. It must recover

@@ -228,7 +228,10 @@ if (failure) {
   const nativeSlug = mode === "capture-failure" ? "gpt-old-fixture" : "gpt-native-fixture";
   assert.ok(merged.models.some((model) => model.slug === nativeSlug));
   assert.equal(merged.models.find((model) => model.slug === selected)?.visibility, "list");
-  assert.deepEqual(JSON.parse(fs.readFileSync(targets.aliases, "utf8")), { version: 1, aliases: {} });
+  assert.deepEqual(JSON.parse(fs.readFileSync(targets.aliases, "utf8")), {
+    version: 1, mode: "native", aliases: {},
+    bindings: mode === "fresh" ? {} : { old: "old-route" },
+  });
   const announcement = JSON.parse(fs.readFileSync(targets.announcements, "utf8"));
   assert.equal(announcement.version, 1);
   assert.ok(Object.hasOwn(announcement.models, selected));

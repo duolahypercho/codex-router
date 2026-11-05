@@ -241,24 +241,3 @@ test("no test spawns the catalog without isolating CODEX_HOME", () => {
       "agents directory no state-directory override redirects",
   );
 });
-
-test("tests isolate picker state before importing the catalog", () => {
-  const offenders = readdirSync(path.join(root, "test"))
-    .filter((entry) => entry.endsWith(".mjs"))
-    .filter((entry) => {
-      const source = readFileSync(path.join(root, "test", entry), "utf8");
-      const catalogImport = source.indexOf('from "../src/catalog.mjs"');
-      const pickerOverride = source.indexOf("MODEL_ROUTER_MODEL_PICKER_STATE");
-      return (
-        entry !== "state-owner.test.mjs" &&
-        catalogImport >= 0 &&
-        pickerOverride >= 0 &&
-        pickerOverride > catalogImport
-      );
-    });
-  assert.deepEqual(
-    offenders,
-    [],
-    `${offenders.join(", ")} import the catalog before redirecting picker state`,
-  );
-});

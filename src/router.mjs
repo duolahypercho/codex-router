@@ -131,7 +131,7 @@ import {
 import { providerPoolRegistry } from "./provider-ws-pool.mjs";
 import { createHealthCache } from "./health-cache.mjs";
 import { discoveryDisabled } from "./discovery-mode.mjs";
-import { readNativeAliases } from "./native-alias.mjs";
+import { readNativeAliases, readNativeAliasSnapshot, resolveNativeAliasRoute } from "./native-alias.mjs";
 import { nativeContextVariantBase } from "./native-context-variants.mjs";
 import { normalizeNativeReasoningEffort } from "./native-reasoning-effort.mjs";
 import { foldResponsesSse, nativeInputAsList } from "./native-buffered-response.mjs";
@@ -4676,15 +4676,41 @@ async function handleResponses(request, response, requestUrl) {
     }
     controller.signal.throwIfAborted();
     requestedModel = typeof payload.model === "string" ? payload.model : "";
-    if (COMPATIBILITY_DISABLED_MODELS.has(requestedModel) ||
-        COMPATIBILITY_DISABLED_MODELS.has(readNativeAliases()[requestedModel])) {
+    if (COMPATIBILITY_DISABLED_MODELS.has(requestedModel)) {
+      writeJson(response, 409, compatibilityLayerError(requestedModel));
+      return;
+    }
+    const directRoute = MODEL_BY_SLUG.get(requestedModel);
+    let alias = { kind: "native" };
+    if (!directRoute && requestedModel && !isProviderPrefixedSlug(requestedModel)) {
+      let snapshot;
+      try {
+        snapshot = readNativeAliasSnapshot();
+      } catch {
+        writeJson(response, 503, { error: {
+          type: "native_alias_state_unavailable",
+          message: "Native alias state is unavailable. Repair it before retrying this model.",
+        } });
+        return;
+      }
+      alias = resolveNativeAliasRoute(requestedModel, snapshot, (target) => {
+        const loaded = MODEL_BY_SLUG.get(target);
+        return loaded && routeProviderEnabled(loaded.provider) ? loaded : undefined;
+      });
+      if (alias.kind === "withdrawn") {
+        writeJson(response, 409, { error: {
+          type: "native_alias_unavailable",
+          message: "This native alias is no longer available. Refresh the model picker and select an available model.",
+        } });
+        return;
+      }
+    }
+    if (COMPATIBILITY_DISABLED_MODELS.has(alias.target)) {
       writeJson(response, 409, compatibilityLayerError(requestedModel));
       return;
     }
     markResponsesStream(response, { model: requestedModel });
-    let registeredRoute =
-      MODEL_BY_SLUG.get(requestedModel) ??
-      MODEL_BY_SLUG.get(readNativeAliases()[requestedModel]);
+    let registeredRoute = directRoute ?? alias.route;
     // A provider-prefixed slug with no route is a routed model this process
     // never loaded -- added to user-models.json after startup, or skipped at
     // load as invalid -- and never native GPT traffic: no native slug contains

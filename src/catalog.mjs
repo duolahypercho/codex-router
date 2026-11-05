@@ -45,7 +45,7 @@ import {
   seedModelsHidden,
   readPickerOrder,
 } from "./model-picker-state.mjs";
-import { buildNativeAliasAssignments } from "./native-alias.mjs";
+import { buildNativeAliasAssignments, readNativeAliasSnapshot } from "./native-alias.mjs";
 import {
   NATIVE_CONTEXT_VARIANT_SLUGS,
   withNativeContextVariants,
@@ -1104,6 +1104,7 @@ export function buildLoginFreeCatalog(native, routedModelsList, {
   pickerOrder = "native-first",
   hiddenModels = new Set(),
   visibleModels,
+  bindings = {},
 } = {}) {
   const configured = new Set(configuredProviderIds());
   const usableModels = routedModelsList.filter(
@@ -1114,7 +1115,7 @@ export function buildLoginFreeCatalog(native, routedModelsList, {
   const aliasModels = usableModels.filter((model) =>
     !hiddenModels.has(model.slug) && (!visibleModels || visibleModels.has(model.slug)),
   );
-  const assignments = buildNativeAliasAssignments(native.models, aliasModels);
+  const { assignments, bindings: reservedBindings } = buildNativeAliasAssignments(native.models, aliasModels, bindings);
   const aliasedSlugs = new Set(assignments.map(({ model }) => model.slug));
   const aliases = Object.fromEntries(
     assignments.map(({ nativeModel, model }) => [nativeModel.slug, model.slug]),
@@ -1134,7 +1135,7 @@ export function buildLoginFreeCatalog(native, routedModelsList, {
         aliasedSlugs.has(model.slug) ? { ...model, visibility: "hide" } : model,
     ),
   ];
-  return { models: sortCatalogModels(models), aliases };
+  return { models: sortCatalogModels(models), aliases, bindings: reservedBindings };
 }
 
 // A signed-in Codex catalog contains two policy domains: the account's native
@@ -1154,6 +1155,7 @@ export function publishCatalog({ refreshNative = refresh, output = true } = {}) 
   // that does not own this state directory is how the picker ends up
   // advertising models the running gateway has no route for.
   assertStateOwnership("write the Codex model catalog");
+  const previousAliases = readNativeAliasSnapshot();
   const userSlugs = new Set(readUserModels().map((model) => String(model.slug)));
   const selectedModels = selectedConfiguredListedModels();
   const loginFree = loginFreeConfigured();
@@ -1266,9 +1268,10 @@ export function publishCatalog({ refreshNative = refresh, output = true } = {}) 
   );
   const catalogModels = applyVisionBridge(routedModels, visionEngine);
   const pickerOrder = readPickerOrder();
-  const { models: merged, aliases } = loginFree
+  const { models: merged, aliases, bindings } = loginFree
     ? buildLoginFreeCatalog(native, catalogModels, {
         pickerOrder,
+        bindings: previousAliases.bindings,
         hiddenModels: effectiveHiddenModels,
         visibleModels: pickerState.hasExplicitVisibility ? visibleModels : undefined,
       })
@@ -1278,14 +1281,20 @@ export function publishCatalog({ refreshNative = refresh, output = true } = {}) 
           pickerOrder,
         }),
         aliases: {},
+        bindings: previousAliases.bindings,
       };
+  const aliasMode = loginFree ? "login-free" : "native";
+  const aliasModeChanged = previousAliases.mode !== aliasMode;
   const snapshots = new Map(
     [MERGED_CATALOG_PATH, NATIVE_ALIAS_PATH, ANNOUNCED_MODELS_PATH]
       .map((target) => [target, fileSnapshot(target)]),
   );
   let routedAgents;
   try {
-    atomicJson(NATIVE_ALIAS_PATH, { version: 1, aliases });
+    // Adopt a router with withdrawn-alias rejection before publishing this state.
+    // Version 1 keeps active aliases readable during upgrade; old routers do not
+    // understand reservations, and a mode change does not prove client reload.
+    atomicJson(NATIVE_ALIAS_PATH, { version: 1, mode: aliasMode, aliases, bindings });
     writeAnnouncedAt(announcedAt);
     atomicJson(MERGED_CATALOG_PATH, {
       models: publishHiddenAfterVisible(merged.map((model) => {
@@ -1353,7 +1362,11 @@ export function publishCatalog({ refreshNative = refresh, output = true } = {}) 
     if (error && typeof error === "object") error.catalogRollbackSafe = true;
     throw error;
   }
+  if (aliasModeChanged) {
+    process.stderr.write("[codex-router] Native alias routing mode changed; restart Codex to reload its picker before sending more requests.\n");
+  }
   const result = {
+    ...(aliasModeChanged ? { native_alias_mode_changed: true, client_reload_required: true } : {}),
     path: MERGED_CATALOG_PATH,
     models: merged.length,
     routed_models: routedModels.length,
