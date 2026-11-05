@@ -7,6 +7,8 @@ import {
   checkpointFromRenderedText,
   decodeCompaction,
 } from "./compaction-checkpoint.mjs";
+import { parseSseBlockEvent } from "./grok-oauth-turn.mjs";
+import { ResponseOutcomeObserver } from "./response-outcome.mjs";
 import { EXACT_ROUTE_PROBE_HEADER } from "./exact-route-probe.mjs";
 import { MODEL_BY_SLUG } from "./model-registry.mjs";
 import { installedRouterBaseUrl } from "./smoke-test.mjs";
@@ -129,25 +131,40 @@ async function streaming(model, reasoningEffort) {
     signal: AbortSignal.timeout(180_000),
   });
   const body = await response.text();
-  const streamedText = body
-    .split(/\r?\n/)
-    .filter((line) => line.startsWith("data:"))
-    .map((line) => line.slice(5).trim())
-    .filter((line) => line && line !== "[DONE]")
-    .map((line) => {
-      try {
-        const event = JSON.parse(line);
-        return event.delta || event.text || event.output_text || "";
-      } catch {
-        return "";
+  const blocks = body.split(/\r?\n\r?\n/);
+  blocks.pop(); // SSE dispatch requires a complete blank-line boundary.
+  const outcome = new ResponseOutcomeObserver();
+  let streamedText = "";
+  let completed = false;
+  for (const block of blocks) {
+    const event = parseSseBlockEvent(block);
+    if (!event) continue;
+    outcome.observe(event);
+    if (event.type === "response.output_text.delta" && typeof event.delta === "string") streamedText += event.delta;
+    if (event.type === "response.output_text.done" && typeof event.text === "string" && !streamedText) streamedText = event.text;
+    if (["response.completed", "response.done"].includes(event.type) &&
+        event.response && typeof event.response === "object" && !Array.isArray(event.response)) {
+      completed = true;
+      if (!streamedText) {
+        streamedText = typeof event.response.output_text === "string" ? event.response.output_text
+          : (Array.isArray(event.response.output) ? event.response.output : [])
+            .filter((item) => item?.type === "message" && item.role === "assistant")
+            .flatMap((item) => Array.isArray(item.content) ? item.content : [])
+            .filter((part) => part?.type === "output_text" && typeof part.text === "string")
+            .map((part) => part.text).join("\n");
       }
-    })
-    .join("");
-  const completed = /response\.(?:completed|done)|\[DONE\]/.test(body);
+    }
+  }
+  const markerReceived = streamedText.includes(marker);
+  const successfulTerminal = completed && outcome.outcome() === "completed";
+  const ok = response.ok && markerReceived && successfulTerminal;
   return {
-    ok: response.ok && (body.includes(marker) || streamedText.includes(marker)) && completed,
+    ok,
     status: response.status,
-    detail: response.ok ? "stream text and completion event verified" : `HTTP ${response.status}`,
+    detail: !response.ok ? `HTTP ${response.status}`
+      : !markerReceived ? "stream output marker missing"
+      : !successfulTerminal ? "successful stream completion event missing"
+      : "stream text and completion event verified",
   };
 }
 

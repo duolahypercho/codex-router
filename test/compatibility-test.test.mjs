@@ -50,6 +50,7 @@ function compactResponse(body, echoMarker) {
 async function startCompatibilityServer({
   echoToolResult = true,
   echoCompactionMarker = true,
+  streamBody,
 } = {}) {
   const requests = [];
   const server = http.createServer(async (request, response) => {
@@ -60,6 +61,11 @@ async function startCompatibilityServer({
       return;
     }
     if (body.stream) {
+      if (streamBody !== undefined) {
+        response.writeHead(200, { "Content-Type": "text/event-stream" });
+        response.end(streamBody);
+        return;
+      }
       response.writeHead(200, { "Content-Type": "text/event-stream" });
       response.end([
         `data: ${JSON.stringify({ type: "response.output_text.delta", delta: "CODEX_ROUTER_STREAM_OK" })}`,
@@ -206,4 +212,41 @@ test("compatibility certification refuses an unknown effort before spending quot
     compatibilityTest("ollama-cloud/glm-5.3", { reasoningEffort: "extreme" }),
     /Unknown reasoning effort/,
   );
+});
+
+
+test("stream certification requires real output and a successful framed terminal", async () => {
+  const frame = (event) => `data: ${JSON.stringify(event)}\n\n`;
+  const delta = { type: "response.output_text.delta", delta: "CODEX_ROUTER_STREAM_OK response.completed [DONE]" };
+  const terminal = { type: "response.completed", response: { status: "completed" } };
+  for (const [body, expected] of [
+    [frame(delta), false],
+    [JSON.stringify({ text: delta.delta }), false],
+    [frame(delta) + "data: [DONE]\n\n", false],
+    [frame(delta) + frame({ ...terminal, response: { status: "incomplete" } }), false],
+    [frame(delta) + frame({ type: "response.failed" }) + frame(terminal), false],
+    [frame(delta) + frame({ type: "response.completed", response: [] }), false],
+    [frame({ type: "unknown", text: "CODEX_ROUTER_STREAM_OK" }) + frame(terminal), false],
+    [frame(delta) + frame(terminal), true],
+    [frame({ type: "response.output_text.done", text: "CODEX_ROUTER_STREAM_OK" }) + frame(terminal), true],
+    [frame({ ...terminal, response: { status: "completed", output_text: "CODEX_ROUTER_STREAM_OK" } }), true],
+    [frame({ ...terminal, response: { status: "completed", output: [{ type: "message", role: "user", content: [{ type: "input_text", text: "CODEX_ROUTER_STREAM_OK" }] }] } }), false],
+    [frame({ ...terminal, response: { status: "completed", output: [{ type: "message", role: "assistant", content: [{ type: "reasoning_text", text: "CODEX_ROUTER_STREAM_OK" }] }] } }), false],
+    [frame({ ...terminal, response: { status: "completed", output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "CODEX_ROUTER_STREAM_OK" }] }] } }), true],
+    [frame(delta) + 'data: {"type":"response.done",\ndata: "response":{"status":"completed"}}\n\n', true],
+  ]) {
+    const mock = await startCompatibilityServer({ streamBody: body.replaceAll("\n", "\r\n") });
+    const previous = process.env.CODEX_ROUTER_BASE_URL;
+    process.env.CODEX_ROUTER_BASE_URL = mock.url;
+    try {
+      const result = await compatibilityTest("ollama-cloud/glm-5.3");
+      const stream = result.results.find((entry) => entry.name === "streaming");
+      assert.equal(stream.ok, expected, body);
+      if (!expected) assert.doesNotMatch(stream.detail, /verified/);
+    } finally {
+      if (previous === undefined) delete process.env.CODEX_ROUTER_BASE_URL;
+      else process.env.CODEX_ROUTER_BASE_URL = previous;
+      await mock.close();
+    }
+  }
 });

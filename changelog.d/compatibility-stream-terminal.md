@@ -1,0 +1,1 @@
+- Certify streaming from framed assistant output and a real successful response terminal instead of quoted completion words, echoed input or reasoning.
