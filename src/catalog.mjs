@@ -295,7 +295,18 @@ function captureNative(cache) {
   } catch (error) {
     fallbackError = error;
   }
-  const parsed = mergeNativeCatalogs(account, fallback);
+  // A valid account catalog is authoritative about which models exist. It is
+  // the only list that reflects the plan: the bundled catalog ships every model
+  // the build can address, published ones included, so appending its
+  // bundled-only entries offered a Free account models its plan cannot call
+  // (#1098). GPT-6.1 Sol showed up in the picker and every turn answered "This
+  // model isn't available". Bundled data still backfills schema fields for the
+  // slugs both lists share, which is the reason it was merged in the first
+  // place. Without an account catalog there is nothing authoritative to defer
+  // to, so the bundled list stays the whole capture.
+  const parsed = mergeNativeCatalogs(account, fallback, {
+    includeBundledOnly: !validNativeCatalog(account),
+  });
   if (!validNativeCatalog(parsed)) {
     const detail = accountError?.message || fallbackError?.message;
     throw new Error(
