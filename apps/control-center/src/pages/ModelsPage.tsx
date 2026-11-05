@@ -689,8 +689,7 @@ export function ModelsPage({ target, catalog, setup, usage, api, refreshing, dat
   // looking at it to confirm the click did what you meant.
   const rows = useMemo(() => filteredFamilies.map((family) => {
     const usable = family.routes.filter(routeUsable);
-    const inPicker = usable.filter((model) => optimisticPicker.value(model.slug, model.visible));
-    return { family, usable, inPicker, on: inPicker.length > 0 };
+    return { family, usable, on: usable.some((model) => optimisticPicker.value(model.slug, model.visible)) };
   }), [filteredFamilies, optimisticPicker]);
   const visibleRows = useMemo(() => rows.filter((row) => {
     if (statusFilter === "all") return true;
@@ -749,37 +748,11 @@ export function ModelsPage({ target, catalog, setup, usage, api, refreshing, dat
     ? optimisticSubagentEfforts.mutate(slug, effort, t("models.action.setEffort", { name: slug, effort: effortLabel(effort, t) }), () => api.setSubagentEffort(slug, effort))
     : Promise.resolve();
 
-  // The row-level switch speaks for the whole model: turning it on publishes
-  // the route the router would pick anyway, turning it off withdraws every
-  // route. Choosing between routes stays inside the expanded row.
-  const updateFamilyPicker = (family: ModelFamily, usable: RouterModel[], inPicker: RouterModel[], visible: boolean) => {
-    if (!api) return Promise.resolve();
-    const selectable = usable.filter((model) => !nativeClientManaged(model));
-    if (visible) {
-      const route = preferredFamilyRoute({ ...family, routes: selectable }) ?? selectable[0];
-      if (!route) return Promise.resolve();
-      return optimisticPicker.mutate(route.slug, true, t("models.action.show", { name: family.displayName }), () => api.setPickerModel(route.slug, true));
-    }
-    const withdraw = inPicker.filter((model) => !nativeClientManaged(model));
-    if (!withdraw.length) return Promise.resolve();
-    return optimisticPicker.mutateMany(
-      withdraw.map((model) => [model.slug, false] as const),
-      t("models.action.hide", { name: family.displayName }),
-      async () => {
-        for (const model of withdraw) await api.setPickerModel(model.slug, false);
-      },
-    );
-  };
-
-  // The switch is the whole interaction: it runs the checks, and the router
-  // promotes the route only if every one of them passed. A refusal comes back
-  // as one sentence rather than a state the reader has to decode.
-  const renderRow = ({ family, usable, inPicker, on }: (typeof rows)[number]) => (
+  const renderRow = ({ family, usable, on }: (typeof rows)[number]) => (
     <ModelFamilyRow
       key={family.id}
       family={family}
       usable={usable}
-      inPicker={inPicker}
       on={on}
       expanded={expandedFamilyId === family.id}
       onToggleExpanded={() => setExpandedFamilyId(expandedFamilyId === family.id ? null : family.id)}
@@ -789,7 +762,6 @@ export function ModelsPage({ target, catalog, setup, usage, api, refreshing, dat
       pickerValue={(model) => optimisticPicker.value(model.slug, model.visible)}
       subagentValue={(model) => optimisticSubagents.value(model.slug, Boolean(subagentEnabled(target, model.slug, subagentSettings)))}
       effortValue={(model) => optimisticSubagentEfforts.value(model.slug, subagentSettings?.efforts?.[model.slug] ?? "default")}
-      onFamilyPicker={(visible) => void updateFamilyPicker(family, usable, inPicker, visible)}
       onRoutePicker={(model, visible) => void updatePicker(model.slug, visible)}
       onSubagent={(model, enabled) => void updateSubagent(model.slug, enabled)}
       onEffort={(model, effort) => void updateSubagentEffort(model.slug, effort)}
@@ -1381,7 +1353,6 @@ function ProviderMenu({
 function ModelFamilyRow({
   family,
   usable,
-  inPicker,
   on,
   expanded,
   onToggleExpanded,
@@ -1391,7 +1362,6 @@ function ModelFamilyRow({
   pickerValue,
   subagentValue,
   effortValue,
-  onFamilyPicker,
   onRoutePicker,
   onSubagent,
   onEffort,
@@ -1400,7 +1370,6 @@ function ModelFamilyRow({
 }: {
   family: ModelFamily;
   usable: RouterModel[];
-  inPicker: RouterModel[];
   on: boolean;
   expanded: boolean;
   onToggleExpanded: () => void;
@@ -1410,7 +1379,6 @@ function ModelFamilyRow({
   pickerValue: (model: RouterModel) => boolean;
   subagentValue: (model: RouterModel) => boolean;
   effortValue: (model: RouterModel) => string;
-  onFamilyPicker: (visible: boolean) => void;
   onRoutePicker: (model: RouterModel, visible: boolean) => void;
   onSubagent: (model: RouterModel, enabled: boolean) => void;
   onEffort: (model: RouterModel, effort: string) => void;
@@ -1467,13 +1435,15 @@ function ModelFamilyRow({
             </Button>
           ) : (
             <>
-              <span className="pm-family-state" aria-hidden>{on ? t("models.status.on") : t("models.status.off")}</span>
-              <Toggle
-                checked={on}
-                disabled={!apiAvailable || managedByClient}
-                label={managedByClient ? t("models.family.managedByCodex", { name: family.displayName }) : t("models.family.useInCodex", { name: family.displayName })}
-                onChange={onFamilyPicker}
-              />
+              <span className="pm-family-state">{on ? t("models.status.on") : t("models.status.off")}</span>
+              {!multiRoute ? (
+                <Toggle
+                  checked={on}
+                  disabled={!apiAvailable || managedByClient}
+                  label={managedByClient ? t("models.family.managedByCodex", { name: family.displayName }) : t("models.family.useInCodex", { name: family.displayName })}
+                  onChange={(visible) => onRoutePicker(family.routes[0], visible)}
+                />
+              ) : null}
             </>
           )}
         </div>

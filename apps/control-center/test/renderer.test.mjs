@@ -1031,6 +1031,7 @@ test("the production renderer exposes model discovery and picker actions", { tim
     await oxFamily.waitFor();
     assert.match(await oxFamily.innerText(), /6 providers/);
     assert.match(await oxFamily.innerText(), /6 routes/i);
+    assert.equal(await oxFamily.locator('.pm-family-action input[type="checkbox"]').count(), 0, "multi-route availability is read-only; choices belong to each route");
     await oxFamily.locator(".pm-family-open").click();
     assert.equal(await oxFamily.locator(".pm-route-row").count(), 6);
     assert.equal(await oxFamily.locator('.pm-route-row[data-availability="known"]').count(), 4);

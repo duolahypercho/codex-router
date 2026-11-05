@@ -1,0 +1,1 @@
+- **Multi-route model families use their existing route controls.** Remove the aggregate family mutation that could not hide client-managed models and repeated catalog publication once per route. Family availability stays visible; expand a family to choose exact routes, while single-route switches remain direct.
