@@ -1,0 +1,1 @@
+- Cache streamed reasoning only as a whole chain with a supported successful finish, matching the JSON replay contract.
