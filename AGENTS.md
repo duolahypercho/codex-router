@@ -796,6 +796,39 @@ and every client saw a bare "Connection error" naming nothing.
    (end to end: a stand-in gateway exits 1 mid-request, the service does not,
    and the router is still serving afterwards).
 
+## The router port opens before the gateway is healthy
+
+`src/start.mjs` used to spawn the router only after LiteLLM passed its health
+check, so every service restart closed the client-facing port for the whole cold
+start. Codex's own retries ran out inside that window and it reported
+`stream disconnected before completion: Connection refused`.
+
+1. **The router is spawned with the forwarders, before any dependency wait.**
+   Do not move it back behind the gateway to simplify startup; that reintroduces
+   the outage on every restart.
+2. **`ready` still means the whole stack is healthy.** The router's `/health`
+   answers 503 with `degraded` until its dependencies are reachable, so startup,
+   Antigravity promotion, and `waitForRouterHealth` keep their meaning. An open
+   port is not readiness.
+3. **A router that dies during startup ends startup at once.** The dependency
+   waits do not watch it, so they race its exit. Without that, a router that
+   cannot bind leaves the service waiting out the gateway's allowance.
+4. **Native turns are never held, and a routed request waits only for what its
+   route uses.** Routed requests wait in `src/startup-dependency-gate.mjs` for
+   the services `routeExecution` names, so a direct Responses provider never
+   waits on LiteLLM. Embeddings and decisions wait for the API forwarder they
+   call. The gate is off unless the supervisor sets
+   `CODEX_ROUTER_STARTUP_HOLD_MS`, because a router started on its own has
+   nothing bringing those dependencies up.
+5. **The gate covers startup only.** Each dependency latches open on its first
+   healthy probe or when the bound runs out, and never closes again. A caller
+   must recheck its abort signal after the wait. A later gateway crash
+   belongs to the gateway supervisor. Do not reuse the gate to ride out crashes:
+   Codex retries on its own and the holds would multiply.
+6. **Coverage.** `test/startup-restart-gap.test.mjs` drives the real `start.mjs`
+   against a stand-in gateway whose cold start the test controls, and
+   `test/startup-dependency-gate.test.mjs` holds the gate's contract.
+
 ## Requests to install or expose more models
 
 First distinguish a local model addition from a repository-wide model change.

@@ -59,6 +59,7 @@ import {
   writeStreamErrorEvent,
   zstdFrameContentSize,
 } from "./http-utils.mjs";
+import { createStartupDependencyGate, parseStartupHoldMs } from "./startup-dependency-gate.mjs";
 import {
   EmptyCompletionGuard,
   EmptyCompletionTerminalGuard,
@@ -4770,6 +4771,7 @@ async function handleResponses(request, response, requestUrl) {
     }
     let functionTools;
     if (route) {
+      await holdForStartup(routeExecution(route, { providerForModel }).services, controller.signal);
       // History already poisoned by #1066 carries a call with empty arguments
       // whose only output is Codex's own parse failure; it never ran, so it is
       // omitted instead of refusing every later turn.
@@ -6761,6 +6763,7 @@ async function handleEmbeddings(request, response, requestUrl) {
     const headers = routedHeaders();
     const requestId = safeForwardedRequestId(request.headers["x-request-id"]);
     if (requestId) headers["X-Request-Id"] = requestId;
+    await holdForStartup(["api"], controller.signal);
     const upstream = await fetch(
       `${API_BASE}/embeddings${nativeRequestSearch(requestUrl)}`,
       {
@@ -6899,6 +6902,7 @@ async function handleDecisions(request, response, requestUrl) {
     const headers = routedHeaders();
     const requestId = safeForwardedRequestId(request.headers["x-request-id"]);
     if (requestId) headers["X-Request-Id"] = requestId;
+    await holdForStartup(["api"], controller.signal);
     const upstream = await fetch(
       `${API_BASE}/decisions${nativeRequestSearch(requestUrl)}`,
       {
@@ -7089,6 +7093,35 @@ async function handleRequest(request, response) {
   writeJson(response, 404, {
     error: { type: "proxy_route_not_found", message: "Unsupported router route." },
   });
+}
+
+// Keyed by the service names `routeExecution` reports for a route.
+const STARTUP_DEPENDENCY_HEALTH = new Map([
+  ["kimi", OAUTH_HEALTH],
+  ["api", API_HEALTH],
+  ["grok", GROK_OAUTH_HEALTH],
+  ["gateway", GATEWAY_HEALTH],
+  ["antigravity", loopback(PORTS.antigravityOauth, "/health")],
+  ["devin", loopback(PORTS.devinCli, "/health")],
+]);
+
+const startupDependencyGate = createStartupDependencyGate({
+  holdMs: parseStartupHoldMs(process.env.CODEX_ROUTER_STARTUP_HOLD_MS),
+  dependencies: runtimeDependencyRequirements({ includePendingActivation: false }).services
+    .filter((service) => STARTUP_DEPENDENCY_HEALTH.has(service)),
+  // Probes directly rather than through `serviceHealth`, whose cache would keep
+  // a refusal from a moment ago and hold a turn up to one TTL past the gateway
+  // coming up.
+  isReady: async (service) => (await probeService(STARTUP_DEPENDENCY_HEALTH.get(service))).reachable,
+  log: (message) => console.error(`[codex-router] ${message}`),
+});
+
+async function holdForStartup(dependencies, signal) {
+  await startupDependencyGate.wait({ dependencies, signal });
+  // The hold is the one await here that a disconnect can land in. Without this
+  // the handler carries on for a client that has gone, and can record a local
+  // refusal against what was really a cancel.
+  signal.throwIfAborted();
 }
 
 const server = http.createServer((request, response) => {
