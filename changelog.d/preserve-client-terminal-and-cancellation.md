@@ -1,0 +1,1 @@
+- **Preserve Cursor completion and cancellation.** Chat replies report output-token limits, incomplete CLI turns end with an error, and closing RunSSE aborts canonical work without late writes or tool requests.
