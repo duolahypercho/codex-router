@@ -4,7 +4,13 @@ name: CI
   push:
     branches: [main]
   pull_request: {}
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: Checks to run (runtime skips the Homebrew source install)
+        type: choice
+        default: all
+        options: [all, runtime]
 
 permissions:
   contents: read
@@ -121,7 +127,7 @@ jobs:
   # Python dependency tree is large. Run this on the candidate stable commit
   # before opening the homebrew/core pull request.
   homebrew-install:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && (inputs.scope == 'all' || inputs.scope == '')
     strategy:
       fail-fast: false
       matrix:
