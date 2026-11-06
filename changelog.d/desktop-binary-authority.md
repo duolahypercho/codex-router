@@ -1,0 +1,1 @@
+- Use the core Codex binary resolver in desktop detection and login, including CODEX_BIN and bundled Windows binaries; preserve executable names when following version-manager links.
