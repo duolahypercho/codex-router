@@ -1213,6 +1213,67 @@ test("an account catalog can be authoritative about model availability", () => {
   assert.deepEqual(merged.models, [{ slug: "gpt-free", visibility: "list" }]);
 });
 
+// #1098: the bundled catalog ships every model the build can address, so
+// appending its bundled-only entries offered a Free account models its plan
+// cannot call. Capture has to defer to the account catalog whenever there is
+// one, and fall back to the bundled list only when there is not.
+test("native capture treats a valid account catalog as authoritative", () => {
+  const source = readFileSync(new URL("../src/catalog.mjs", import.meta.url), "utf8");
+  assert.match(
+    source,
+    /mergeNativeCatalogs\(account, fallback, \{\s*includeBundledOnly: !validNativeCatalog\(account\),\s*\}\)/,
+  );
+});
+
+test("a plan without bundled-only models keeps only its entitled entries", () => {
+  // Shaped like the reported Free account: the tenant lists one usable model,
+  // while the binary ships a full published catalog beside it.
+  const merged = mergeNativeCatalogs(
+    {
+      models: [
+        {
+          slug: "gpt-6-luna",
+          visibility: "list",
+          model_messages: { instructions_template: "account instructions" },
+        },
+      ],
+    },
+    {
+      models: [
+        { slug: "gpt-6-luna", visibility: "list", base_instructions: "bundled" },
+        { slug: "gpt-6.1-sol", visibility: "list" },
+        { slug: "gpt-6.1-terra", visibility: "list" },
+      ],
+    },
+    { includeBundledOnly: false },
+  );
+  assert.deepEqual(
+    merged.models.map((model) => model.slug),
+    ["gpt-6-luna"],
+  );
+  // The shared slug still receives the bundled schema data it was merged for.
+  assert.equal(merged.models[0].base_instructions, "bundled");
+});
+
+test("capture without an account catalog still uses the whole bundled list", () => {
+  // `validNativeCatalog(undefined)` is false, so capture passes
+  // `includeBundledOnly: true` on this path; the bundled list is the capture.
+  const merged = mergeNativeCatalogs(
+    undefined,
+    {
+      models: [
+        { slug: "gpt-6-luna", visibility: "list" },
+        { slug: "gpt-6.1-sol", visibility: "list" },
+      ],
+    },
+    { includeBundledOnly: true },
+  );
+  assert.deepEqual(
+    merged.models.map((model) => model.slug),
+    ["gpt-6-luna", "gpt-6.1-sol"],
+  );
+});
+
 test("native catalog merge never loses non-empty bundled metadata", () => {
   const merged = mergeNativeModel(
     {
