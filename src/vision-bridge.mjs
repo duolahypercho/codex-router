@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { parseSseBlockEvent } from "./grok-oauth-turn.mjs";
+import { ResponseOutcomeObserver, responseOutcomeFromPayload } from "./response-outcome.mjs";
 import { generationRedirectRefusal, rejectGenerationRedirect } from "./generation-redirect.mjs";
 
 import { upstreamFailureKind } from "./error-translation.mjs";
@@ -374,48 +376,6 @@ export function resolveVisionEngine(listCandidates, settings) {
   return ranked.find((model) => !isLoopbackEngine(model));
 }
 
-// How many engines one image may be offered to before it is written off. The
-// point is an image that gets read, not a tour of every provider the operator
-// has a key for: a second opinion is worth a little quota, a fifth is not.
-const VISION_ENGINE_ATTEMPTS = 3;
-
-// Resolving an engine and *reaching* it are different questions, and the bridge
-// used to conflate them. A pin that no longer resolves stays an operator-visible
-// problem -- that rule is untouched above. But a pinned engine that resolves and
-// then answers 401 because a session lapsed, or 503 because the provider's
-// endpoint is down, left every paste degrading to "could not be read" until
-// somebody noticed. Both happened here within one hour of testing.
-//
-// So the reader is a *list*: the chosen engine first, then the other
-// credentialed, non-loopback vision models, ranked as always. Nothing extra is
-// spent on the happy path, because the second engine is only ever called after
-// the first has failed and exhausted its retries. It is not silent either --
-// the evidence header names whichever engine actually did the reading, and the
-// per-turn log line says a fallback happened.
-export function resolveVisionEngines(listCandidates, settings) {
-  if (typeof listCandidates !== "function") {
-    throw new TypeError(
-      "resolveVisionEngines takes a function returning the selected, credentialed candidates, " +
-        "so the list is only built when it is going to be ranked.",
-    );
-  }
-  // Built at most once per call, however many times it is needed below.
-  // Assembling it means a synchronous credential probe of every provider --
-  // on macOS a `/usr/bin/security` spawn each, ~250ms with the event loop
-  // stopped -- so asking twice would double the cost of every pasted image.
-  let candidates;
-  const once = () => (candidates ??= listCandidates());
-  const primary = resolveVisionEngine(once, settings);
-  if (!primary) return [];
-  // A pinned local engine is the operator naming their own machine; falling
-  // back off it would spend a provider's quota they did not ask to spend here.
-  if (primary.local) return [primary];
-  const alternates = rankVisionEngines(once()).filter(
-    (model) => model.slug !== primary.slug && !isLoopbackEngine(model),
-  );
-  return [primary, ...alternates].slice(0, VISION_ENGINE_ATTEMPTS);
-}
-
 // The bridge stands in for the model, so a model that already reads images is
 // left exactly as the registry declared it.
 export function bridgedModel(model, engine) {
@@ -783,22 +743,9 @@ export function responseText(payload) {
   return text.join("\n").trim();
 }
 
-// A stream that died partway through, as opposed to a stream that was merely
-// hard to parse. The distinction matters at exactly one place -- the caller
-// turns this into a stated per-image failure -- so it carries no upstream text
-// with it. Error bodies from the backend never reach a prompt or a log.
-export class VisionStreamError extends Error {
-  constructor(message) {
-    super(message);
-    this.name = "VisionStreamError";
-  }
-}
-
-const STREAM_FAILURE_TYPES = new Set(["error", "response.failed", "response.incomplete"]);
-
 // Reassembles a Responses SSE stream into the same string the buffered shape
-// would have produced. Deltas are preferred because they are always present;
-// the terminal `response.completed` envelope is the fallback for a backend that
+// would have produced. Once completion is established, prefer streamed deltas;
+// the terminal response envelope is the fallback for a backend that
 // only sends the finished object, and it is read with the same parser as a
 // non-streaming reply so both paths agree on what counts as text.
 //
@@ -814,37 +761,29 @@ const STREAM_FAILURE_TYPES = new Set(["error", "response.failed", "response.inco
 export function streamedResponseText(body) {
   const deltas = [];
   let envelope;
-  let failed = false;
+  const outcome = new ResponseOutcomeObserver();
   for (const block of String(body).split(/\r?\n\r?\n/)) {
-    for (const line of block.split(/\r?\n/)) {
-      if (!line.startsWith("data:")) continue;
-      const data = line.slice(5).trim();
-      if (!data || data === "[DONE]") continue;
-      let event;
-      try {
-        event = JSON.parse(data);
-      } catch {
-        continue;
-      }
-      if (event?.type === "response.output_text.delta" && typeof event.delta === "string") {
-        deltas.push(event.delta);
-      } else if (STREAM_FAILURE_TYPES.has(event?.type) || event?.error) {
-        failed = true;
-        if (event?.response) envelope = event.response;
-      } else if (event?.response) {
-        envelope = event.response;
-      }
+    const event = parseSseBlockEvent(block);
+    outcome.observe(event);
+    if (event?.error) outcome.observe({ type: "error" });
+    if (event?.type === "response.output_text.delta" && typeof event.delta === "string") {
+      deltas.push(event.delta);
+    } else if (
+      (event?.type === "response.completed" || event?.type === "response.done")
+      && event.response && typeof event.response === "object"
+      && !Array.isArray(event.response)
+    ) {
+      envelope = event.response;
     }
   }
-  // A backend that only ever sends the finished object leaves `status` unset,
-  // so an absent status is not a verdict. A present one that is not
-  // "completed" is: the stream stopped somewhere other than the end.
-  const status = typeof envelope?.status === "string" ? envelope.status : undefined;
-  if (failed || (status !== undefined && status !== "completed")) {
-    throw new VisionStreamError("the reader's response stream failed before it finished");
+  // Deltas and HTTP EOF do not certify a full image reading. The terminal's
+  // embedded status follows the same conservative rule as other Responses
+  // consumers; a failure cannot be erased by a later completed event.
+  if (!envelope || outcome.outcome() !== "completed") {
+    throw new Error("the reader's response stream failed before it finished");
   }
   const streamed = deltas.join("").trim();
-  return streamed || (envelope ? responseText(envelope) : "");
+  return streamed || responseText(envelope);
 }
 
 // The Codex backend rejects a non-streaming Responses call outright with
@@ -947,41 +886,13 @@ function describeRequest(engine, imageUrl, gatewayBase, gatewayHeaders, nativeCa
   };
 }
 
-// A read that fails once is not a read that cannot be done. The engine is a
-// rate-limited account on the other side of a network, so 429s, 502s and reset
-// connections happen -- and losing that image for the whole turn means the
-// operator pastes a screenshot and gets told it could not be read, for a reason
-// that would have gone away in a second. Everything here is a *transient*
-// answer: a refusal (401, 403, 404) or a bad request is not retried, because a
-// second identical call buys the identical refusal.
-const VISION_RETRY_DELAYS_MS = [250, 1_000];
-
-function isTransientStatus(status) {
-  return status === 408 || status === 425 || status === 429 || status >= 500;
-}
-
-// A timeout is deliberately *not* transient. The per-attempt budget is already
-// two minutes; spending another two on the same slow engine turns one late
-// answer into a turn that never comes back.
-function isTransientError(error) {
-  return !["TimeoutError", "AbortError"].includes(error?.name);
-}
-
 export class VisionUpstreamError extends Error {
-  constructor(message, { status, failureKind, cooldownUntil: until, retryable = false } = {}) {
+  constructor(message, { status, failureKind, cooldownUntil: until } = {}) {
     super(message);
     this.name = "VisionUpstreamError";
     this.status = Number.isFinite(Number(status)) ? Number(status) : undefined;
     this.failureKind = failureKind;
     this.cooldownUntil = until;
-    this.retryable = retryable;
-  }
-}
-
-class TransientVisionError extends VisionUpstreamError {
-  constructor(message, metadata = {}) {
-    super(message, { ...metadata, retryable: true });
-    this.name = "TransientVisionError";
   }
 }
 
@@ -996,48 +907,6 @@ export async function describeImage({
   question = "",
   fetchImpl = fetch,
   timeoutMs = DEFAULT_VISION_TIMEOUT_MS,
-  retryDelaysMs = VISION_RETRY_DELAYS_MS,
-}) {
-  let lastTransient;
-  for (let attempt = 0; attempt <= retryDelaysMs.length; attempt += 1) {
-    if (attempt) {
-      await new Promise((resolve) => setTimeout(resolve, retryDelaysMs[attempt - 1]));
-      // The caller went away between attempts; there is nobody to read for.
-      if (signal?.aborted) break;
-    }
-    try {
-      return await attemptDescribe({
-        engine,
-        imageUrl,
-        gatewayBase,
-        headers,
-        nativeCall,
-        effort,
-        signal,
-        question,
-        fetchImpl,
-        timeoutMs,
-      });
-    } catch (error) {
-      if (error?.retryable !== true) throw error;
-      lastTransient = error;
-    }
-  }
-  if (lastTransient) throw lastTransient;
-  throw new Error(`${engine.displayName || engine.slug} could not be reached`);
-}
-
-async function attemptDescribe({
-  engine,
-  imageUrl,
-  gatewayBase,
-  headers,
-  nativeCall,
-  effort,
-  signal,
-  question,
-  fetchImpl,
-  timeoutMs,
 }) {
   const request = describeRequest(engine, imageUrl, gatewayBase, headers, nativeCall, effort, question);
   const timeout = AbortSignal.timeout(timeoutMs);
@@ -1053,13 +922,11 @@ async function attemptDescribe({
   } catch (error) {
     // The transport's own wording is kept: "fetch failed" against a loopback
     // engine is how an operator learns their own server is down, and replacing
-    // it with something tidier would throw that away. It is still retried --
-    // a server that is restarting answers the second ask.
+    // it with something tidier would throw that away.
     if (error?.name === "TimeoutError") {
       throw new Error(`${engine.displayName || engine.slug} took too long to read it`);
     }
     const message = error?.message || `${engine.displayName || engine.slug} could not be reached`;
-    if (isTransientError(error)) throw new TransientVisionError(message);
     throw new Error(message);
   }
   // Keep a redirect outside the transient transport catch: retrying it can
@@ -1088,32 +955,24 @@ async function attemptDescribe({
       failureKind,
       ...(until ? { cooldownUntil: until } : {}),
     };
-    const retryable =
-      isTransientStatus(upstream.status) &&
-      failureKind !== "out_of_usage" &&
-      failureKind !== "entitlement" &&
-      !until;
-    if (retryable) throw new TransientVisionError(message, metadata);
     throw new VisionUpstreamError(message, metadata);
   }
   let text;
   try {
-    text = request.stream
-      ? streamedResponseText(bytes.toString("utf8"))
-      : responseText(JSON.parse(bytes.toString("utf8")));
-  } catch (error) {
-    // A stream that failed mid-flight says so. Anything else is a shape this
-    // parser could not read at all. Neither message carries upstream text.
-    throw new Error(
-      error instanceof VisionStreamError
-        ? `${engine.displayName || engine.slug} stopped partway through reading it`
-        : `${engine.displayName || engine.slug} returned an unreadable response`,
-    );
+    if (request.stream) {
+      text = streamedResponseText(bytes.toString("utf8"));
+    } else {
+      const parsed = JSON.parse(bytes.toString("utf8"));
+      if (parsed?.status !== undefined && responseOutcomeFromPayload({
+        type: "response.completed", response: parsed,
+      }) !== "completed") throw new Error("the reader did not complete its response");
+      text = responseText(parsed);
+    }
+  } catch {
+    throw new Error(`${engine.displayName || engine.slug} returned an unreadable response`);
   }
-  // An empty reply is an engine that hiccupped, not one that refuses: worth
-  // one more ask before the image is written off.
   if (!text) {
-    throw new TransientVisionError(
+    throw new Error(
       `${engine.displayName || engine.slug} returned no description`,
     );
   }
