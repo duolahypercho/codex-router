@@ -9,6 +9,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 
+import { discoveryDisabled } from "./discovery-mode.mjs";
 import { acquireFileLock, runWithLockRelease } from "./file-lock.mjs";
 
 import { writePrivateFile } from "./file-security.mjs";
@@ -66,6 +67,7 @@ function readDeviceId(context) {
 }
 
 export function kimiIdentityHeaders(context) {
+  if (discoveryDisabled()) throw unauthorizedError("Credential discovery is disabled; re-run setup to enable it.");
   context ||= resolveKimiCodeEnvironment();
   const platform =
     os.type() === "Darwin"
@@ -116,6 +118,7 @@ function validateToken(value) {
 }
 
 export function readKimiOAuthToken(context) {
+  if (discoveryDisabled()) throw unauthorizedError("Credential discovery is disabled; re-run setup to enable it.");
   const file = (context || resolveKimiCodeEnvironment()).credentialsPath;
   if (!existsSync(file)) {
     throw unauthorizedError("Kimi OAuth credentials were not found; run `kimi login`.");
@@ -231,6 +234,7 @@ async function refreshToken(refreshTokenValue, context) {
 }
 
 export async function ensureFreshKimiOAuthToken({ force = false, context } = {}) {
+  if (discoveryDisabled()) throw unauthorizedError("Credential discovery is disabled; re-run setup to enable it.");
   context ||= resolveKimiCodeEnvironment();
   const current = refreshInFlight;
   if (current) {

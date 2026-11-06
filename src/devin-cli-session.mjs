@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { discoveryDisabled } from "./discovery-mode.mjs";
 
 import { devinCredentialsPath, devinSessionEntry } from "./devin-cli-status.mjs";
 
@@ -15,6 +16,7 @@ function oauthError(message) {
 }
 
 export function readDevinSession({ credentialsPath = devinCredentialsPath() } = {}) {
+  if (discoveryDisabled()) throw oauthError("Credential discovery is disabled; re-run setup to enable it.");
   let contents;
   try {
     contents = readFileSync(credentialsPath, "utf8");
