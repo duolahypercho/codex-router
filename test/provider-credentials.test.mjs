@@ -1,3 +1,4 @@
+import { keychainFixture } from "./helpers/isolated-runtime-environment.mjs";
 import assert from "node:assert/strict";
 import {
   existsSync,
@@ -14,6 +15,8 @@ import test from "node:test";
 const testRoot = mkdtempSync(path.join(os.tmpdir(), "codex-router-credentials-"));
 process.env.CODEX_HOME = path.join(testRoot, "codex");
 process.env.CODEX_ROUTER_STATE_DIR = path.join(testRoot, "state");
+process.env.MODEL_ROUTER_STATE_DIR = process.env.CODEX_ROUTER_STATE_DIR;
+process.env.CODEX_ROUTER_NO_DISCOVERY = "0";
 for (const name of ["ANTHROPIC_API_KEY", "CHUTES_API_KEY", "CLINE_API_KEY", "COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "DEEPSEEK_API_KEY", "KIMI_API_KEY", "MOONSHOT_API_KEY", "XAI_API_KEY", "GROK_API_KEY"]) {
   delete process.env[name];
 }
@@ -160,22 +163,25 @@ test("--no-discovery blinds the resolver to stored keys without a single keychai
 // This asserts the spawn count directly rather than a duration: a timing bound
 // would be flaky, a probe count is exact.
 const { TARGET } = await import("../src/paths.mjs");
-const keychainProbed = process.platform === "darwin" && TARGET === "codex";
-
 test(
   "a keychain lookup is spawned once per service, not once per resolve",
-  { skip: keychainProbed ? false : "the keychain is only consulted on macOS/codex" },
   (t) => {
     t.after(() => rmSync(testRoot, { recursive: true, force: true }));
+    const platform = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    t.after(() => Object.defineProperty(process, "platform", platform));
+    assert.equal(TARGET, "codex");
+    keychainFixture.calls.length = 0;
+    keychainFixture.responses.clear();
+    t.after(() => keychainFixture.responses.clear());
     resetKeychainCache();
     // "openrouter" has no file credential here, so the resolve falls all the way
-    // through to the keychain. Nothing is stored under its service names on a
-    // test machine, and an absent item is exactly the case that used to cost a
-    // spawn every single time.
+    // through to an explicitly empty fake Keychain, on every host platform.
     const before = keychainProbeCount();
     resolveProviderCredential("openrouter", { persistent: true });
     const firstPass = keychainProbeCount() - before;
     assert.ok(firstPass >= 1, "the first resolve should have probed the keychain");
+    assert.equal(keychainFixture.calls.length, firstPass);
 
     for (let index = 0; index < 20; index += 1) {
       resolveProviderCredential("openrouter", { persistent: true });
@@ -204,5 +210,14 @@ test(
       keychainProbeCount() > afterRemove,
       "removing the stored key left the keychain answer cached from before the write",
     );
+
+    const service = PROVIDERS.get("openrouter").credential.keychainServices[0];
+    keychainFixture.responses.set(service, "SYNTHETIC_KEYCHAIN_HIT");
+    resetKeychainCache();
+    const hit = resolveProviderCredential("openrouter", { persistent: true });
+    assert.equal(hit?.value, "SYNTHETIC_KEYCHAIN_HIT");
+    const afterHit = keychainFixture.calls.length;
+    assert.equal(resolveProviderCredential("openrouter", { persistent: true })?.value, hit.value);
+    assert.equal(keychainFixture.calls.length, afterHit, "a hit must be memoized as well as a miss");
   },
 );
