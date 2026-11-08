@@ -1756,12 +1756,13 @@ function isOrphanCodexAppOutput(item) {
   if (typeof item.name !== "string" || !item.name) return false;
   if (typeof item.call_id === "string" && item.call_id) return false;
   if (item.output === undefined) return false;
-  if (item.namespace === "codex_app") return true;
-  // Desktop injects the open page and the selected page under the agent
-  // namespace. Those results carry a name and an item id, but no originating
-  // call. Paged parts use the same names plus `_part_<n>_of_<m>`.
-  return item.namespace === "agent" &&
-    /^codex_apps_(?:open_page|selected_page)(?:_part_\d+_of_\d+)?$/.test(item.name);
+  // Desktop persists ambient app state as a tool result with no originating
+  // call. Older builds use namespace codex_app. Current Desktop uses agent for
+  // the open page, the selected page, and in-app browser tabs; the name set
+  // keeps growing, so a name allowlist misses the next one. Recover both
+  // namespaces. A result that already has a call_id stays paired, and a
+  // malformed result in any other namespace still fails closed.
+  return item.namespace === "codex_app" || item.namespace === "agent";
 }
 
 function normalizeOrphanAppToolOutput(item) {
