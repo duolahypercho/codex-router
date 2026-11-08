@@ -35,6 +35,8 @@ jobs:
         run: npm test
       - name: Test (Windows, bounded ACL helper concurrency)
         if: runner.os == 'Windows'
+        env:
+          CODEX_ROUTER_WINDOWS_PRIVATE_SYNC_TIMEOUT_MS: 45000
         # Private-file tests launch real PowerShell ACL helpers. Avoid starving
         # their existing deadlines on shared runners; retain every test and
         # all within-file request/race concurrency assertions.

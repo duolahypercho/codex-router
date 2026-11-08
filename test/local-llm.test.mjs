@@ -427,13 +427,21 @@ test("a removed model with a failed catalog refresh stays a completed removal", 
 });
 
 test("local operation claims serialize concurrent controllers", async () => {
-  const claimPath = path.join(stateDir, "operation.claim");
-  const first = await claimLocalOperation("gemma4:12b", "download", {
-    claimPath,
-    now: () => 10_000,
-    kill: () => {},
-  });
-  assert.equal(first.acquired, true);
+  // A hashed POSIX endpoint may already belong to an unrelated listener.
+  // Choose an available fixture namespace before testing contention; every
+  // contention and release assertion below uses that same namespace once.
+  let claimPath;
+  let first;
+  for (let attempt = 0; attempt < 32; attempt += 1) {
+    claimPath = path.join(stateDir, attempt ? `operation-${attempt}.claim` : "operation.claim");
+    first = await claimLocalOperation("gemma4:12b", "download", {
+      claimPath,
+      now: () => 10_000,
+      kill: () => {},
+    });
+    if (first.acquired) break;
+  }
+  assert.equal(first.acquired, true, "no local-operation fixture namespace available after 32 candidates");
   const second = await claimLocalOperation("gemma4:12b", "download", {
     claimPath,
     now: () => 10_001,
