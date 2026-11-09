@@ -93,7 +93,7 @@ user.
    never select or toggle it separately. Command Code uses its stored or
    environment API key; it has no router-managed CLI sign-in path. The
    catalog-only providers `aimlapi`, `atlascloud`, `groq`, `together`, `fireworks`,
-   `cerebras`, `mistral`, `nvidia-nim`, `siliconflow`, `huggingface`,
+   `cerebras`, `mistral`, `nvidia-nim`, `obscurify`, `siliconflow`, `huggingface`,
    `gemini-api`, `github-copilot`, `chutes`, `orca`, and `vertex` are also selectable, but they ship no
    preselected models: after
    the credential is stored, the user must run `bin/curate-models PROVIDER` in an
