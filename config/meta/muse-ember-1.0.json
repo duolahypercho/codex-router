@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "meta/muse-ember-1.0",
+      "gatewayModel": "meta-muse-ember-1-0",
+      "upstreamModel": "muse-ember-1.0",
+      "provider": "meta",
+      "listed": true,
+      "displayName": "Muse Ember (Meta)",
+      "description": "Efficient multimodal model for high-volume tool calls, coding subtasks, extraction, and summarization through the Meta Responses API. Standard mode only; higher rates apply above 200K input tokens.",
+      "priority": 46,
+      "defaultEffort": "max",
+      "reasoningLevels": [
+        {
+          "effort": "minimal",
+          "description": "Fastest responses"
+        },
+        {
+          "effort": "low",
+          "description": "Quick reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Extra deep reasoning"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning"
+        }
+      ],
+      "supportsReasoningSummaries": true,
+      "defaultReasoningSummary": "auto",
+      "contextWindow": 1048576,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "supportsApplyPatchTool": false,
+      "requestProfile": "auto-tool-choice",
+      "compHash": "meta-muse-ember-1-0-v1",
+      "maxOutputTokens": 524288
+    }
+  ]
+}

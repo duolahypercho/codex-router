@@ -9,7 +9,7 @@
       "listed": true,
       "displayName": "Muse Spark 1.3 (Meta)",
       "description": "Meta's coding-optimized agentic model with a 1M context window, through the Meta Model API using the Responses API.",
-      "availabilityNux": "Muse Spark 1.3 is now in your curated catalog: Meta's latest coding-optimized agentic model with a 1M-token context window, a minimal-to-xhigh effort ladder, and reasoning summaries.",
+      "availabilityNux": "Muse Spark 1.3 is now in your curated catalog: Meta's latest coding-optimized agentic model with a 1M-token context window, a minimal-to-max effort ladder, and reasoning summaries.",
       "priority": 47,
       "defaultEffort": "high",
       "reasoningLevels": [
@@ -32,6 +32,10 @@
         {
           "effort": "xhigh",
           "description": "Extra deep reasoning"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning"
         }
       ],
       "supportsReasoningSummaries": true,
@@ -44,7 +48,7 @@
       ],
       "supportsApplyPatchTool": false,
       "requestProfile": "auto-tool-choice",
-      "compHash": "meta-muse-spark-1-3-v1"
+      "compHash": "meta-muse-spark-1-3-v2"
     }
   ]
 }

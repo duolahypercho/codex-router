@@ -14899,3 +14899,58 @@ for (const [label, model, generic] of [
     }
   });
 }
+
+test("Meta Muse reasoning matrix preserves effort, summaries, tools and opaque replay", async () => {
+  const { MODEL_BY_SLUG } = await import("../src/model-registry.mjs");
+  const slugs = ["muse-wonder-1.0", "muse-ember-1.0", "muse-spark-1.3", "muse-spark-1.3-contributor",
+    "muse-spark-1.2", "muse-spark-1.2-contributor", "muse-spark-1.1"];
+  const bodies = [];
+  const output = [{ type: "reasoning", id: "rs_mock", summary: [{ type: "summary_text", text: "Checked fixture." }],
+    encrypted_content: "opaque-fixture-only" },
+    { type: "function_call", id: "fc_mock", call_id: "call_next", name: "inspect", arguments: "{}", status: "completed" }];
+  const gateway = await mockServer(async (request, response) => {
+    bodies.push(await bodyJson(request));
+    json(response, 200, { id: "resp_meta_matrix", object: "response", status: "completed", output });
+  });
+  const stateDir = mkdtempSync(path.join(os.tmpdir(), "meta-reasoning-matrix-"));
+  const port = await openPort();
+  const router = run("router.mjs", { MODEL_ROUTER_STATE_DIR: stateDir,
+    CODEX_ROUTER_PORT: String(port), CODEX_ROUTER_GATEWAY_BASE_URL: `http://127.0.0.1:${gateway.port}/v1`,
+    CODEX_ROUTER_QUIET: "1" });
+  const replay = { type: "reasoning", id: "rs_previous", encrypted_content: "opaque-previous-fixture",
+    summary: [{ type: "summary_text", text: "Private fixture summary." }] };
+  try {
+    await waitForNodeFixture(`${routerBase(port)}/models`, router, { warmupMs: 120_000, timeoutMs: 30_000 });
+    for (const id of slugs) {
+      const model = MODEL_BY_SLUG.get(`meta/${id}`);
+      for (const { effort } of model.reasoningLevels) {
+        for (const summary of ["auto", "concise", "detailed"]) {
+          const response = await fetch(`${routerBase(port)}/responses`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ model: model.slug, stream: false,
+              reasoning: { effort, summary }, include: ["reasoning.encrypted_content"],
+              tools: [{ type: "function", name: "inspect", parameters: { type: "object", properties: {} } }],
+              tool_choice: "required",
+              input: [{ role: "user", content: "Inspect the fixture." }, replay,
+                { type: "function_call", call_id: "call_previous", name: "inspect", arguments: "{}" },
+                { type: "function_call_output", call_id: "call_previous", output: "fixture result" }],
+            }),
+          });
+          assert.equal(response.status, 200, `${id}/${effort}/${summary}: ${await response.clone().text()}`);
+          const forwarded = bodies.at(-1);
+          assert.deepEqual(forwarded.reasoning, { effort, summary });
+          assert.deepEqual(forwarded.include, ["reasoning.encrypted_content"]);
+          assert.deepEqual(forwarded.input.find(item => item.type === "reasoning"), replay);
+          assert.equal(forwarded.input.at(-1).output, "fixture result");
+          assert.equal(forwarded.tools[0].name, "inspect");
+          assert.equal(forwarded.tool_choice, model.requestProfile === "auto-tool-choice" ? "auto" : "required");
+          assert.deepEqual((await response.json()).output, output);
+        }
+      }
+    }
+  } finally {
+    await stopChild(router);
+    await closeServer(gateway.server);
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});

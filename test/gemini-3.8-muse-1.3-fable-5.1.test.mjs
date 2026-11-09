@@ -188,13 +188,13 @@ test("Muse Spark reseller routes advertise text and image input", () => {
   }
 });
 
-test("Muse Spark 1.3 reasoning ladders have minimal/low/medium/high/xhigh", () => {
+test("Muse Spark 1.3 reasoning ladders include max only on the verified direct Standard route", () => {
   const expectedEfforts = ["minimal", "low", "medium", "high", "xhigh"];
   for (const [slug] of MUSE_13_ROUTES) {
     const model = MODEL_BY_SLUG.get(slug);
     assert.deepEqual(
       model.reasoningLevels.map((level) => level.effort),
-      expectedEfforts,
+      slug === "meta/muse-spark-1.3" ? [...expectedEfforts, "max"] : expectedEfforts,
     );
   }
 });
@@ -215,9 +215,10 @@ test("Muse Spark xhigh is labeled as extra deep, not max, and defaults to high",
     assert.ok(xhigh, `${slug} is missing xhigh`);
     assert.equal(xhigh.description, "Extra deep reasoning", slug);
     assert.notEqual(xhigh.description, "Maximum reasoning");
-    assert.ok(
-      !model.reasoningLevels.some((level) => level.effort === "max"),
-      `${slug} must not advertise Meta's unreleased max tier yet`,
+    assert.equal(
+      model.reasoningLevels.some((level) => level.effort === "max"),
+      slug === "meta/muse-spark-1.3",
+      `${slug} max effort must match its verified provider tier`,
     );
   }
 });

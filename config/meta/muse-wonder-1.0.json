@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "meta/muse-wonder-1.0",
+      "gatewayModel": "meta-muse-wonder-1-0",
+      "upstreamModel": "muse-wonder-1.0",
+      "provider": "meta",
+      "listed": true,
+      "displayName": "Muse Wonder (Meta)",
+      "description": "Frontier coding, long-running agents, and computer use through the Meta Responses API. Standard API model; Muse Wonder Full requires Muse Code and is not selected by max effort.",
+      "priority": 45,
+      "defaultEffort": "max",
+      "reasoningLevels": [
+        {
+          "effort": "minimal",
+          "description": "Fastest responses"
+        },
+        {
+          "effort": "low",
+          "description": "Quick reasoning"
+        },
+        {
+          "effort": "medium",
+          "description": "Balanced reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "xhigh",
+          "description": "Extra deep reasoning"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning"
+        }
+      ],
+      "supportsReasoningSummaries": true,
+      "defaultReasoningSummary": "auto",
+      "contextWindow": 1048576,
+      "autoCompact": 900000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "supportsApplyPatchTool": false,
+      "requestProfile": "auto-tool-choice",
+      "compHash": "meta-muse-wonder-1-0-v1"
+    }
+  ]
+}
