@@ -9,7 +9,7 @@ import { traySourceFingerprint } from "./install-plan.mjs";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 export const RELEASE_UNAVAILABLE = 75;
 // Set only after the maintainer verifies the project's Developer ID team.
-export const MACOS_RELEASE_TEAM_ID = "";
+export const MACOS_RELEASE_TEAM_ID = "R8UR22V2F9";
 export const MACOS_RELEASE_REPOSITORY = "duolahypercho/codex-router";
 
 export function releaseSignatureRequirement(teamId = MACOS_RELEASE_TEAM_ID) {
