@@ -23,6 +23,7 @@ often for the repository to pin and live-verify individual entries:
 | GitHub Copilot | `github-copilot` | Account-specific GitHub Copilot endpoint |
 | Chutes | `chutes` | `https://llm.chutes.ai/v1` |
 | OrcaRouter | `orca` | `https://api.orcarouter.ai/v1` |
+| Standard Compute | `standardcompute` | `https://api.stdcmpt.com/v1` |
 
 `devin-cli` is the OAuth exception to this API-key table. After `devin auth
 login`, the Control Center and `./bin/curate-models devin-cli` read the model

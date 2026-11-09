@@ -94,7 +94,7 @@ user.
    environment API key; it has no router-managed CLI sign-in path. The
    catalog-only providers `aimlapi`, `atlascloud`, `groq`, `together`, `fireworks`,
    `cerebras`, `mistral`, `nvidia-nim`, `siliconflow`, `huggingface`,
-   `gemini-api`, `github-copilot`, `chutes`, `orca`, and `vertex` are also selectable, but they ship no
+   `gemini-api`, `github-copilot`, `chutes`, `orca`, `standardcompute`, and `vertex` are also selectable, but they ship no
    preselected models: after
    the credential is stored, the user must run `bin/curate-models PROVIDER` in an
    interactive terminal to choose models. Vertex uses Application Default
