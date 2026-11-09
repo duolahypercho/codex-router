@@ -1775,21 +1775,47 @@ test(`${language} covers every page, dialogs, raw values, English round trips an
     const page = await browser.newPage({ viewport: { width: 1280, height: 840 }, locale: "en-US" });
     page.setDefaultTimeout(10_000);
     page.on("pageerror", error => errors.push(error.message));
-    page.on("console", message => { if (message.type() === "error") consoleErrors.push(message.text()); });
+    page.on("console", message => {
+      if (message.type() === "error") {
+        errors.push(message.text());
+        consoleErrors.push(message.text());
+      }
+    });
     page.on("requestfailed", request => failedRequests.push({ url: request.url(), error: request.failure()?.errorText }));
+    await page.addInitScript(() => {
+      window.__localeSelectionEvents = [];
+      for (const type of ["input", "change"]) document.addEventListener(type, event => {
+        if (event.target instanceof HTMLSelectElement) {
+          window.__localeSelectionEvents.push({ type, value: event.target.value });
+        }
+      }, true);
+    });
     await page.goto(url);
     await page.getByRole("button", { name: "Settings", exact: true }).click();
-    await page.getByRole("combobox", { name: "Interface language" }).selectOption(language);
+    const selected = await page.getByRole("combobox", { name: "Interface language" }).selectOption(language);
     try {
       await page.getByRole("heading", { level: 1, name: copy.settings }).waitFor();
     } catch (error) {
       const state = await page.evaluate(() => ({
         inputValue: document.querySelector('select:has(option[value="zh-TW"])')?.value ?? null,
+        language: document.documentElement.lang,
         htmlLang: document.documentElement.lang,
+        visibility: document.visibilityState,
         storedLanguage: localStorage.getItem("codex-router-language"),
         headings: [...document.querySelectorAll("h1")].map(element => element.textContent),
+        headingBoxes: [...document.querySelectorAll("h1")].map(element => ({
+          text: element.textContent,
+          width: element.getBoundingClientRect().width,
+          height: element.getBoundingClientRect().height,
+        })),
+        selects: [...document.querySelectorAll("select")].map(element => ({
+          label: element.getAttribute("aria-label"), value: element.value,
+        })),
+        events: window.__localeSelectionEvents,
+        healthReads: window.routerControlTest.healthReads(),
       })).catch(collectionError => ({ collectionError: String(collectionError) }));
-      const detail = `Language transition diagnostic: ${JSON.stringify({ language, ...state, pageErrors: errors, consoleErrors, failedRequests })}`;
+      const detail = `Language transition diagnostic: ${JSON.stringify({ requestedLanguage: language, selected, ...state, pageErrors: errors, consoleErrors, failedRequests })}`;
+      console.error("Locale transition state:", detail);
       const originalStack = error.stack;
       error.message += `\n${detail}`;
       if (typeof originalStack === "string") error.stack = `${originalStack}\n${detail}`;

@@ -296,7 +296,34 @@ test("deduplicates concurrent discovery for the same account", async () => {
   });
 });
 
-test("does not persist or cache a pending lookup after durable invalidation", async () => {
+test("uses the durable project after discovery and observes later metadata changes", async () => {
+  await withToken(baseToken(), async (write) => {
+    let calls = 0;
+    const options = {
+      attempts: 1,
+      now: () => 10_000,
+      fetchImpl: async () => {
+        calls += 1;
+        return new Response(JSON.stringify({ cloudaicompanionProject: "managed" }), {
+          status: 200, headers: { "Content-Type": "application/json" },
+        });
+      },
+    };
+    const first = await ensureAntigravityProject(readAntigravityToken(), options);
+    const repeated = await ensureAntigravityProject(first.session, {
+      ...options, now: () => 60 * 60_000,
+    });
+    assert.equal(repeated.projectId, "managed");
+    assert.equal(calls, 1);
+
+    write(baseToken({ ...readAntigravityToken(), project_id: "updated-project" }));
+    const updated = await ensureAntigravityProject(first.session, options);
+    assert.equal(updated.projectId, "updated-project");
+    assert.equal(calls, 1);
+  });
+});
+
+test("does not persist a pending lookup after durable invalidation", async () => {
   await withToken(baseToken(), async () => {
     let calls = 0;
     let startedResolve;
