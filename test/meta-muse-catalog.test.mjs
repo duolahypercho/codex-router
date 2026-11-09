@@ -29,6 +29,9 @@ for (const id of ["muse-wonder-1.0", "muse-ember-1.0"]) {
     assert.equal(published.slug, model.slug);
     assert.equal(published.context_window, 1_048_576);
     assert.equal(published.default_reasoning_level, "max");
+    assert.equal(published.supports_reasoning_summaries, true);
+    assert.equal(published.default_reasoning_summary, "auto");
+    assert.deepEqual(published.supported_reasoning_levels, model.reasoningLevels);
   });
 }
 
