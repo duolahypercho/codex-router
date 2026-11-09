@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "providers": [
+    {
+      "id": "standardcompute",
+      "displayName": "Standard Compute",
+      "kind": "openai-compatible",
+      "ownedBy": "standardcompute",
+      "baseUrl": "https://api.stdcmpt.com/v1",
+      "baseUrlEnv": "STANDARDCOMPUTE_API_BASE_URL",
+      "credential": {
+        "environment": [
+          "STANDARDCOMPUTE_API_KEY"
+        ],
+        "file": "standardcompute-api-key.secret",
+        "legacyFiles": [],
+        "keychainServices": [
+          "codex-router-standardcompute"
+        ],
+        "prompt": "Standard Compute API key"
+      }
+    }
+  ]
+}

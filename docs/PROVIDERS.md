@@ -882,6 +882,7 @@ often for the repository to pin and live-verify individual entries:
 | GitHub Copilot | `github-copilot` | Account-specific GitHub Copilot endpoint |
 | Chutes | `chutes` | `https://llm.chutes.ai/v1` |
 | OrcaRouter | `orca` | `https://api.orcarouter.ai/v1` |
+| Standard Compute | `standardcompute` | `https://api.stdcmpt.com/v1` |
 
 AI/ML API uses `AIMLAPI_API_KEY` or a key stored through
 `./bin/model-router codex provider-key aimlapi set`. Run
