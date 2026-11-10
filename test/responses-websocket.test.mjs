@@ -1093,6 +1093,70 @@ test("continuation replay prefers the complete custom tool item over a conflicti
   assert.deepEqual(bodies[1].input, [...bodies[0].input, customCall, toolResult]);
   peer.close();
 });
+test("preserves HTTP rejection details across upstream error formats", async (t) => {
+  const message = "Too many images in the request.";
+  const structured = {
+    type: "invalid_request_error", code: "too_many_images", message,
+    param: "input", private_diagnostic: "must-not-cross",
+  };
+  const expectedStructured = {
+    type: "invalid_request_error", code: "too_many_images", message, param: "input",
+  };
+  const fallback = {
+    type: "upstream_error",
+    message: "The Responses endpoint returned HTTP 400 without a readable error message.",
+  };
+  const cases = [
+    { name: "standard JSON", body: JSON.stringify({ error: structured }), expected: expectedStructured },
+    { name: "top-level JSON", body: JSON.stringify(structured), expected: expectedStructured },
+    { name: "detail JSON", body: JSON.stringify({ detail: message, debug: "must-not-cross" }), expected: { type: "upstream_error", message } },
+    { name: "string error JSON", body: JSON.stringify({ error: message }), expected: { type: "upstream_error", message } },
+    { name: "SSE error after metadata", contentType: "text/event-stream", body: `: keepalive\r\nevent: response.created\r\ndata: {"type":"response.created","response":{"id":"resp-rejected"}}\r\n\r\nevent: error\r\ndata: ${JSON.stringify({ type: "error", error: structured })}\r\n\r\n`, expected: expectedStructured },
+    { name: "multiline SSE error", contentType: "text/event-stream", body: `data: {"type":"error",\ndata: "error":${JSON.stringify(structured)}}\n\n`, expected: expectedStructured },
+    { name: "SSE failed response", contentType: "text/event-stream", body: `data: ${JSON.stringify({ type: "response.failed", response: { error: structured, private_diagnostic: "must-not-cross" } })}\n\n`, expected: expectedStructured },
+    { name: "plain text", contentType: "text/plain", body: "Input must be a list", expected: { type: "upstream_error", message: "Input must be a list" } },
+    { name: "bounded multibyte text", contentType: "text/plain", body: "文".repeat(1365), expected: { type: "upstream_error", message: "文".repeat(1365) } },
+    { name: "oversized multibyte text", contentType: "text/plain", body: "文".repeat(1366), expected: fallback },
+    { name: "empty body", body: "", expected: fallback },
+    { name: "unrecognized JSON", body: JSON.stringify({ debug: "must-not-cross" }), expected: fallback },
+    { name: "malformed SSE", contentType: "text/event-stream", body: 'data: {"error":\n\n', expected: fallback },
+    { name: "invalid UTF-8 SSE", contentType: "text/event-stream", body: Buffer.concat([Buffer.from('data: {"type":"error","message":"'), Buffer.from([0xff]), Buffer.from('"}\n\n')]), expected: fallback },
+    { name: "non-error SSE", contentType: "text/event-stream", body: 'data: {"type":"response.created","response":{"debug":"must-not-cross"}}\n\n', expected: fallback },
+    { name: "HTML proxy page", contentType: "text/html", body: "<html>private diagnostic must-not-cross</html>", expected: fallback },
+    { name: "mislabelled HTML", contentType: "text/plain", body: "<html>private diagnostic must-not-cross</html>", expected: fallback },
+  ];
+  for (const fixture of cases) {
+    await t.test(fixture.name, async (subtest) => {
+      let calls = 0;
+      const { server, port } = await startServer(async (request, response) => {
+        for await (const _chunk of request) {}
+        calls += 1;
+        if (calls === 1) {
+          response.writeHead(400, { "content-type": fixture.contentType || "application/json" });
+          response.end(fixture.body);
+        } else {
+          sse(response, [
+            { type: "response.created", response: { id: "resp-after-rejection" } },
+            { type: "response.completed", response: { id: "resp-after-rejection", usage: {} } },
+          ]);
+        }
+      });
+      subtest.after(() => server.close());
+      const { peer } = await connect(port);
+      subtest.after(() => peer.socket.destroy());
+      peer.sendJson(createRequest());
+      const failure = await peer.nextJson();
+      assert.equal(failure.type, "error");
+      assert.equal(failure.status, 400);
+      assert.deepEqual(failure.error, fixture.expected);
+      peer.sendJson(createRequest());
+      assert.equal((await peer.nextJson()).type, "response.created");
+      assert.equal((await peer.nextJson()).type, "response.completed");
+      assert.equal(calls, 2, "a rejected generation must not be retried");
+    });
+  }
+});
+
 test("wraps HTTP failures and serializes requests on a reused connection", async (t) => {
   let calls = 0;
   let active = 0;
@@ -1196,6 +1260,7 @@ test("relays a local unrouted_model refusal with its status and code", async (t)
   assert.deepEqual(error.error, {
     type: "invalid_request_error",
     code: "unrouted_model",
+    param: "model",
     message: refusal.error.message,
   });
   assert.equal(calls, 1);

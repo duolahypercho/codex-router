@@ -90,6 +90,7 @@ const MAX_RATE_LIMIT_ID_BYTES = 64;
 const MAX_RATE_LIMIT_NUMBER_BYTES = 64;
 const MAX_RATE_LIMIT_TEXT_BYTES = 256;
 const MAX_ERROR_PLAN_TYPE_BYTES = 128;
+const MAX_ERROR_TEXT_BYTES = 4 * 1_024;
 // openai/codex@63d2138 deserializes `resets_at` as an i64, then accepts it
 // only when chrono 0.4.43 can construct a DateTime<Utc> from the seconds.
 const MIN_CODEX_RESET_AT = -8_334_601_228_800;
@@ -542,18 +543,45 @@ function reconciledContinuationOutput(completedOutput, outputItems) {
   }
   return reconciled;
 }
-function errorShape(body, fallback) {
+async function errorShape(body, fallback, { contentType, signal, maxEventBytes }) {
+  const text = body.toString("utf8").trim();
   let parsed;
   try {
-    parsed = JSON.parse(body.toString("utf8"));
+    parsed = JSON.parse(text);
   } catch {
-    parsed = undefined;
+    // Native HTTP failures can carry SSE just like successful responses.
+    // Reuse the bounded parser, selecting only an explicit error event so
+    // response metadata and arbitrary diagnostic fields never become errors.
+    if (/^(?:data:|event:|:)/.test(text)) {
+      try {
+        await relaySse(new Response(body).body, (data) => {
+          let event;
+          try { event = JSON.parse(data); } catch { return true; }
+          if (event?.type === "error") parsed = event;
+          else if (event?.type === "response.failed") parsed = event.response;
+          return parsed === undefined;
+        }, { signal, maxEventBytes });
+      } catch {
+        // Malformed error framing must not replace the original HTTP status
+        // with a local stream failure. A disconnected caller still cancels.
+        signal.throwIfAborted();
+      }
+    } else if (
+      (!contentType || /^text\/plain(?:;|$)/i.test(contentType)) &&
+      text && !/^[<{[]/.test(text) && body.length <= MAX_ERROR_TEXT_BYTES
+    ) {
+      // A bare backend validation sentence is useful; an HTML proxy page or
+      // an unrecognized JSON document is not a human-readable error message.
+      parsed = { message: text };
+    }
   }
   const source = parsed?.error && typeof parsed.error === "object"
     ? parsed.error
     : parsed && typeof parsed === "object"
       ? parsed
       : {};
+  const message = [source.message, source.detail, parsed?.detail, parsed?.error]
+    .find((value) => typeof value === "string" && value.trim());
   const planType = typeof source.plan_type === "string" &&
       Buffer.byteLength(source.plan_type, "utf8") <= MAX_ERROR_PLAN_TYPE_BYTES
     ? source.plan_type
@@ -566,7 +594,8 @@ function errorShape(body, fallback) {
   return {
     type: typeof source.type === "string" ? source.type : fallback.type,
     ...(typeof source.code === "string" ? { code: source.code } : {}),
-    message: typeof source.message === "string" ? source.message : fallback.message,
+    ...(typeof source.param === "string" ? { param: source.param } : {}),
+    message: message || fallback.message,
     ...(planType !== undefined ? { plan_type: planType } : {}),
     ...(resetsAt !== undefined ? { resets_at: resetsAt } : {}),
   };
@@ -1040,9 +1069,13 @@ class ResponsesWebSocketPeer {
         });
         this.sendError(
           upstream.status,
-          errorShape(body, {
-            type: "local_router_error",
-            message: "The local router rejected the Responses request.",
+          await errorShape(body, {
+            type: "upstream_error",
+            message: `The Responses endpoint returned HTTP ${upstream.status} without a readable error message.`,
+          }, {
+            contentType: upstream.headers.get("content-type"),
+            signal: controller.signal,
+            maxEventBytes: this.options.maxErrorBytes,
           }),
           responseHeaders(upstream, { includeRateLimits: true }),
         );
