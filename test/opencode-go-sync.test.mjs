@@ -76,3 +76,34 @@ test("dry-run sync fetches current Go records without mutating state or probing"
   assert.equal(result.applied, false);
   assert.ok(result.additions.some((model) => model.upstreamModel === "new-chat"));
 });
+
+test("apply stages new routes hidden, probes, then reveals only a passing route", async () => {
+  let saved = [];
+  const hidden = new Set();
+  const phases = [];
+  const result = await syncGoCatalog({
+    catalog: async () => ({ data: [
+      record("good", "chat-completions"), record("bad", "messages"),
+    ] }),
+    apply: true,
+    models: [{ provider: "opencode-go", upstreamModel: "retired", slug: "opencode-go/retired" }],
+    readModels: () => saved,
+    writeModels: (models) => { saved = models; },
+    picker: () => ({ hidden: [...hidden] }),
+    setVisible: (slugs, visible) => {
+      for (const slug of slugs) visible ? hidden.delete(slug) : hidden.add(slug);
+    },
+    transact: async ({ mutate, restart }) => { phases.push(restart); mutate(); },
+    probe: (slug) => {
+      assert.ok(hidden.has(slug), "new routes must stay hidden while probed");
+      return slug === "opencode-go/good";
+    },
+  });
+  assert.deepEqual(phases, [true, false]);
+  assert.deepEqual(result.passed, ["opencode-go/good"]);
+  assert.deepEqual(result.failed, ["opencode-go-messages/bad"]);
+  assert.ok(!hidden.has("opencode-go/good"));
+  assert.ok(hidden.has("opencode-go-messages/bad"));
+  assert.ok(hidden.has("opencode-go/retired"));
+  assert.equal(saved.length, 2);
+});

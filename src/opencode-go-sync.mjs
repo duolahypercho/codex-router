@@ -133,36 +133,43 @@ export async function syncGoCatalog({
   catalog = () => fetchUntrustedModelCatalog(GO_CATALOG_URL),
   probe = quickProbe,
   apply = false,
+  models = MODELS,
+  readModels = readUserModels,
+  writeModels = writeUserModels,
+  picker = modelPickerSnapshot,
+  setVisible = setModelsVisible,
+  transact = transactModelOverlayMutation,
 } = {}) {
   const payload = await catalog();
   const records = Array.isArray(payload?.data) ? payload.data : undefined;
-  const plan = planGoSync(records);
+  const plan = planGoSync(records, models);
   if (!apply) return { ...plan, applied: false };
   if (plan.additions.length) {
-    await transactModelOverlayMutation({
+    await transact({
       files: [USER_MODELS_PATH, MODEL_PICKER_STATE_PATH],
       mutate: () => {
-        const current = readUserModels();
+        const current = readModels();
         const present = new Set(current.map((model) => `${model.provider}/${model.upstreamModel}`));
         const additions = plan.additions.filter((model) => !present.has(`${model.provider}/${model.upstreamModel}`));
         if (additions.length) {
-          writeUserModels([...current, ...additions]);
-          setModelsVisible(additions.map((model) => model.slug), false);
+          writeModels([...current, ...additions]);
+          setVisible(additions.map((model) => model.slug), false);
         }
       },
       restart: true,
     });
   }
   const { passed, failed } = probePendingGoModels(
-    readUserModels(), plan.liveIds, modelPickerSnapshot().hidden, probe,
+    readModels(), plan.liveIds, picker().hidden, probe,
   );
-  const toHide = plan.stale.filter((slug) => !modelPickerSnapshot().hidden.includes(slug));
+  const toHide = plan.stale.filter((slug) => !picker().hidden.includes(slug));
   if (passed.length || toHide.length) {
-    await transactModelOverlayMutation({
+    await transact({
       files: [MODEL_PICKER_STATE_PATH],
+      restart: false,
       mutate: () => {
-        if (passed.length) setModelsVisible(passed, true);
-        if (toHide.length) setModelsVisible(toHide, false);
+        if (passed.length) setVisible(passed, true);
+        if (toHide.length) setVisible(toHide, false);
       },
     });
   }
