@@ -1,4 +1,4 @@
-import { OPENCODE_GEMINI_MODEL } from "./opencode-gemini.mjs";
+import { OPENCODE_GEMINI_ARGON_MODEL, OPENCODE_GEMINI_MODEL, OPENCODE_GEMINI_MODELS } from "./opencode-gemini.mjs";
 
 // OpenCode's anonymous catalog exposes documented free models on Chat
 // Completions and one on Responses. Keep this mapping deliberately separate
@@ -410,9 +410,7 @@ const CURATION_ROUTES = Object.freeze({
       "muse-spark-1.2-contributor",
       "muse-spark-1.3-contributor",
     ]),
-    geminiModels: Object.freeze([
-      OPENCODE_GEMINI_MODEL,
-    ]),
+    geminiModels: OPENCODE_GEMINI_MODELS,
     primaryModels: Object.freeze([
       "beam-free",
       "deepseek-v4-flash",
@@ -448,6 +446,16 @@ const CURATION_ROUTES = Object.freeze({
       "x-preview-f",
     ]),
     models: Object.freeze({
+      [OPENCODE_GEMINI_ARGON_MODEL]: Object.freeze({
+        contextWindow: 1_048_576,
+        outputLimit: 65_536,
+        reasoningLevels: Object.freeze(["low", "medium", "high"]),
+        inputModalities: Object.freeze(["text", "image"]),
+        displayName: "Gemini 4 Argon (OpenCode Go)",
+        summary: "Gemini 4 Argon through OpenCode Go's native Gemini endpoint.",
+        contextNote: "OpenCode Go publishes a 1,048,576-token context and 65,536-token output limit for this model.",
+        reasoningNote: "OpenCode Go publishes low, medium, and high reasoning efforts for this model.",
+      }),
       [OPENCODE_GEMINI_MODEL]: Object.freeze({
         contextWindow: 1_048_576,
         outputLimit: 65_536,

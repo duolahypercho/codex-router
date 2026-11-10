@@ -75,6 +75,8 @@ const METADATA_FIELDS = new Set([
   "toolSchemaRecursion",
   "supportedEndpoints",
   "reasoningTagPolicy",
+  "openCodeGoProtocol",
+  "openCodeGoManaged",
 ]);
 
 // Some providers deliberately publish opaque preview ids while documenting a

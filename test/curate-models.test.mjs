@@ -151,6 +151,8 @@ test("OpenCode curation keeps each endpoint family on its documented protocol", 
     assert.equal(curatedModelProviderId("opencode-go", model), provider, model);
   }
   assert.equal(curatedModelBlockReason("opencode-go", "gemini-4-argon-contributor"), undefined);
+  assert.equal(curatedModelBlockReason("opencode-go", "gemini-4-argon"), undefined);
+  assert.equal(curatedModelProviderId("opencode-go", "gemini-4-argon"), "opencode-go");
   assert.equal(
     curatedModelProviderId("opencode-go", "gemini-4-argon-contributor"),
     "opencode-go",
