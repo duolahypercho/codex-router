@@ -17,6 +17,6 @@
     "undici": "8.12.3"
   },
   "devDependencies": {
-    "playwright": "1.64.1"
+    "playwright": "1.65.0"
   }
 }
