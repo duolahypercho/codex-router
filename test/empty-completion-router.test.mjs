@@ -1198,6 +1198,74 @@ test("a transport-failed retry keeps first-attempt usage, cache, and markers", a
   }
 });
 
+for (const reasoning of [false, true]) {
+  for (const completedOnly of [false, true]) {
+    test(`tool search is never retried or recorded as empty (reasoning=${reasoning}, completedOnly=${completedOnly})`, async () => {
+      const item = {
+        type: "tool_search_call",
+        id: "ts_1",
+        call_id: "call_search",
+        execution: "client",
+        arguments: { query: "calendar" },
+        status: "completed",
+      };
+      const events = [
+        { type: "response.created", response: { id: "r-search" } },
+        ...(reasoning ? [{ type: "response.reasoning_text.delta", delta: "Finding a tool" }] : []),
+        ...(completedOnly ? [] : [
+          { type: "response.output_item.added", output_index: 0, item },
+          { type: "response.output_item.done", output_index: 0, item },
+        ]),
+        { type: "response.completed", response: { id: "r-search", status: "completed", output: [item] } },
+      ];
+      const body = events.map((event, sequence_number) =>
+        `event: ${event.type}\ndata: ${JSON.stringify({ ...event, sequence_number })}\n\n`,
+      ).join("");
+      let posts = 0;
+      const gw = await gateway((_request, response) => {
+        posts += 1;
+        response.writeHead(200, { "Content-Type": "text/event-stream" });
+        response.end(body);
+      });
+      const routerPort = await openPort();
+      const router = run(routerEnv(gw.port, routerPort));
+
+      try {
+        await waitFor(`${callerBaseUrl(routerPort, CALLER_KEY)}/models`, router);
+        const result = await readRouted(routerPort, TURN_BODY);
+        assert.equal(result.status, 200);
+        assert.equal(result.complete, true);
+        assert.equal(posts, 1, "a client tool-search action must never be replayed");
+        assert.doesNotMatch(result.body, /empty_completion|response\.failed/);
+        const relayed = result.body.split("\n")
+          .filter((line) => line.startsWith("data: {")).map((line) => JSON.parse(line.slice(6)));
+        const terminal = relayed.filter((event) => event.type === "response.completed");
+        assert.equal(terminal.length, 1, "the successful terminal must reach the client exactly once");
+        assert.deepEqual(terminal[0].response.output, [item]);
+        assert.equal(terminal[0].response.id, "r-search");
+        if (reasoning) {
+          assert.ok(relayed.some((event) => event.type === "response.reasoning_text.delta"));
+        }
+        if (!completedOnly) {
+          for (const phase of ["added", "done"]) {
+            assert.deepEqual(relayed.find((event) => event.type === `response.output_item.${phase}`)?.item, item);
+          }
+        }
+
+        const [usage] = await waitForUsageEvents(router.stateDir, 1, router);
+        assert.equal(usage.status, 200);
+        assert.equal(usage.generationOutcome, "completed");
+        assert.equal(usage.emptyCompletion, undefined);
+        assert.equal(usage.emptyCompletionRetried, undefined);
+        assert.equal(usage.emptyCompletionUnrepairable, undefined);
+      } finally {
+        await stopChild(router);
+        await closeServer(gw.server);
+      }
+    });
+  }
+}
+
 for (const [name, body, expected] of [
   ["custom tool input", CUSTOM_TOOL_CALL_SSE, /move pointer/],
   ["refusal events", REFUSAL_EVENT_SSE, /response\.refusal\.delta/],
