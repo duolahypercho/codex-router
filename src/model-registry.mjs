@@ -645,6 +645,21 @@ function modelProblem(model, providers, slugs, gatewayModels) {
   if (!model.slug.startsWith(`${model.provider}/`)) {
     return `model ${model.slug} must be namespaced under ${model.provider}/`;
   }
+  const goProtocolProviders = {
+    "chat-completions": "opencode-go",
+    messages: "opencode-go-messages",
+    responses: "opencode-go-responses",
+    "generate-content": "opencode-go",
+  };
+  if (model.openCodeGoProtocol !== undefined &&
+    goProtocolProviders[model.openCodeGoProtocol] !== model.provider) {
+    return `model ${model.slug} has an invalid OpenCode Go protocol`;
+  }
+  if (model.openCodeGoManaged !== undefined &&
+    (typeof model.openCodeGoManaged !== "boolean" ||
+      !model.provider.startsWith("opencode-go"))) {
+    return `model ${model.slug} has an invalid OpenCode Go management flag`;
+  }
   if (model.adapter !== undefined && typeof model.adapter !== "string") {
     return "model " + model.slug + " has an invalid adapter";
   }

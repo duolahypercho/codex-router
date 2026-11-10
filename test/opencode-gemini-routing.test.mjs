@@ -55,6 +55,7 @@ test("OpenCode Gemini renders through the native API forwarder", () => {
     .split("  - model_name:")[0];
 
   assert.equal(isOpenCodeGeminiModel(model), true);
+  assert.equal(isOpenCodeGeminiModel({ ...model, upstreamModel: "gemini-4-argon" }), true);
   assert.match(deployment, /model: "gemini\/gemini-4-argon-contributor"/);
   assert.match(
     deployment,
