@@ -141,6 +141,10 @@ test("OpenCode curation keeps each endpoint family on its documented protocol", 
     ["claude-haiku-5-5", "opencode-go-messages"],
     ["minimax-m3.1-flash", "opencode-go"],
     ["kimi-k3.1-pro", "opencode-go"],
+    ["hy4", "opencode-go"],
+    ["iceman-contributor-free", "opencode-go"],
+    ["longcat-2.5-free", "opencode-go"],
+    ["step-5-preview", "opencode-go"],
     ["minimax-m3", "opencode-go-messages"],
   ]) {
     assert.equal(curatedModelBlockReason("opencode-go", model), undefined, model);
