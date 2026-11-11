@@ -1,0 +1,1 @@
+- **The Responses WebSocket bridge removes duplicate tool screenshots.** It sends one copy of an identical image within a tool result and shows the upstream's explanation for rejected requests.
