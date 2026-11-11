@@ -1,1 +1,1 @@
-- **The Responses WebSocket bridge removes duplicate tool screenshots.** It sends one copy of an identical image within a tool result and shows the upstream's explanation for rejected requests.
+- **Native Codex turns stay within the observed screenshot limit.** The router removes duplicate captures, replaces older images with receipts when the native payload grows too large, and shows the upstream's explanation for rejected requests.

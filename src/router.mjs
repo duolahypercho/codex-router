@@ -873,6 +873,10 @@ async function decodeBody(
 // off the event loop on a 2 MB turn. Small bodies are left alone, where a TLS
 // record or two is the whole payload and compression buys nothing.
 const MIN_COMPRESSED_BODY_BYTES = 16 * 1024;
+// The native Codex backend accepted 1,695,486 decoded screenshot bytes and
+// rejected 2,130,357 with HTTP 400 on 2026-11-11. Keep some headroom below
+// that observed ceiling so a continuing computer-use turn can still proceed.
+const NATIVE_IMAGE_PAYLOAD_BUDGET_BYTES = 1.75 * 1024 * 1024;
 const compressBody = promisify(zstdCompress);
 
 async function compressedNativeBody(body, headers) {
@@ -5166,6 +5170,22 @@ async function handleResponses(request, response, requestUrl) {
           });
           native.input = aged.input;
           toolResultAging = aged.stats;
+          const bounded = boundImagePayload(native.input, {
+            maxBytes: NATIVE_IMAGE_PAYLOAD_BUDGET_BYTES,
+            maxTokens: Infinity,
+            // Preserve the latest screen even if the tool returned several
+            // distinct captures that together exceed the backend's limit.
+            keepNewest: 1,
+            protectPending: false,
+          });
+          native.input = bounded.input;
+          imageBudget = bounded.stats;
+          if (bounded.stats.imageReferencesDropped > 0) {
+            console.error(
+              `[codex-router] bounded native image history dropped=${bounded.stats.imageReferencesDropped}` +
+                ` image-bytes-saved=${bounded.stats.imageBytesSaved}`,
+            );
+          }
         }
       }
       // SF and other native multi-agent parents hit this path (model_provider
