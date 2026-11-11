@@ -188,8 +188,9 @@ test("native turns bound screenshot history before reaching the backend", async 
     });
     assert.equal(result.status, 200);
     await result.arrayBuffer();
-    assert.equal(forwarded.input.flatMap((item) => item.output || []).filter((part) => part.type === "input_image").length, 4);
+    assert.equal(forwarded.input.flatMap((item) => item.output || []).filter((part) => part.type === "input_image").length, 3);
     assert.match(forwarded.input[0].output[0].text, /image omitted by Codex Router/);
+    assert.match(forwarded.input[1].output[0].text, /image omitted by Codex Router/);
     assert.equal(forwarded.input.at(-1).output[0].image_url, image(4).image_url);
   } finally {
     await stopChild(router);

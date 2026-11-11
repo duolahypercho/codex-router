@@ -874,9 +874,9 @@ async function decodeBody(
 // record or two is the whole payload and compression buys nothing.
 const MIN_COMPRESSED_BODY_BYTES = 16 * 1024;
 // The native Codex backend accepted 1,695,486 decoded screenshot bytes and
-// rejected 2,130,357 with HTTP 400 on 2026-11-11. Keep some headroom below
-// that observed ceiling so a continuing computer-use turn can still proceed.
-const NATIVE_IMAGE_PAYLOAD_BUDGET_BYTES = 1.75 * 1024 * 1024;
+// rejected 1,739,484 with HTTP 400 on 2026-11-11. Keep headroom below that
+// observed ceiling so a continuing computer-use turn can still proceed.
+const NATIVE_IMAGE_PAYLOAD_BUDGET_BYTES = 1.5 * 1024 * 1024;
 const compressBody = promisify(zstdCompress);
 
 async function compressedNativeBody(body, headers) {
