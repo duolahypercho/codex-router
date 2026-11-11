@@ -524,7 +524,8 @@ function dedupeToolOutputImages(input) {
         (item.type !== "function_call_output" && item.type !== "custom_tool_call_output")) return item;
     const seen = new Map();
     const output = item.output.filter((part) => {
-      if (part?.type !== "input_image" || typeof part.image_url !== "string") return true;
+      if (part?.type !== "input_image" || typeof part.image_url !== "string" ||
+          Object.keys(part).some((key) => key !== "type" && key !== "image_url" && key !== "detail")) return true;
       const details = seen.get(part.image_url);
       const detail = part.detail ?? "";
       if (details?.has(detail)) {
