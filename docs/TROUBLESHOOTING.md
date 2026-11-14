@@ -343,26 +343,14 @@ to done because that loads the child's idle thread status. `close_agent` is
 not in the v2 toolset; `interrupt_agent` is the close path that build
 exposes.
 
-The router now does two things:
+The managed `multi_agent_v2` usage hint tells the parent to call
+`interrupt_agent` on finished children. The router relays explicit
+model-authored lifecycle calls; completion history alone causes no new
+invocation.
 
-1. Ships a managed `multi_agent_v2` usage hint so the parent is told to call
-   `interrupt_agent` on finished children.
-2. On routed parent turns, scans the request for unfinished `FINAL_ANSWER`
-   children and injects any missing `interrupt_agent` calls into the response
-   before it completes. That is what settles San Francisco multi-agent badges
-   when the parent otherwise keeps working.
-
-Restart the router service so the inject path is loaded, then start a new
-parent turn (or nudge the stuck parent so it issues another request):
-
-```sh
-./bin/model-router codex doctor --fix
-```
-
-Already-stuck badges in an old San Francisco turn settle on the next parent
-response (native or routed) that sees those children's `FINAL_ANSWER` in
-input. If the parent is fully idle and never turns again, click into each
-child once or send a short follow-up on the parent.
+For an already-stuck badge, open the child thread to load its idle status,
+or ask the parent to interrupt that specific finished child. A new parent
+response by itself does not close the child.
 
 ## The agent stops mid-task with no error
 

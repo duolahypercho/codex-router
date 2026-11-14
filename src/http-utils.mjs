@@ -16,7 +16,7 @@ export { markResponsesStream } from "./responses-stream-failure.mjs";
 // message carrying tool_calls must be followed immediately by its tool
 // messages. Folding alone is not enough when the calling message holds
 // several tool_calls whose results are split by another calling message --
-// which the router's own subagent closer produces when it splices an
+// which older router versions produced by splicing an
 // interrupt_agent call into the model's wait_agent message. In that shape
 // the first results answer only the leading calls; the trailing calls must
 // move down next to their own results. This pass does both: fold intervening
