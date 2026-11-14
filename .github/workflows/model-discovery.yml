@@ -53,6 +53,7 @@ jobs:
           # Only secrets present in repository settings become configured
           # provider credentials. Scope them to this step so checkout, setup,
           # and npm lifecycle scripts never receive provider keys.
+          ABLITERATEDLLM_API_KEY: ${{ secrets.ABLITERATEDLLM_API_KEY }}
           AINETCAFE_API_KEY: ${{ secrets.AINETCAFE_API_KEY }}
           AIMLAPI_API_KEY: ${{ secrets.AIMLAPI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
