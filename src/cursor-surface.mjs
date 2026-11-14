@@ -390,6 +390,14 @@ export function cursorChatToResponses(payload) {
   };
 }
 
+function responseFinishReason(payload) {
+  if (payload?.status === "incomplete" && payload.incomplete_details?.reason === "max_output_tokens") return "length";
+  if (payload?.status !== "completed") {
+    throw new Error("The routed response did not complete: " + (payload?.incomplete_details?.reason || payload?.status || "missing terminal status"));
+  }
+  return responseToolCalls(payload).length ? "tool_calls" : "stop";
+}
+
 function chatCompletion(payload, requestedModel) {
   const toolCalls = responseToolCalls(payload);
   return {
@@ -404,7 +412,7 @@ function chatCompletion(payload, requestedModel) {
         content: responseText(payload) || null,
         ...(toolCalls.length ? { tool_calls: toolCalls } : {}),
       },
-      finish_reason: toolCalls.length ? "tool_calls" : "stop",
+      finish_reason: responseFinishReason(payload),
     }],
     usage: responsesUsage(payload),
   };
@@ -811,6 +819,8 @@ function sessionFor(requestId) {
     payloads: new Map(),
     response: undefined,
     running: false,
+    finished: false,
+    controller: new AbortController(),
     nextExecId: 1,
     pendingExecs: new Map(),
   };
@@ -826,6 +836,9 @@ function sessionFor(requestId) {
 }
 
 function finishSession(session) {
+  if (session.finished) return;
+  session.finished = true;
+  session.controller.abort(new Error("Cursor closed the local-execution stream."));
   clearTimeout(session.timer);
   sessions.delete(session.requestId);
   for (const pending of session.pendingExecs.values()) {
@@ -855,6 +868,7 @@ function receiveCursorClientMessage(session, payload) {
 }
 
 function cursorExecution(session, toolCall) {
+  session.controller.signal.throwIfAborted();
   const args = cursorExecArgs(toolCall);
   const id = session.nextExecId;
   session.nextExecId += 1;
@@ -864,6 +878,7 @@ function cursorExecution(session, toolCall) {
   writeConnectMessage(session.response, cursorToolUpdate(2, toolCall, args));
   writeConnectMessage(session.response, cursorExecServerMessage(id, toolCall, args));
   return result.then((exec) => {
+    session.controller.signal.throwIfAborted();
     const completed = cursorExecOutput(toolCall, exec);
     writeConnectMessage(session.response, cursorToolUpdate(3, toolCall, args, completed.result));
     return completed.output;
@@ -878,7 +893,7 @@ function addUsage(total, usage = {}) {
 }
 
 async function maybeRunSession(session, responsesUrl, routedModels) {
-  if (session.running || !session.response || !session.payloads.size) return;
+  if (session.finished || session.running || !session.response || !session.payloads.size) return;
   const request = [...session.payloads.entries()]
     .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
     .map(([, payload]) => cursorAgentRunRequest(payload))
@@ -903,10 +918,14 @@ async function maybeRunSession(session, responsesUrl, routedModels) {
       const result = await callResponses(responsesUrl, {
         ...request,
         ...(request.instructions ? {} : { instructions: "You are responding through Cursor Agent CLI." }),
-      });
+      }, session.controller.signal);
+      if (session.finished) return;
       addUsage(usage, result.usage);
       const text = responseText(result);
       if (text) writeConnectMessage(session.response, textUpdate(text));
+      if (responseFinishReason(result) === "length") {
+        throw new Error("The routed response reached its output-token limit.");
+      }
       const toolCalls = responseToolCalls(result);
       if (!toolCalls.length) {
         completed = true;
@@ -923,6 +942,7 @@ async function maybeRunSession(session, responsesUrl, routedModels) {
           throw new Error(`The routed model called unsupported Cursor tool ${toolCall.function.name}.`);
         }
         const output = await cursorExecution(session, toolCall);
+        if (session.finished) return;
         request.input.push({ type: "function_call_output", call_id: toolCall.id, output });
       }
     }
@@ -930,10 +950,12 @@ async function maybeRunSession(session, responsesUrl, routedModels) {
     writeConnectMessage(session.response, turnEnded(usage));
     endConnect(session.response);
   } catch (error) {
-    console.error(
-      `[codex-router] Cursor CLI turn failed: ${error instanceof Error ? error.message : String(error)}`,
-    );
-    endConnect(session.response, error);
+    if (!session.finished) {
+      console.error(
+        `[codex-router] Cursor CLI turn failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      endConnect(session.response, error);
+    }
   } finally {
     finishSession(session);
   }

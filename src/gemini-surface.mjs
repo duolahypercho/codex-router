@@ -120,12 +120,12 @@ async function readSseFrames(body, onEvent) {
   let buffer = "";
   for await (const chunk of body) {
     buffer += decoder.decode(chunk, { stream: true });
-    let boundary = buffer.indexOf("\n\n");
-    while (boundary !== -1) {
-      const block = buffer.slice(0, boundary);
-      buffer = buffer.slice(boundary + 2);
+    let boundary = /\r?\n\r?\n/.exec(buffer);
+    while (boundary) {
+      const block = buffer.slice(0, boundary.index);
+      buffer = buffer.slice(boundary.index + boundary[0].length);
       dispatchSseBlock(block, onEvent);
-      boundary = buffer.indexOf("\n\n");
+      boundary = /\r?\n\r?\n/.exec(buffer);
     }
   }
   buffer += decoder.decode();
@@ -155,7 +155,7 @@ function dispatchSseBlock(block, onEvent) {
   }
 }
 
-async function streamTurn({ response, upstream, model }) {
+async function streamTurn({ response, upstream, model, signal }) {
   const translator = createGeminiStreamTranslator({ model });
   writeEventStreamHead(response, 200, {
     "Cache-Control": "no-cache",
@@ -169,11 +169,13 @@ async function streamTurn({ response, upstream, model }) {
       await readSseFrames(upstream.body, (event) => write(translator.push(event)));
     }
   } finally {
-    // Always: the SDK waits for a finishReason before it considers the turn
-    // over, so an upstream that drops mid-stream would otherwise leave the CLI
-    // holding an open turn until its own timeout.
-    write(translator.finish());
-    response.end();
+    // A connected SDK still needs a finish reason after an upstream drop.
+    // The closer reports failure without inventing completion evidence; a
+    // caller that already closed must not receive more bytes.
+    if (!signal.aborted && !response.destroyed) {
+      write(translator.finish());
+      response.end();
+    }
   }
 }
 
@@ -238,7 +240,7 @@ async function relayTurn({ response, model, body, stream, responsesUrl, fetchImp
     return;
   }
   try {
-    await streamTurn({ response, upstream, model });
+    await streamTurn({ response, upstream, model, signal: client.signal });
   } finally {
     client.release();
   }
