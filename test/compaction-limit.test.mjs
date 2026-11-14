@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   COMPACTION_SKIP_HEADROOM,
   isRemoteCompactV2Trigger,
+  nativeContextPressureError,
   skippableCompactionTokens,
 } from "../src/compaction-limit.mjs";
 import { estimateInputTokens } from "../src/response-usage.mjs";
@@ -96,4 +97,87 @@ test("a route without a usable autoCompact budget is never skippable", () => {
 test("a non-array input is never skippable", () => {
   assert.equal(skippableCompactionTokens(undefined, ROUTE), undefined);
   assert.equal(skippableCompactionTokens("history", ROUTE), undefined);
+});
+
+test("an opaque native 400 near auto-compaction returns an actionable context diagnosis", () => {
+  const payload = {
+    model: "gpt-native-fixture",
+    input: [textItem("x".repeat(40_000))],
+  };
+  const result = nativeContextPressureError({
+    status: 400,
+    bodyText: JSON.stringify({ detail: "Bad Request" }),
+    payload,
+    model: {
+      slug: payload.model,
+      context_window: 10_000,
+      auto_compact_token_limit: 8_000,
+    },
+  });
+  assert.equal(result.error.type, "invalid_request_error");
+  assert.equal(result.error.code, "context_compaction_required");
+  assert.equal(result.error.param, "input");
+  assert.match(result.error.message, /opaque HTTP 400/i);
+  assert.match(result.error.message, /automatic-compaction limit/i);
+  assert.match(result.error.message, /compact the conversation or start a new task/i);
+});
+
+test("native context pressure never overrides a specific error or a compaction request", () => {
+  const model = {
+    slug: "gpt-native-fixture",
+    context_window: 10_000,
+    auto_compact_token_limit: 8_000,
+  };
+  const full = { model: model.slug, input: [textItem("x".repeat(40_000))] };
+  assert.equal(nativeContextPressureError({
+    status: 400,
+    bodyText: JSON.stringify({ error: { message: "Tool schema is invalid." } }),
+    payload: full,
+    model,
+  }), undefined);
+  assert.equal(nativeContextPressureError({
+    status: 400,
+    bodyText: JSON.stringify({
+      error: {
+        message: "Bad Request",
+        type: "invalid_request_error",
+        code: "invalid_tool_schema",
+        param: "tools",
+      },
+    }),
+    payload: full,
+    model,
+  }), undefined);
+  assert.equal(nativeContextPressureError({
+    status: 400,
+    bodyText: JSON.stringify({ detail: "Bad Request" }),
+    bodyComplete: false,
+    payload: full,
+    model,
+  }), undefined);
+  assert.equal(nativeContextPressureError({
+    status: 400,
+    bodyText: JSON.stringify({ detail: "Bad Request" }),
+    payload: { ...full, input: [...full.input, { type: "compaction_trigger" }] },
+    model,
+  }), undefined);
+  assert.equal(nativeContextPressureError({
+    status: 400,
+    bodyText: JSON.stringify({ detail: "Bad Request" }),
+    payload: full,
+    model,
+    compactionRequest: true,
+  }), undefined);
+  assert.equal(nativeContextPressureError({
+    status: 400,
+    bodyText: JSON.stringify({ detail: "Bad Request" }),
+    payload: { model: model.slug, input: [textItem("small")] },
+    model,
+  }), undefined);
+  assert.equal(nativeContextPressureError({
+    status: 500,
+    bodyText: JSON.stringify({ detail: "Bad Request" }),
+    payload: full,
+    model,
+  }), undefined);
 });

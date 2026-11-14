@@ -1,0 +1,1 @@
+- Preserve bounded top-level upstream error details across the Responses WebSocket bridge, and diagnose opaque native HTTP 400 responses as context pressure only when the request has reached the model catalog's automatic-compaction limit.

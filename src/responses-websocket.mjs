@@ -90,6 +90,7 @@ const MAX_RATE_LIMIT_ID_BYTES = 64;
 const MAX_RATE_LIMIT_NUMBER_BYTES = 64;
 const MAX_RATE_LIMIT_TEXT_BYTES = 256;
 const MAX_ERROR_PLAN_TYPE_BYTES = 128;
+const MAX_ERROR_MESSAGE_BYTES = 2 * 1_024;
 // openai/codex@63d2138 deserializes `resets_at` as an i64, then accepts it
 // only when chrono 0.4.43 can construct a DateTime<Utc> from the seconds.
 const MIN_CODEX_RESET_AT = -8_334_601_228_800;
@@ -563,10 +564,21 @@ function errorShape(body, fallback) {
       source.resets_at <= MAX_CODEX_RESET_AT
     ? source.resets_at
     : undefined;
+  const candidateMessage = [
+    source.message,
+    typeof parsed?.error === "string" ? parsed.error : undefined,
+    parsed?.detail,
+    parsed?.message,
+  ].find((value) =>
+    typeof value === "string" &&
+    value.length > 0 &&
+    Buffer.byteLength(value, "utf8") <= MAX_ERROR_MESSAGE_BYTES &&
+    !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value)
+  );
   return {
     type: typeof source.type === "string" ? source.type : fallback.type,
     ...(typeof source.code === "string" ? { code: source.code } : {}),
-    message: typeof source.message === "string" ? source.message : fallback.message,
+    message: candidateMessage || fallback.message,
     ...(planType !== undefined ? { plan_type: planType } : {}),
     ...(resetsAt !== undefined ? { resets_at: resetsAt } : {}),
   };

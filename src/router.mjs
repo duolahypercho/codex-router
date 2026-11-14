@@ -174,6 +174,7 @@ import {
 } from "./response-usage.mjs";
 import {
   isRemoteCompactV2Trigger,
+  nativeContextPressureError,
   skippableCompactionTokens,
 } from "./compaction-limit.mjs";
 import { fetchWithRetry, NATIVE_RETRY_POLICY } from "./upstream-retry.mjs";
@@ -1458,22 +1459,22 @@ async function boundedResponseText(
 
 // Read a failed upstream body *without* consuming the one that gets relayed.
 // Native errors are forwarded to Codex byte-for-byte on purpose -- "OpenAI
-// errors are already clear" -- so the auto-review classifier reads a clone and
-// leaves the original stream untouched. Only ever called on a response that is
-// already `!ok` and only for the reviewer slug, so the tee buffers an error
-// body and never a turn. Any failure to read is reported as no body: a missed
-// quota window costs one more round trip, while breaking the relay would cost
-// the operator the error itself.
+// errors are already clear" -- so native failure diagnostics read a clone and
+// leave the original stream untouched. Only ever called on a response that is
+// already `!ok`, so the tee buffers an error body and never a successful turn.
+// Completeness is explicit so a failed or oversized peek can never be mistaken
+// for an empty, opaque upstream error.
 async function peekFailedBodyText(upstream, signal) {
   try {
     // Cancel only this peek branch. Awaiting its tee cancellation would wait
     // for the original, whose relay cannot start until this peek returns.
-    return (await readResponseBody(upstream.clone(), {
+    const bodyText = (await readResponseBody(upstream.clone(), {
       maxBytes: MAX_BUFFERED_RESPONSE_BYTES, signal, awaitCancellation: false,
     })).toString("utf8");
+    return { bodyText, complete: true };
   } catch (error) {
     if (signal?.aborted) throw error;
-    return "";
+    return { bodyText: "", complete: false };
   }
 }
 
@@ -4616,6 +4617,7 @@ async function handleResponses(request, response, requestUrl) {
   let pendingInterrupts = [];
   let pendingInterruptNamespace;
   let bufferNativeStream = false;
+  let nativePreparedPayload;
   let emptyCompletion = false;
   let emptyCompletionRetried = false;
   // The model the operator actually asked for, when this turn ended up being
@@ -5204,6 +5206,7 @@ async function handleResponses(request, response, requestUrl) {
           headers,
         );
       }
+      nativePreparedPayload = native;
     }
 
     // `routedBody` is a fully materialized Buffer -- plain JSON, or the zstd
@@ -5488,9 +5491,10 @@ async function handleResponses(request, response, requestUrl) {
         // refusal ahead of a quota one, ignores 5xx and every deterministic
         // 4xx, and reads a reset time only where the upstream stated one. A
         // second opinion here would be a second thing to keep correct.
+        const reviewerFailurePeek = await peekFailedBodyText(upstream, controller.signal);
         const reviewerFailure = classifyRoutedFailure({
           status: upstream.status,
-          bodyText: await peekFailedBodyText(upstream, controller.signal),
+          bodyText: reviewerFailurePeek.bodyText,
           retryAfterSeconds: retryAfterSeconds(upstream.headers),
         });
         if (reviewerFailure.swap) {
@@ -5510,7 +5514,40 @@ async function handleResponses(request, response, requestUrl) {
     }
     // Gateway error bodies leak LiteLLM's internal exception chain, which
     // reads like a router bug. Rewrite them to name the provider that failed.
-    // Native traffic passes through untouched: OpenAI errors are already clear.
+    // Native traffic stays byte-for-byte untouched. Its bounded clone is used
+    // only to replace an otherwise opaque 400 when the catalog and request
+    // independently prove that the conversation reached compaction pressure.
+    if (!route && !upstream.ok) {
+      const nativeFailurePeek = await peekFailedBodyText(upstream, controller.signal);
+      const nativeModel = catalogModels().find((model) => model?.slug === requestedModel);
+      const pressure = nativeContextPressureError({
+        status: upstream.status,
+        bodyText: nativeFailurePeek.bodyText,
+        bodyComplete: nativeFailurePeek.complete,
+        payload: nativePreparedPayload ?? payload,
+        model: nativeModel,
+        compactionRequest: compactV1 || compactV2,
+      });
+      if (pressure) {
+        await upstream.body?.cancel().catch(() => {});
+        writeJson(response, upstream.status, pressure);
+        recordTurnUsage({
+          model: requestedModel,
+          provider: "openai",
+          status: upstream.status,
+          durationMs: Date.now() - startedAt,
+          responseStartMs: upstreamLatencyMs,
+        }, { ...diagnostics, contextPressure: true });
+        usageRecorded = true;
+        finalStatus = upstream.status;
+        activityStatus = upstream.status;
+        console.error(
+          `[codex-router] native context pressure model=${requestedModel || "unknown"} ` +
+            `status=${upstream.status} code=context_compaction_required`,
+        );
+        return;
+      }
+    }
     if (route && !upstream.ok) {
       const provider = providerForModel(route);
       const retryAfterHeader = upstream.headers.get("retry-after");
