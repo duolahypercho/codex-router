@@ -1751,26 +1751,29 @@ function messageItem(text) {
   };
 }
 
+function isOrphanCodexAppOutput(item) {
+  if (item?.type !== "function_call_output") return false;
+  if (typeof item.name !== "string" || !item.name) return false;
+  if (typeof item.call_id === "string" && item.call_id) return false;
+  if (item.output === undefined) return false;
+  // Desktop persists ambient app state as a tool result with no originating
+  // call. Older builds use namespace codex_app. Current Desktop uses agent for
+  // the open page, the selected page, and in-app browser tabs; the name set
+  // keeps growing, so a name allowlist misses the next one. Recover both
+  // namespaces. A result that already has a call_id stays paired, and a
+  // malformed result in any other namespace still fails closed.
+  return item.namespace === "codex_app" || item.namespace === "agent";
+}
+
 function normalizeOrphanAppToolOutput(item) {
-  if (
-    item?.type !== "function_call_output" ||
-    item.namespace !== "codex_app" ||
-    typeof item.name !== "string" ||
-    !item.name ||
-    (typeof item.call_id === "string" && item.call_id) ||
-    item.output === undefined
-  ) {
-    return item;
-  }
-  // Codex app-server can persist a standalone app-tool result without the
-  // originating call. A synthetic call_id would still have no matching call,
-  // while strict Responses providers reject the original item outright.
-  // Preserve the result as ordinary readable history instead. Scope the
-  // recovery to named codex_app outputs so every other malformed tool item
+  if (!isOrphanCodexAppOutput(item)) return item;
+  // A synthetic call_id would still have no matching call, while strict
+  // Responses providers reject the original item outright. Preserve the result
+  // as ordinary readable history instead. Every other malformed tool item
   // continues to fail closed at the provider adapter.
   const output =
     typeof item.output === "string" ? item.output : JSON.stringify(item.output);
-  return messageItem(`[Codex app tool result: codex_app.${item.name}]\n${output}`);
+  return messageItem(`[Codex app tool result: ${item.namespace}.${item.name}]\n${output}`);
 }
 
 function normalizeProviderAppToolOutputs(input) {

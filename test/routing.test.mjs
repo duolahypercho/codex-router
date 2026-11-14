@@ -7838,6 +7838,104 @@ test("router preserves orphan Codex app outputs as readable history", async () =
     assert.match(catalog, /"kind":"tool_result"/u);
     assert.match(catalog, /"tool":"send_message_to_thread"/u);
     assert.doesNotMatch(catalog, /"kind":"user_message"/u);
+
+    const pageResponse = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer CHATGPT_SESSION_TOKEN",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "kimi-oauth/k3",
+        stream: false,
+        input: [
+          {
+            type: "function_call_output",
+            id: "fco_open_page",
+            name: "codex_apps_open_page",
+            namespace: "agent",
+            output: "open page",
+          },
+          {
+            type: "function_call_output",
+            id: "fco_open_page_part",
+            name: "codex_apps_open_page_part_2_of_3",
+            namespace: "agent",
+            output: "open page part",
+          },
+          {
+            type: "function_call_output",
+            id: "fco_selected_page",
+            name: "codex_apps_selected_page_part_1_of_1",
+            namespace: "agent",
+            output: "selected page",
+          },
+          {
+            type: "function_call_output",
+            id: "fco_selected_page_whole",
+            name: "codex_apps_selected_page",
+            namespace: "agent",
+            output: "selected page whole",
+          },
+          {
+            type: "function_call_output",
+            id: "fco_browser_tabs",
+            name: "browser_tabs",
+            namespace: "agent",
+            output: "one browser tab",
+          },
+          {
+            type: "function_call_output",
+            id: "fco_future_ambient",
+            name: "future_ambient_state",
+            namespace: "agent",
+            output: "future ambient state",
+          },
+          {
+            type: "function_call_output",
+            id: "fco_other_namespace",
+            name: "broken_tool",
+            namespace: "mcp__other",
+            output: "must stay",
+          },
+          {
+            type: "function_call_output",
+            id: "fco_no_namespace",
+            name: "broken_plain_tool",
+            output: "must also stay",
+          },
+          {
+            type: "function_call_output",
+            call_id: "call-agent",
+            name: "codex_apps_open_page",
+            namespace: "agent",
+            output: "paired page result",
+          },
+        ],
+      }),
+    });
+    assert.equal(pageResponse.status, 200, await pageResponse.text());
+    const pageInput = gatewayRequests.at(-1).input;
+    assert.deepEqual(
+      pageInput.slice(0, 6).map((item) => item.content?.[0]?.text),
+      [
+        "[Codex app tool result: agent.codex_apps_open_page]\nopen page",
+        "[Codex app tool result: agent.codex_apps_open_page_part_2_of_3]\nopen page part",
+        "[Codex app tool result: agent.codex_apps_selected_page_part_1_of_1]\nselected page",
+        "[Codex app tool result: agent.codex_apps_selected_page]\nselected page whole",
+        "[Codex app tool result: agent.browser_tabs]\none browser tab",
+        "[Codex app tool result: agent.future_ambient_state]\nfuture ambient state",
+      ],
+    );
+    assert.equal(pageInput[6].type, "function_call_output");
+    assert.equal(pageInput[6].namespace, "mcp__other");
+    assert.equal(pageInput[6].output, "must stay");
+    assert.equal(pageInput[7].type, "function_call_output");
+    assert.equal(pageInput[7].name, "broken_plain_tool");
+    assert.equal(pageInput[7].output, "must also stay");
+    assert.equal(pageInput[8].type, "function_call_output");
+    assert.equal(pageInput[8].call_id, "call-agent");
+    assert.equal(pageInput[8].output, "paired page result");
   } finally {
     await stopChild(router);
     await closeServer(gateway.server);
