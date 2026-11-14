@@ -1,0 +1,1 @@
+- **Claude 5.5 API requests no longer end with an unsupported assistant prefill.** The router reapplies the required user-turn boundary after history rewrites for Opus, Sonnet, and Haiku 5.5.

@@ -2406,7 +2406,29 @@ function requiresTrailingUserTurn(route) {
   ) {
     return true;
   }
-  return route?.requiresTrailingUserTurn === true;
+  return (
+    route?.requiresTrailingUserTurn === true ||
+    (provider?.protocol === "anthropic" &&
+      [route?.slug, route?.upstreamModel, route?.gatewayModel, route?.model].some(
+        (id) =>
+          typeof id === "string" &&
+          /claude-(?:opus|sonnet|haiku)-5-5(?:$|[^0-9])/i.test(id),
+      ))
+  );
+}
+
+function trimTrailingModelTurns(input) {
+  while (
+    input.length > 0 &&
+    (input[input.length - 1]?.role === "assistant" ||
+      input[input.length - 1]?.type === "reasoning" ||
+      input[input.length - 1]?.type === "function_call" ||
+      input[input.length - 1]?.type === "custom_tool_call" ||
+      (input[input.length - 1]?.type === "message" &&
+        input[input.length - 1]?.role === "assistant"))
+  ) {
+    input.pop();
+  }
 }
 
 function assistantTextItem(text, nativeThinking = false) {
@@ -3820,17 +3842,7 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
   // Models marked requiresTrailingUserTurn reject requests ending with a model
   // turn. Pop trailing assistant messages, reasoning, or subagent outputs.
   if (requiresTrailingUserTurn(route)) {
-    while (
-      input.length > 0 &&
-      (input[input.length - 1]?.role === "assistant" ||
-        input[input.length - 1]?.type === "reasoning" ||
-        input[input.length - 1]?.type === "function_call" ||
-        input[input.length - 1]?.type === "custom_tool_call" ||
-        (input[input.length - 1]?.type === "message" &&
-          input[input.length - 1]?.role === "assistant"))
-    ) {
-      input.pop();
-    }
+    trimTrailingModelTurns(input);
   }
   let tools = clientTools;
   // LiteLLM's Responses -> Chat Completions bridge drops namespace tools, which
@@ -4046,6 +4058,11 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
   // Append V4A examples to the native custom apply_patch description for
   // the agentic grok-oauth routes only, before LiteLLM translates that tool.
   tools = applyGrokApplyPatchGuidance(tools, route);
+  // History rewrites can expose a trailing assistant or tool item that was
+  // not at the end during the first pass. Reapply strict provider cleanup now.
+  if (requiresTrailingUserTurn(route)) {
+    trimTrailingModelTurns(routedInput);
+  }
   let routed = {
     ...payload,
     tools,

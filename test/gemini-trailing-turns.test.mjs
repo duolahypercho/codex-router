@@ -148,11 +148,20 @@ function curatedModels(genericBaseUrl = "https://generic-google.example.test/v1"
     gatewayModel: "google-ordinary-generic",
     upstreamModel: "vendor/ordinary-generic",
   });
+  const claude55 = ["opus", "sonnet", "haiku"].map((family) => {
+    const id = `claude-${family}-5-5`;
+    return model({
+      provider: "anthropic-api",
+      id,
+      gatewayModel: `anthropic-api-${id}`,
+      upstreamModel: id,
+    });
+  });
   writeFileSync(
     file,
     JSON.stringify({
       version: 1,
-      models: [official, optedIn, namedReseller, other, genericGoogle],
+      models: [official, optedIn, namedReseller, other, genericGoogle, ...claude55],
     }),
     "utf8",
   );
@@ -181,10 +190,11 @@ function curatedModels(genericBaseUrl = "https://generic-google.example.test/v1"
     namedReseller: { gateway: namedReseller.gatewayModel, slug: namedReseller.slug },
     other: { gateway: other.gatewayModel, slug: other.slug },
     genericGoogle: { gateway: genericGoogle.gatewayModel, slug: genericGoogle.slug },
+    claude55: claude55.map((entry) => ({ gateway: entry.gatewayModel, slug: entry.slug })),
   };
 }
 
-test("API forwarder trims only official and explicitly opted-in trailing model turns", async () => {
+test("API forwarder trims strict-provider and Anthropic 5.5 trailing model turns", async () => {
   const upstreamRequests = [];
   const upstream = await mockServer(async (request, response) => {
     upstreamRequests.push(await bodyJson(request));
@@ -202,11 +212,13 @@ test("API forwarder trims only official and explicitly opted-in trailing model t
     OPENROUTER_API_KEY: "TEST_OPENROUTER_API_KEY",
     GEMINI_API_BASE_URL: `http://127.0.0.1:${upstream.port}`,
     GEMINI_API_KEY: "TEST_GEMINI_API_KEY",
+    ANTHROPIC_API_BASE_URL: `http://127.0.0.1:${upstream.port}/v1`,
+    ANTHROPIC_API_KEY: "TEST_ANTHROPIC_API_KEY",
     CODEX_ROUTER_QUIET: "1",
   });
 
-  async function forward(model) {
-    const response = await fetch(`http://127.0.0.1:${forwarderPort}/v1/chat/completions`, {
+  async function forward(model, route = "/chat/completions") {
+    const response = await fetch(`http://127.0.0.1:${forwarderPort}/v1${route}`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${INTERNAL_KEY}`,
@@ -250,6 +262,10 @@ test("API forwarder trims only official and explicitly opted-in trailing model t
       { role: "user", content: "hello" },
       { role: "assistant", content: "interrupted answer" },
     ]);
+    for (const model of models.claude55) {
+      await forward(model.gateway, "/messages");
+      assert.deepEqual(upstreamRequests.at(-1).messages, [{ role: "user", content: "hello" }]);
+    }
   } finally {
     await stopChild(forwarder);
     await closeServer(upstream.server);
@@ -258,7 +274,7 @@ test("API forwarder trims only official and explicitly opted-in trailing model t
   }
 });
 
-test("router trims only official and explicitly opted-in trailing Responses model turns", async () => {
+test("router trims strict-provider and Anthropic 5.5 trailing Responses model turns", async () => {
   const gatewayRequests = [];
   const healthRequests = [];
   const gateway = await mockServer(async (request, response) => {
@@ -321,7 +337,7 @@ test("router trims only official and explicitly opted-in trailing Responses mode
     assert.ok(healthRequests.includes("/api-health"));
     writeFileSync(
       path.join(stateDir, "enabled-providers.json"),
-      `${JSON.stringify({ version: 1, providers: ["gemini-api", "openrouter"] })}\n`,
+      `${JSON.stringify({ version: 1, providers: ["gemini-api", "openrouter", "anthropic-api"] })}\n`,
     );
 
     await route(models.official.slug);
@@ -353,6 +369,16 @@ test("router trims only official and explicitly opted-in trailing Responses mode
     await route(models.genericGoogle.slug);
     assert.equal(gatewayRequests.at(-1).input.length, 2);
     assert.equal(gatewayRequests.at(-1).input.at(-1).role, "assistant");
+    for (const model of models.claude55) {
+      await route(model.slug);
+      assert.deepEqual(gatewayRequests.at(-1).input, [
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "hello" }],
+        },
+      ]);
+    }
   } finally {
     await stopChild(router);
     await closeServer(gateway.server);
