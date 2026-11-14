@@ -873,6 +873,10 @@ async function decodeBody(
 // off the event loop on a 2 MB turn. Small bodies are left alone, where a TLS
 // record or two is the whole payload and compression buys nothing.
 const MIN_COMPRESSED_BODY_BYTES = 16 * 1024;
+// The native Codex backend accepted 1,695,486 decoded screenshot bytes and
+// rejected 1,739,484 with HTTP 400 on 2026-11-11. Keep headroom below that
+// observed ceiling so a continuing computer-use turn can still proceed.
+const NATIVE_IMAGE_PAYLOAD_BUDGET_BYTES = 1.5 * 1024 * 1024;
 const compressBody = promisify(zstdCompress);
 
 async function compressedNativeBody(body, headers) {
@@ -4975,6 +4979,7 @@ async function handleResponses(request, response, requestUrl) {
     let target;
     let headers;
     let routedBody;
+    let nativePayload;
     let nativeWsTransport = false;
     let nativeWsSent = false;
     let builtSearchMode;
@@ -5127,6 +5132,7 @@ async function handleResponses(request, response, requestUrl) {
       }
     } else {
       const native = { ...payload };
+      nativePayload = native;
       if (!compactV1) markResponsesStream(response, { minimalFailure: true });
       const substitutedCaller = callerBroughtNoUpstreamCredential(request);
       // An extended-window variant is the model it was derived from, published
@@ -5166,6 +5172,22 @@ async function handleResponses(request, response, requestUrl) {
           });
           native.input = aged.input;
           toolResultAging = aged.stats;
+          const bounded = boundImagePayload(native.input, {
+            maxBytes: NATIVE_IMAGE_PAYLOAD_BUDGET_BYTES,
+            maxTokens: Infinity,
+            // Preserve the latest screen even if the tool returned several
+            // distinct captures that together exceed the backend's limit.
+            keepNewest: 1,
+            protectPending: false,
+          });
+          native.input = bounded.input;
+          imageBudget = bounded.stats;
+          if (bounded.stats.imageReferencesDropped > 0) {
+            console.error(
+              `[codex-router] bounded native image history dropped=${bounded.stats.imageReferencesDropped}` +
+                ` image-bytes-saved=${bounded.stats.imageBytesSaved}`,
+            );
+          }
         }
       }
       // SF and other native multi-agent parents hit this path (model_provider
@@ -5219,6 +5241,13 @@ async function handleResponses(request, response, requestUrl) {
     if (route) {
       assertRoutedSearchContract(route, builtSearchMode, searchContract);
     }
+    const fetchAttempt = nativeWsTransport
+      ? (url, init) => nativeResponsesWebSocketFetch(url, init, {
+          fallbackFetch: fetchObservedUpstream,
+          onSent: () => { nativeWsSent = true; activity.progress.attempt(); },
+          onHeaders: () => activity.progress.headers(),
+        })
+      : fetchObservedUpstream;
     let { response: upstream, retries } = await fetchWithRetry(
       target,
       {
@@ -5231,13 +5260,7 @@ async function handleResponses(request, response, requestUrl) {
         // Routed traffic terminates at the local gateway, which has its own
         // error translation and Retry-After handling below; leave it exactly
         // as it was.
-        fetchImpl: nativeWsTransport
-          ? (url, init) => nativeResponsesWebSocketFetch(url, init, {
-              fallbackFetch: fetchObservedUpstream,
-              onSent: () => { nativeWsSent = true; activity.progress.attempt(); },
-              onHeaders: () => activity.progress.headers(),
-            })
-          : fetchObservedUpstream,
+        fetchImpl: fetchAttempt,
         retries: route ? 0 : undefined,
         canRetry: () => !nativeWsSent && nothingRelayed(response),
         onAttempt: (event) => {
@@ -5251,6 +5274,44 @@ async function handleResponses(request, response, requestUrl) {
     );
     upstreamRetries = retries;
     upstreamStatus = upstream.status;
+    // The native backend can reject a screenshot history with a bare
+    // {"detail":"Bad Request"} even below our measured byte budget. A 400 is
+    // a completed rejection, so before relaying it, try the same turn with
+    // progressively fewer older images. Never replay a response already sent
+    // to Codex, and always preserve the newest capture.
+    if (!route && !compactV1 && !compactV2 && upstream.status === 400 &&
+        imageBudget?.imageReferencesSeen > imageBudget?.imageReferencesDropped &&
+        nothingRelayed(response)) {
+      let bodyText = await peekFailedBodyText(upstream, controller.signal);
+      for (let attempt = 1;
+        attempt <= IMAGE_REJECTION_MAX_RETRIES &&
+        !controller.signal.aborted && nothingRelayed(response) &&
+        (isImagePayloadRejection({ status: upstream.status, bodyText }) ||
+          bodyText.trim() === '{"detail":"Bad Request"}');
+        attempt += 1) {
+        const limits = tighterImageBudget(imageBudget, { keepNewest: 1 });
+        if (!limits) break;
+        const bounded = boundImagePayload(nativePayload.input, {
+          ...limits, keepNewest: 1, protectPending: false,
+        });
+        if (bounded.stats.imageReferencesDropped === 0) break;
+        nativePayload.input = bounded.input;
+        imageBudget = bounded.stats;
+        const encoded = Buffer.from(JSON.stringify(nativePayload), "utf8");
+        delete headers["Content-Encoding"];
+        routedBody = nativeWsTransport ? encoded : await compressedNativeBody(encoded, headers);
+        console.error(
+          `[codex-router] native image rejection retry ${attempt}/${IMAGE_REJECTION_MAX_RETRIES}` +
+            ` model=${requestedModel} images=${imageBudget.imageReferencesSeen - imageBudget.imageReferencesDropped}`,
+        );
+        upstream = await fetchAttempt(target, {
+          method: "POST", headers, body: routedBody, signal: controller.signal,
+        });
+        upstreamRetries = (upstreamRetries || 0) + 1;
+        upstreamStatus = upstream.status;
+        bodyText = upstream.ok ? "" : await peekFailedBodyText(upstream, controller.signal);
+      }
+    }
     // Time until the upstream chain answered the request. Everything before
     // this is router-side work (body read, normalization, flattening, vision
     // bridge) plus the upstream's own time to produce response headers. For a

@@ -513,6 +513,34 @@ function continuationState(input, output, maxBytes) {
   return boundedJsonByteLength(state, maxBytes) <= maxBytes ? state : undefined;
 }
 
+// Computer-use tools can return the same screenshot twice in one result (for
+// example, a click followed by a state read). Replaying both copies wastes the
+// native request's image allowance and can make the next turn fail with 400.
+function dedupeToolOutputImages(input) {
+  if (!Array.isArray(input)) return input;
+  let changed = false;
+  const deduped = input.map((item) => {
+    if (!Array.isArray(item?.output) ||
+        (item.type !== "function_call_output" && item.type !== "custom_tool_call_output")) return item;
+    const seen = new Map();
+    const output = item.output.filter((part) => {
+      if (part?.type !== "input_image" || typeof part.image_url !== "string" ||
+          Object.keys(part).some((key) => key !== "type" && key !== "image_url" && key !== "detail")) return true;
+      const details = seen.get(part.image_url);
+      const detail = part.detail ?? "";
+      if (details?.has(detail)) {
+        changed = true;
+        return false;
+      }
+      if (details) details.add(detail);
+      else seen.set(part.image_url, new Set([detail]));
+      return true;
+    });
+    return output.length === item.output.length ? item : { ...item, output };
+  });
+  return changed ? deduped : input;
+}
+
 function continuationItemKey(item) {
   if (typeof item?.call_id === "string" && item.call_id) return `call:${item.call_id}`;
   if (typeof item?.id === "string" && item.id) return `id:${item.id}`;
@@ -543,9 +571,10 @@ function reconciledContinuationOutput(completedOutput, outputItems) {
   return reconciled;
 }
 function errorShape(body, fallback) {
+  const raw = body.toString("utf8").trim();
   let parsed;
   try {
-    parsed = JSON.parse(body.toString("utf8"));
+    parsed = JSON.parse(raw);
   } catch {
     parsed = undefined;
   }
@@ -566,7 +595,10 @@ function errorShape(body, fallback) {
   return {
     type: typeof source.type === "string" ? source.type : fallback.type,
     ...(typeof source.code === "string" ? { code: source.code } : {}),
-    message: typeof source.message === "string" ? source.message : fallback.message,
+    message: typeof source.message === "string" ? source.message
+      : typeof source.detail === "string" ? source.detail
+        : !parsed && raw.length > 0 && raw.length <= 512 && !/[<>\x00-\x1f]/.test(raw)
+          ? raw : fallback.message,
     ...(planType !== undefined ? { plan_type: planType } : {}),
     ...(resetsAt !== undefined ? { resets_at: resetsAt } : {}),
   };
@@ -958,6 +990,7 @@ class ResponsesWebSocketPeer {
         ...request.input,
       ];
     }
+    fullRequest.input = dedupeToolOutputImages(fullRequest.input);
     // Codex's ResponseCreateWsRequest serializes every stable non-input field
     // on incremental frames; only `input` becomes the suffix and
     // `previous_response_id` names its baseline. Keep the current envelope as

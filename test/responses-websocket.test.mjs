@@ -1512,12 +1512,12 @@ test("bounds named rate-limit discovery and drops malformed family data", async 
 
 test("custom WebSocket body limits trim consumed image history before encoding", async (t) => {
   const bodies = [];
-  const image = () => ({ type: "input_image", image_url: `data:image/png;base64,${"A".repeat(700)}`, detail: "original" });
+  const image = (suffix = "") => ({ type: "input_image", image_url: `data:image/png;base64,${"A".repeat(700)}${suffix}`, detail: "original" });
   const action = { type: "function_call", call_id: "current", name: "view_image", arguments: "{}" };
   const initial = Array.from({ length: 3 }, (_, index) => ({
     type: "function_call_output", call_id: `old-${index}`, output: [image()],
   }));
-  const current = { type: "function_call_output", call_id: "current", output: [image(), image()] };
+  const current = { type: "function_call_output", call_id: "current", output: [image(), image("B")] };
   const instructions = 'é文😀\\"\n\ud800'.repeat(5);
   const tools = [{ type: "function", name: "view_image", parameters: { type: "object" } }];
   const { server, port } = await startServer(async (request, response) => {
@@ -1549,6 +1549,52 @@ test("custom WebSocket body limits trim consumed image history before encoding",
   assert.deepEqual(bodies[1].input.at(-1), current);
   assert.equal(bodies[1].instructions, instructions);
   assert.deepEqual(bodies[1].tools, tools);
+  peer.close();
+});
+
+test("duplicate screenshots in one tool result are sent only once", async (t) => {
+  let forwarded;
+  const { server, port } = await startServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    forwarded = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    sse(response, [
+      { type: "response.created", response: { id: "resp-dedup" } },
+      { type: "response.completed", response: { id: "resp-dedup", usage: {} } },
+    ]);
+  });
+  t.after(() => server.close());
+  const { peer } = await connect(port);
+  t.after(() => peer.socket.destroy());
+  const image = { type: "input_image", image_url: "data:image/jpeg;base64,AAAA", detail: "original" };
+  peer.sendJson(createRequest({ input: [{
+    type: "custom_tool_call_output", call_id: "capture", output: [
+      { type: "input_text", text: "screen" }, image, { ...image },
+      { ...image, image_url: "data:image/jpeg;base64,BBBB" },
+    ],
+  }] }));
+  assert.equal((await peer.nextJson()).type, "response.created");
+  assert.equal((await peer.nextJson()).type, "response.completed");
+  assert.deepEqual(forwarded.input[0].output, [
+    { type: "input_text", text: "screen" }, image,
+    { ...image, image_url: "data:image/jpeg;base64,BBBB" },
+  ]);
+  peer.close();
+});
+
+test("native detail errors retain the upstream explanation", async (t) => {
+  const { server, port } = await startServer(async (request, response) => {
+    for await (const _chunk of request) {}
+    response.writeHead(400, { "content-type": "application/json" });
+    response.end(JSON.stringify({ detail: "Too many images in this request." }));
+  });
+  t.after(() => server.close());
+  const { peer } = await connect(port);
+  t.after(() => peer.socket.destroy());
+  peer.sendJson(createRequest());
+  const error = await peer.nextJson();
+  assert.equal(error.status, 400);
+  assert.equal(error.error.message, "Too many images in this request.");
   peer.close();
 });
 

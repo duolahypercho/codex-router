@@ -162,6 +162,85 @@ function stateDirectory() {
   return mkdtempSync(path.join(os.tmpdir(), "native-retry-state-"));
 }
 
+test("native turns bound screenshot history before reaching the backend", async () => {
+  let forwarded;
+  const native = await mockServer(async (request, response) => {
+    forwarded = JSON.parse((await readBody(request)).text);
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(JSON.stringify({ object: "response", status: "completed", output: [] }));
+  });
+  const stateDir = stateDirectory();
+  const routerPort = await openPort();
+  const router = startRouter({ nativePort: native.port, routerPort, stateDir });
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    const image = (index) => ({
+      type: "input_image", image_url: `data:image/jpeg;base64,${"A".repeat(580_000)}${index}`,
+    });
+    const input = Array.from({ length: 5 }, (_, index) => ({
+      type: "function_call_output", call_id: `capture-${index}`,
+      output: [image(index)],
+    }));
+    const result = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: { Authorization: "Bearer caller", "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "gpt-5.6-sol", input, stream: true }),
+    });
+    assert.equal(result.status, 200);
+    await result.arrayBuffer();
+    assert.equal(forwarded.input.flatMap((item) => item.output || []).filter((part) => part.type === "input_image").length, 3);
+    assert.match(forwarded.input[0].output[0].text, /image omitted by Codex Router/);
+    assert.match(forwarded.input[1].output[0].text, /image omitted by Codex Router/);
+    assert.equal(forwarded.input.at(-1).output[0].image_url, image(4).image_url);
+  } finally {
+    await stopChild(router);
+    await closeServer(native.server);
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("native image 400 retries with fewer older screenshots", async () => {
+  const attempts = [];
+  const native = await mockServer(async (request, response) => {
+    const payload = JSON.parse((await readBody(request)).text);
+    const images = payload.input.flatMap((item) => item.output || [])
+      .filter((part) => part.type === "input_image");
+    attempts.push(images);
+    if (images.length > 2) {
+      response.writeHead(400, { "Content-Type": "application/json" });
+      response.end('{"detail":"Bad Request"}');
+    } else {
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ object: "response", status: "completed", output: [] }));
+    }
+  });
+  const stateDir = stateDirectory();
+  const routerPort = await openPort();
+  const router = startRouter({ nativePort: native.port, routerPort, stateDir });
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    const input = Array.from({ length: 5 }, (_, index) => ({
+      type: "function_call_output", call_id: `capture-${index}`,
+      output: [{ type: "input_image", image_url: `data:image/jpeg;base64,${"A".repeat(400)}${index}` }],
+    }));
+    const result = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: { Authorization: "Bearer caller", "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "gpt-5.6-sol", input, stream: true }),
+    });
+    assert.equal(result.status, 200);
+    await result.arrayBuffer();
+    assert.equal(attempts.length, 2);
+    assert.equal(attempts[0].length, 5);
+    assert.ok(attempts[1].length <= 2);
+    assert.equal(attempts[1].at(-1).image_url, input.at(-1).output[0].image_url);
+  } finally {
+    await stopChild(router);
+    await closeServer(native.server);
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
 test("default POST policy never replays after the origin consumed and executed the request", async () => {
   let executions = 0;
   const native = await mockServer(async (request, response) => {
