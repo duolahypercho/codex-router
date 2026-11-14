@@ -197,6 +197,145 @@ test("native image histories over 128 MiB can grow without losing the current ba
   }
 });
 
+test("an opaque native 400 near the catalog compaction limit names context pressure", async () => {
+  let nativeRequests = 0;
+  const native = await mockServer(async (request, response) => {
+    nativeRequests += 1;
+    await bodyJson(request);
+    json(response, 400, { detail: "Bad Request" });
+  });
+  const testRoot = mkdtempSync(path.join(os.tmpdir(), "router-native-context-pressure-"));
+  const catalogPath = path.join(testRoot, "merged-models.json");
+  writeFileSync(catalogPath, JSON.stringify({
+    models: [{
+      slug: "gpt-native-fixture",
+      context_window: 10_000,
+      auto_compact_token_limit: 8_000,
+    }],
+  }));
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_ROUTER_CATALOG: catalogPath,
+    CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${native.port}`,
+  });
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    const response = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: { Authorization: "Bearer native-test", "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-native-fixture",
+        input: [{ type: "message", role: "user", content: "x".repeat(40_000) }],
+        stream: false,
+      }),
+    });
+    assert.equal(response.status, 400);
+    const body = await response.json();
+    assert.equal(body.error.type, "invalid_request_error");
+    assert.equal(body.error.code, "context_compaction_required");
+    assert.equal(body.error.param, "input");
+    assert.match(body.error.message, /opaque HTTP 400/i);
+    assert.match(body.error.message, /compact the conversation or start a new task/i);
+    assert.equal(nativeRequests, 1, "the diagnosis must follow a real upstream refusal");
+  } finally {
+    await stopChild(router);
+    await closeServer(native.server);
+    rmSync(testRoot, { recursive: true, force: true });
+  }
+});
+
+test("an opaque native V1 compaction failure is never rewritten as context pressure", async () => {
+  let nativeRequests = 0;
+  const native = await mockServer(async (request, response) => {
+    nativeRequests += 1;
+    await bodyJson(request);
+    json(response, 400, { detail: "Bad Request" });
+  });
+  const testRoot = mkdtempSync(path.join(os.tmpdir(), "router-native-compact-pressure-"));
+  const catalogPath = path.join(testRoot, "merged-models.json");
+  writeFileSync(catalogPath, JSON.stringify({
+    models: [{
+      slug: "gpt-native-fixture",
+      context_window: 10_000,
+      auto_compact_token_limit: 8_000,
+    }],
+  }));
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_ROUTER_CATALOG: catalogPath,
+    CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${native.port}`,
+  });
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    const response = await fetch(`${routerBase(routerPort)}/responses/compact`, {
+      method: "POST",
+      headers: { Authorization: "Bearer native-test", "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-native-fixture",
+        input: [{ type: "message", role: "user", content: "x".repeat(40_000) }],
+      }),
+    });
+    assert.equal(response.status, 400);
+    assert.deepEqual(await response.json(), { detail: "Bad Request" });
+    assert.equal(nativeRequests, 1);
+  } finally {
+    await stopChild(router);
+    await closeServer(native.server);
+    rmSync(testRoot, { recursive: true, force: true });
+  }
+});
+
+test("an unreadable oversized native 400 remains byte-for-byte unchanged", async () => {
+  const upstreamBody = JSON.stringify({
+    error: {
+      message: "Bad Request",
+      code: "specific_reason_beyond_the_peek_limit",
+      param: "input",
+    },
+  });
+  const native = await mockServer(async (request, response) => {
+    await bodyJson(request);
+    response.writeHead(400, { "Content-Type": "application/json" });
+    response.end(upstreamBody);
+  });
+  const testRoot = mkdtempSync(path.join(os.tmpdir(), "router-native-oversized-error-"));
+  const catalogPath = path.join(testRoot, "merged-models.json");
+  writeFileSync(catalogPath, JSON.stringify({
+    models: [{
+      slug: "gpt-native-fixture",
+      context_window: 10_000,
+      auto_compact_token_limit: 8_000,
+    }],
+  }));
+  const routerPort = await openPort();
+  const router = run("router.mjs", {
+    CODEX_ROUTER_PORT: String(routerPort),
+    CODEX_ROUTER_CATALOG: catalogPath,
+    CODEX_NATIVE_BASE_URL: `http://127.0.0.1:${native.port}`,
+    CODEX_ROUTER_MAX_BUFFERED_RESPONSE_BYTES: "16",
+  });
+  try {
+    await waitFor(`${routerBase(routerPort)}/models`, router);
+    const response = await fetch(`${routerBase(routerPort)}/responses`, {
+      method: "POST",
+      headers: { Authorization: "Bearer native-test", "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-native-fixture",
+        input: [{ type: "message", role: "user", content: "x".repeat(40_000) }],
+        stream: false,
+      }),
+    });
+    assert.equal(response.status, 400);
+    assert.equal(await response.text(), upstreamBody);
+  } finally {
+    await stopChild(router);
+    await closeServer(native.server);
+    rmSync(testRoot, { recursive: true, force: true });
+  }
+});
+
 test("router health waits for enabled dependencies and ignores disabled forwarders", async () => {
   const testRoot = mkdtempSync(path.join(os.tmpdir(), "router-health-selection-"));
   writeFileSync(

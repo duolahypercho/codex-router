@@ -90,6 +90,7 @@ const MAX_RATE_LIMIT_ID_BYTES = 64;
 const MAX_RATE_LIMIT_NUMBER_BYTES = 64;
 const MAX_RATE_LIMIT_TEXT_BYTES = 256;
 const MAX_ERROR_PLAN_TYPE_BYTES = 128;
+const MAX_ERROR_MESSAGE_BYTES = 2 * 1_024;
 // openai/codex@63d2138 deserializes `resets_at` as an i64, then accepts it
 // only when chrono 0.4.43 can construct a DateTime<Utc> from the seconds.
 const MIN_CODEX_RESET_AT = -8_334_601_228_800;
@@ -513,34 +514,6 @@ function continuationState(input, output, maxBytes) {
   return boundedJsonByteLength(state, maxBytes) <= maxBytes ? state : undefined;
 }
 
-// Computer-use tools can return the same screenshot twice in one result (for
-// example, a click followed by a state read). Replaying both copies wastes the
-// native request's image allowance and can make the next turn fail with 400.
-function dedupeToolOutputImages(input) {
-  if (!Array.isArray(input)) return input;
-  let changed = false;
-  const deduped = input.map((item) => {
-    if (!Array.isArray(item?.output) ||
-        (item.type !== "function_call_output" && item.type !== "custom_tool_call_output")) return item;
-    const seen = new Map();
-    const output = item.output.filter((part) => {
-      if (part?.type !== "input_image" || typeof part.image_url !== "string" ||
-          Object.keys(part).some((key) => key !== "type" && key !== "image_url" && key !== "detail")) return true;
-      const details = seen.get(part.image_url);
-      const detail = part.detail ?? "";
-      if (details?.has(detail)) {
-        changed = true;
-        return false;
-      }
-      if (details) details.add(detail);
-      else seen.set(part.image_url, new Set([detail]));
-      return true;
-    });
-    return output.length === item.output.length ? item : { ...item, output };
-  });
-  return changed ? deduped : input;
-}
-
 function continuationItemKey(item) {
   if (typeof item?.call_id === "string" && item.call_id) return `call:${item.call_id}`;
   if (typeof item?.id === "string" && item.id) return `id:${item.id}`;
@@ -571,10 +544,9 @@ function reconciledContinuationOutput(completedOutput, outputItems) {
   return reconciled;
 }
 function errorShape(body, fallback) {
-  const raw = body.toString("utf8").trim();
   let parsed;
   try {
-    parsed = JSON.parse(raw);
+    parsed = JSON.parse(body.toString("utf8"));
   } catch {
     parsed = undefined;
   }
@@ -592,13 +564,21 @@ function errorShape(body, fallback) {
       source.resets_at <= MAX_CODEX_RESET_AT
     ? source.resets_at
     : undefined;
+  const candidateMessage = [
+    source.message,
+    typeof parsed?.error === "string" ? parsed.error : undefined,
+    parsed?.detail,
+    parsed?.message,
+  ].find((value) =>
+    typeof value === "string" &&
+    value.length > 0 &&
+    Buffer.byteLength(value, "utf8") <= MAX_ERROR_MESSAGE_BYTES &&
+    !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value)
+  );
   return {
     type: typeof source.type === "string" ? source.type : fallback.type,
     ...(typeof source.code === "string" ? { code: source.code } : {}),
-    message: typeof source.message === "string" ? source.message
-      : typeof source.detail === "string" ? source.detail
-        : !parsed && raw.length > 0 && raw.length <= 512 && !/[<>\x00-\x1f]/.test(raw)
-          ? raw : fallback.message,
+    message: candidateMessage || fallback.message,
     ...(planType !== undefined ? { plan_type: planType } : {}),
     ...(resetsAt !== undefined ? { resets_at: resetsAt } : {}),
   };
@@ -990,7 +970,6 @@ class ResponsesWebSocketPeer {
         ...request.input,
       ];
     }
-    fullRequest.input = dedupeToolOutputImages(fullRequest.input);
     // Codex's ResponseCreateWsRequest serializes every stable non-input field
     // on incremental frames; only `input` becomes the suffix and
     // `previous_response_id` names its baseline. Keep the current envelope as
