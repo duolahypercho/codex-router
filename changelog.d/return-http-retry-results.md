@@ -1,0 +1,1 @@
+- Return received HTTP failures with their original readable bodies, removing response-status automatic retries even in availability mode; transport retries retain their existing delivery gates.

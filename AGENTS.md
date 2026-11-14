@@ -2048,17 +2048,18 @@ merely failing them.
    A generic reset,
    missing response headers, 502/503/504, or Cloudflare 520-524 does not prove
    the origin never executed the request. The default `at-most-once` policy
-   refuses ambiguous automatic replay; safe methods retain bounded transient
+   refuses ambiguous automatic replay; safe methods retain bounded transport
    retries. `CODEX_ROUTER_NATIVE_RETRY_POLICY=availability` explicitly permits
-   uncertain delivery before client output. Neither policy retries 429, other
-   4xx, or origin 500. Reject native generation redirects before following one
-   can misclassify a later connect failure as unsent. Recheck delivery, abort
-   and total-budget gates after backoff and body cancellation. See
+   uncertain transport delivery before client output. Every received HTTP
+   response is returned intact without retry, regardless of method or policy.
+   Reject native generation redirects before following one can misclassify a
+   later connect failure as unsent. Recheck delivery, abort and total-budget
+   gates after backoff. See
    `docs/native-generation-retries.md` and `test/retry-delivery-boundary.test.mjs`.
 3. Keep the bound small. Codex retries roughly five times on its own and the
    two loops multiply, so the router's share (2 retries, 250ms then 750ms) has
    to keep the product a fast failure. A retry is also only *started* while the
-   request has been cheap so far - a 504 the edge spent half a minute producing
+   request has been cheap so far - a transport failure that took half a minute
    must not be tripled, so the budget refuses it. A connect timeout is the one
    retryable failure that is *bounded* rather than slow: the dispatcher caps it
    (`CODEX_ROUTER_CONNECT_TIMEOUT_MS`, 3s by default, see
@@ -2102,9 +2103,9 @@ purpose; several of them exist because the obvious wider version is wrong.
    `out_of_usage`, a 402, or a 429 whose `Retry-After` exceeds sixty seconds. Do
    not add 401 or 403 — a swap would hide the rejected credential that is the
    only thing worth telling the operator. Do not add 404 or 400, which are
-   deterministic. Do not add 5xx: `upstream-retry.mjs` already absorbs the
-   transient shapes, and masking a provider outage costs an incident somebody
-   would want to see. Do not lower the 429 threshold; trading a twenty-second
+   deterministic. Do not add generic 5xx: received HTTP responses are returned
+   intact, and masking a provider outage costs an incident somebody would want
+   to see. Do not lower the 429 threshold; trading a twenty-second
    wait for a cold prompt cache is a bad deal for the rest of the session.
    Entitlement failures are classified **before** quota ones and never swap,
    because "upgrade your plan" appears in both vocabularies and no other

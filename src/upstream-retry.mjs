@@ -16,11 +16,8 @@ const DEFAULT_BACKOFF_MS = 250;
 // five times on its own and the two loops multiply, so the router's share has
 // to stay small enough that the product is still a fast failure.
 const BACKOFF_FACTOR = 3;
-// Retry only while the request has been cheap so far. Most of the retryable
-// failures below arrive in milliseconds, but two do not: a 504 the edge spent
-// half a minute producing, and a connect timeout. The 504 stays relayed --
-// tripling it turns a slow failure into a hang, which is worse than the 503
-// this exists to absorb.
+// Transport retries must fit the same bound that caps a connect attempt.
+// Received HTTP responses are returned unchanged rather than retried.
 //
 // The connect timeout is the opposite case and the reason this budget is
 // derived rather than fixed. It is bounded at `connectTimeoutMs()` by the
@@ -174,15 +171,6 @@ function abortError(signal) {
   return error;
 }
 
-// A failed attempt still owns a socket until its body is drained or cancelled.
-async function discardBody(response) {
-  try {
-    await response?.body?.cancel();
-  } catch {
-    // The connection is already gone, which is the state we wanted anyway.
-  }
-}
-
 function settle(response, failure, retries) {
   if (failure) throw failure;
   return { response, retries };
@@ -221,9 +209,9 @@ export async function fetchWithRetry(target, init = {}, options = {}) {
       failure = error;
     }
     const deliveryState = failure ? transportDeliveryState(failure) : "response_started";
-    const retryable = failure
-      ? isRetryableTransportError(failure)
-      : isRetryableStatus(response?.status);
+    // A received response is the result: relay it intact, even in availability
+    // mode. Only thrown transport failures enter the retry loop.
+    const retryable = Boolean(failure && isRetryableTransportError(failure));
     const permitted = safeMethod || availability || deliveryState === "not_sent";
     const retryScheduled = attempt < retries && retryable && permitted &&
       !signal?.aborted && canRetry?.() !== false && now() - startedAt < budgetMs;
@@ -248,17 +236,11 @@ export async function fetchWithRetry(target, init = {}, options = {}) {
     });
     await sleepImpl(delayMs, signal);
     if (signal?.aborted) {
-      await discardBody(response);
       throw abortError(signal);
     }
     // Delivery permission can change while waiting: the caller may receive
     // bytes, or the total retry allowance may expire. Keep the last response
     // readable unless a replacement will actually be submitted.
-    if (canRetry?.() === false || now() - startedAt >= budgetMs) {
-      return settle(response, failure, attempt);
-    }
-    await discardBody(response);
-    if (signal?.aborted) throw abortError(signal);
     if (canRetry?.() === false || now() - startedAt >= budgetMs) {
       return settle(response, failure, attempt);
     }
