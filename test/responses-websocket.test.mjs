@@ -1202,6 +1202,51 @@ test("relays a local unrouted_model refusal with its status and code", async (t)
   peer.close();
 });
 
+test("relays a bounded top-level upstream detail instead of a generic router rejection", async (t) => {
+  const { server, port } = await startServer(async (request, response) => {
+    for await (const _chunk of request) {
+      // Drain the body before answering, like the real HTTP route.
+    }
+    response.writeHead(400, { "content-type": "application/json" });
+    response.end(JSON.stringify({ detail: "Maximum context length exceeded for this request." }));
+  });
+  t.after(() => server.close());
+  const { peer } = await connect(port);
+  peer.sendJson(createRequest({ model: "gpt-native-fixture" }));
+  const error = await peer.nextJson();
+  assert.equal(error.type, "error");
+  assert.equal(error.status, 400);
+  assert.deepEqual(error.error, {
+    type: "local_router_error",
+    message: "Maximum context length exceeded for this request.",
+  });
+  peer.close();
+});
+
+test("does not relay oversized or control-bearing top-level upstream detail", async (t) => {
+  const details = ["x".repeat(2_049), "unsafe\u0000detail"];
+  let calls = 0;
+  const { server, port } = await startServer(async (request, response) => {
+    for await (const _chunk of request) {
+      // Drain the body before answering, like the real HTTP route.
+    }
+    response.writeHead(400, { "content-type": "application/json" });
+    response.end(JSON.stringify({ detail: details[calls++] }));
+  });
+  t.after(() => server.close());
+  const { peer } = await connect(port);
+  for (const _detail of details) {
+    peer.sendJson(createRequest({ model: "gpt-native-fixture" }));
+    const error = await peer.nextJson();
+    assert.equal(error.status, 400);
+    assert.deepEqual(error.error, {
+      type: "local_router_error",
+      message: "The local router rejected the Responses request.",
+    });
+  }
+  peer.close();
+});
+
 test("projects an active limit only when it names a validated projected family", async (t) => {
   const cases = [
     {

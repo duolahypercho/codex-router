@@ -1,4 +1,5 @@
 import { estimateInputTokens } from "./response-usage.mjs";
+import { extractUpstreamDetail } from "./error-translation.mjs";
 
 // Remote compaction V2 arrives through the ordinary Responses endpoint with a
 // terminal `compaction_trigger` item rather than on `/responses/compact`.
@@ -51,4 +52,77 @@ export function skippableCompactionTokens(normalizedInput, route) {
   return estimatedTokens <= route.autoCompact * COMPACTION_SKIP_HEADROOM
     ? estimatedTokens
     : undefined;
+}
+
+const OPAQUE_BAD_REQUEST = /^(?:bad request|invalid request|request rejected)\.?$/i;
+const GENERIC_ERROR_TYPE = /^(?:invalid[_ ]request(?:_error)?|bad[_ ]request(?:_error)?)$/i;
+
+function positiveInteger(value) {
+  return Number.isInteger(value) && value > 0 ? value : undefined;
+}
+
+function hasSpecificErrorMetadata(bodyText) {
+  try {
+    const parsed = JSON.parse(bodyText);
+    const error = parsed?.error && typeof parsed.error === "object" ? parsed.error : parsed;
+    const code = typeof error?.code === "string" ? error.code.trim() : "";
+    const param = typeof error?.param === "string" ? error.param.trim() : "";
+    const type = typeof error?.type === "string" ? error.type.trim() : "";
+    return Boolean(code || param || (type && !GENERIC_ERROR_TYPE.test(type)));
+  } catch {
+    return false;
+  }
+}
+
+// Native OpenAI traffic normally keeps its upstream errors byte-for-byte. A
+// bare 400 such as `{ "detail": "Bad Request" }` carries no cause, though,
+// and Codex's WebSocket bridge used to replace it with an even less useful
+// local-router sentence. Only enrich that opaque case, and only when the
+// request itself independently proves that it has reached the exact
+// auto-compaction threshold published in Codex's native model catalog.
+// Specific upstream errors remain authoritative and pass through untouched.
+export function nativeContextPressureError({
+  status,
+  bodyText,
+  bodyComplete = true,
+  payload,
+  model,
+  compactionRequest = false,
+}) {
+  if (Number(status) !== 400 || !payload || typeof payload !== "object") return undefined;
+  if (!bodyComplete || compactionRequest || isRemoteCompactV2Trigger(payload)) return undefined;
+  const detail = extractUpstreamDetail(bodyText).trim();
+  if (detail && !OPAQUE_BAD_REQUEST.test(detail)) return undefined;
+  if (hasSpecificErrorMetadata(bodyText)) return undefined;
+
+  const contextWindow = positiveInteger(model?.context_window ?? model?.contextWindow);
+  const autoCompact = positiveInteger(
+    model?.auto_compact_token_limit ?? model?.autoCompact,
+  );
+  if (!contextWindow || !autoCompact || autoCompact > contextWindow) return undefined;
+  const estimate = estimateInputTokens(
+    Buffer.from(JSON.stringify(payload), "utf8"),
+    { contextWindow },
+  );
+  if (!Number.isFinite(estimate) || estimate < autoCompact) return undefined;
+
+  const modelName = typeof model?.display_name === "string" && model.display_name
+    ? model.display_name
+    : typeof model?.slug === "string" && model.slug
+      ? model.slug
+      : typeof payload.model === "string" && payload.model
+        ? payload.model
+        : "the selected model";
+  return {
+    error: {
+      type: "invalid_request_error",
+      code: "context_compaction_required",
+      param: "input",
+      message:
+        `OpenAI returned an opaque HTTP 400 for ${modelName}. The request is estimated at ` +
+        `${estimate.toLocaleString("en-US")} tokens, at or above the model's ` +
+        `${autoCompact.toLocaleString("en-US")}-token automatic-compaction limit. ` +
+        "Compact the conversation or start a new task, then retry.",
+    },
+  };
 }
