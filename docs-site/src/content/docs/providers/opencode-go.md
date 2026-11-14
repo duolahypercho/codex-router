@@ -62,6 +62,24 @@ but exposes each live catalog as a separate source. Loading a catalog only
 caches and previews its candidates; models are added to the picker only after
 the operator explicitly selects them.
 
+### Keep the Go picker current
+
+`node src/opencode-go-sync.mjs` compares the installed Go routes with OpenCode's
+live Go `/models` endpoint without changing state. Add `--apply` to publish new
+models and hide withdrawn ones. For a new model, the sync reads the endpoint's
+per-model `api` declaration to choose Chat Completions, Messages, Responses, or
+native Gemini. It initially hides the route, runs a billed basic response
+through the installed router, and shows the model only if that request passes.
+An ambiguous or unsupported API declaration stays blocked and is reported in
+the command's JSON result. Existing manually curated models are preserved.
+Codex loads the resulting picker catalog at startup, so reopen Codex after a
+sync changes the list.
+
+On Windows, `scripts/opencode-go-sync.ps1` runs the apply command and records
+its last result in `~/.codex/codex-router/opencode-go-sync.log`. It can be run
+from a hidden Scheduled Task at the desired interval. The task should run as
+the same user who owns the router and ignore overlapping instances.
+
 | Picker label | Model ID |
 | --- | --- |
 | Grok 4.6 (opencode Go) | `opencode-go-responses/grok-4.6` |
