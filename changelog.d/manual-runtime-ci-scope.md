@@ -1,0 +1,1 @@
+- Add a manual CI runtime scope that skips the separate Homebrew source installation while retaining runtime, desktop and native application checks. The default full manual run and automatic pull request and main checks keep their existing coverage.
