@@ -76,6 +76,7 @@ jobs:
           NANOGPT_API_KEY: ${{ secrets.NANOGPT_API_KEY }}
           NOUS_API_KEY: ${{ secrets.NOUS_API_KEY }}
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          OBSCURIFY_API_KEY: ${{ secrets.OBSCURIFY_API_KEY }}
           OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}

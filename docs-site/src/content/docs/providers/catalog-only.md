@@ -17,6 +17,7 @@ often for the repository to pin and live-verify individual entries:
 | Cerebras | `cerebras` | `https://api.cerebras.ai/v1` |
 | Mistral AI | `mistral` | `https://api.mistral.ai/v1` |
 | NVIDIA NIM | `nvidia-nim` | `https://integrate.api.nvidia.com/v1` |
+| Obscurify.ai | `obscurify` | `https://obscurify.ai/v1` |
 | SiliconFlow | `siliconflow` | `https://api.siliconflow.cn/v1` |
 | Hugging Face Router | `huggingface` | `https://router.huggingface.co/v1` |
 | Google Gemini API | `gemini-api` | `https://generativelanguage.googleapis.com/v1beta/openai` |
