@@ -15,7 +15,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { gzipSync, zstdCompressSync, zstdDecompressSync } from "node:zlib";
+import { constants as zlibConstants, gzipSync, zstdCompressSync, zstdDecompressSync } from "node:zlib";
 
 import { callerBaseUrl } from "../src/caller-auth.mjs";
 import {
@@ -1626,7 +1626,16 @@ test("router hands the native backend a compressed body instead of inflated JSON
     for await (const chunk of request) chunks.push(chunk);
     const raw = Buffer.concat(chunks);
     const encoding = request.headers["content-encoding"];
-    const decoded = encoding === "zstd" ? zstdDecompressSync(raw) : raw;
+    let decoded;
+    try {
+      decoded = encoding === "zstd" ? zstdDecompressSync(raw, {
+        params: { [zlibConstants.ZSTD_d_windowLogMax]: 19 },
+      }) : raw;
+    } catch (error) {
+      seen.push({ encoding, decodeError: error.code });
+      json(response, 400, { detail: "Bad Request" });
+      return;
+    }
     seen.push({ encoding, wireBytes: raw.length, payload: JSON.parse(decoded.toString("utf8")) });
     json(response, 200, { id: "ok", output: [] });
   });
@@ -1643,13 +1652,19 @@ test("router hands the native backend a compressed body instead of inflated JSON
     // A real turn: far past the threshold, and compressible the way a
     // conversation is rather than the way a run of one character is.
     const text = Array.from(
-      { length: 4_000 },
+      { length: 40_000 },
       (_, index) => `line ${index}: the quick brown fox jumps over the lazy dog`,
     ).join("\n");
     const big = JSON.stringify({
       model: "gpt-5.6-sol",
       input: [{ type: "message", role: "user", content: [{ type: "input_text", text }] }],
     });
+    // Negative control: the original encoder's frame exceeds this decoder's
+    // 512 KiB window, even though an unconstrained local round trip succeeds.
+    const oldFrame = zstdCompressSync(Buffer.from(big));
+    assert.throws(() => zstdDecompressSync(oldFrame, {
+      params: { [zlibConstants.ZSTD_d_windowLogMax]: 19 },
+    }), /Frame requires too much memory/);
 
     const response = await fetch(`${routerBase(routerPort)}/responses`, {
       method: "POST",

@@ -1,0 +1,1 @@
+- **Native requests use a bounded Zstandard compression window.** Large image histories are encoded with a 512 KiB window rather than the default window of up to 2 MiB, addressing a reproduced compression-dependent HTTP 400. The request JSON, model, images and tool history remain unchanged; compression can use more wire bytes for repeated large images.

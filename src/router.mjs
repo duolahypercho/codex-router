@@ -9,6 +9,7 @@ import http from "node:http";
 import { createHash, randomUUID } from "node:crypto";
 import {
   brotliDecompressSync,
+  constants as zlibConstants,
   gunzipSync,
   inflateSync,
   zstdCompress,
@@ -878,7 +879,12 @@ const compressBody = promisify(zstdCompress);
 async function compressedNativeBody(body, headers) {
   if (body.length < MIN_COMPRESSED_BODY_BYTES) return body;
   try {
-    const compressed = await compressBody(body);
+    // Native requests with repeated images can return a bare 400 when encoded
+    // with the default 2 MiB window. A 512 KiB window fixes the reproduced
+    // failure while preserving the complete decoded JSON.
+    const compressed = await compressBody(body, {
+      params: { [zlibConstants.ZSTD_c_windowLog]: 19 },
+    });
     // Incompressible payloads (base64 image data, mostly) would only pay the
     // decode cost on the far side for nothing.
     if (compressed.length >= body.length) return body;

@@ -32,3 +32,10 @@ caller cancellation, relayed output and the total budget after asynchronous
 backoff and response-body cancellation. Attempt records contain only bounded
 attempt numbers, delivery state, duration, status, approved error codes and
 whether a retry was scheduled. They contain no input, response text, URL or credential.
+
+Native HTTP bodies of 16 KiB or more can use Zstandard compression. The encoder
+limits its history window to 512 KiB so a large frame does not require a 2 MiB
+decoder window. This changes the transport encoding while preserving the exact
+JSON, images, tool results and model selection. Repeated large images can use
+more wire bytes with the smaller window. The routing regression verifies both
+byte preservation and decoding with a 512 KiB window limit.
