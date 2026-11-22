@@ -1,0 +1,1 @@
+- **OpenCode Go Gemini 4 Argon no longer flaps hidden and visible.** The live catalog now advertises an `interactions` wire beside `generate-content`; the sync ignores wires the router cannot route, so the model keeps its route while two routable wires on one model still count as ambiguous.
