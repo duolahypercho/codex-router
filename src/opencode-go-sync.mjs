@@ -27,11 +27,14 @@ const API_BASE_URLS = Object.freeze({
 const EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
 
 // The provider's per-model api object is the route authority. An ambiguous or
-// unknown wire is withheld rather than guessed from a model name.
+// unknown wire is withheld rather than guessed from a model name. Wires this
+// router cannot speak (Gemini's "interactions" beside "generate-content") are
+// ignored; two routable wires on one model remain ambiguous.
 export function goProtocol(record) {
   if (record?.type !== "chat") return undefined;
-  const entries = Object.entries(record?.api || {});
-  if (entries.length !== 1 || !Object.hasOwn(API_PROVIDERS, entries[0][0])) return undefined;
+  const entries = Object.entries(record?.api || {})
+    .filter(([protocol]) => Object.hasOwn(API_PROVIDERS, protocol));
+  if (entries.length !== 1) return undefined;
   const [protocol, details] = entries[0];
   if (details?.base_url !== API_BASE_URLS[protocol]) {
     return undefined;

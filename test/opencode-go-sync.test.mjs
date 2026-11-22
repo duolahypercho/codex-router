@@ -50,6 +50,26 @@ test("ambiguous and foreign Go API records remain blocked", () => {
   assert.throws(() => planGoSync([record("same", "messages"), record("same", "messages")]), /duplicate/);
 });
 
+test("an extra unroutable wire does not block a routable Go model", () => {
+  const google = "https://opencode.ai/inference/go/google/v1beta";
+  const argon = record("gemini-4-argon", "generate-content", {
+    api: {
+      "generate-content": { base_url: google },
+      interactions: { base_url: google },
+    },
+  });
+  assert.deepEqual(goProtocol(argon), { protocol: "generate-content", providerId: "opencode-go" });
+  const existing = [{
+    provider: "opencode-go",
+    upstreamModel: "gemini-4-argon",
+    slug: "opencode-go/gemini-4-argon",
+    openCodeGoProtocol: "generate-content",
+  }];
+  const plan = planGoSync([argon], existing);
+  assert.deepEqual(plan.stale, []);
+  assert.deepEqual(plan.blocked, []);
+});
+
 test("withdrawn routes are hidden and failed new routes stay hidden", () => {
   const plan = planGoSync([record("current", "chat-completions")], [
     { provider: "opencode-go", upstreamModel: "old", slug: "opencode-go/old" },
