@@ -189,6 +189,7 @@ Cursor App の BYOK は専用入口への固定公開 HTTPS トンネルを使�
 
 | 目的 | ガイド |
 | --- | --- |
+| ウェブ版ドキュメントを読む | [Codex Router 日本語ドキュメント](https://codex-router.com/ja/) |
 | インストール、移行、プロキシ、更新、削除 | [インストール](docs/ja/INSTALL.md) |
 | プロバイダー接続、モデル選択 | [プロバイダーとモデル](docs/ja/PROVIDERS.md) |
 | Codex 設定、アーカイブ読取、画像、フェイルオーバー | [Codex ガイド](docs/ja/CODEX.md) |
