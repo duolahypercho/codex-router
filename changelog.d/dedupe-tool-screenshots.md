@@ -1,0 +1,1 @@
+- **Native Codex turns recover from oversized screenshot history.** The router removes duplicate captures, replaces older images with receipts, retries a rejected image turn with fewer older captures, and shows the upstream's explanation if it still fails.
