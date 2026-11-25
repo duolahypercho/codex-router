@@ -5,6 +5,7 @@ import {
   readdirSync,
 } from "node:fs";
 import path from "node:path";
+import { discoveryDisabled } from "./discovery-mode.mjs";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -100,6 +101,7 @@ export function providerApiKeyServiceEnvironment({
   poolStatePath = PROVIDER_API_KEY_POOL_PATH,
   credentialStorePath = PROVIDER_CREDENTIAL_STORE_PATH,
 } = {}) {
+  if (discoveryDisabled()) return {};
   const owners = pooledCredentialProviders(boundedJson(poolStatePath));
   if (!owners?.size) return {};
   const store = boundedJson(credentialStorePath);

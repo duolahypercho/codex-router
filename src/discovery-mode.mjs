@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { lstatSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -30,17 +30,27 @@ export function discoveryDisabled() {
 }
 
 function readDiscoveryModeFile() {
-  if (!existsSync(DISCOVERY_MODE_PATH)) return false;
   try {
     const parsed = JSON.parse(readFileSync(DISCOVERY_MODE_PATH, "utf8"));
-    // An unreadable or unrecognized file means the operator's intent cannot be
-    // proven, and the conservative reading of "cannot prove --no-discovery"
-    // is to keep discovery on: that is the state every install without the
-    // flag has always had.
-    return parsed?.version === 1 && parsed.discovery === "disabled";
-  } catch {
-    return false;
+    if (parsed?.version === 1 && ["enabled", "disabled"].includes(parsed.discovery)) {
+      return parsed.discovery === "disabled";
+    }
+  } catch (error) {
+    // No marker is the legacy default. A present policy that cannot be read
+    // does not grant permission to discover existing credentials.
+    if (error?.code === "ENOENT") {
+      try {
+        lstatSync(DISCOVERY_MODE_PATH);
+      } catch (entryError) {
+        if (entryError?.code === "ENOENT") return false;
+      }
+    }
   }
+  console.error(
+    `[codex-router] Invalid or unreadable discovery policy ${DISCOVERY_MODE_PATH}; ` +
+      "credential discovery remains disabled. Re-run setup to choose discovery mode.",
+  );
+  return true;
 }
 
 export function writeDiscoveryMode(disabled) {
