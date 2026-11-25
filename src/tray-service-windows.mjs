@@ -782,9 +782,15 @@ function endTask() {
     waitForTaskState((state) => state !== "running", TASK_STOP_TIMEOUT_MS, "stop");
   } else {
     const existence = taskExists();
-    if (existence !== "missing") {
+    // Treat both "missing" and "error" as "nothing to uninstall". When both
+    // PowerShell hosts fail to query the task (e.g., due to a timeout or locale
+    // issue), taskExists() returns "error", but if schtasks also reports the
+    // task doesn't exist, the error is just a probe failure, not evidence the
+    // task exists. Refusing to uninstall in this case leaves the user stuck.
+    // See #1175.
+    if (existence === "exists") {
       throw new Error(
-        `The named ${TRAY_TASK_NAME} task exists or is unreadable, but its action could not be verified; it was not stopped.`,
+        `The named ${TRAY_TASK_NAME} task exists but its action could not be verified; it was not stopped.`,
       );
     }
   }
