@@ -602,7 +602,19 @@ function requiresTrailingUserTurn(provider, model) {
         provider?.id === "gemini-api" ||
         provider?.ownedBy?.toLowerCase?.() === "google"
       )) ||
-    model?.requiresTrailingUserTurn === true
+    model?.requiresTrailingUserTurn === true ||
+    isAnthropicClaude55(provider, model)
+  );
+}
+
+function isAnthropicClaude55(provider, model) {
+  return (
+    provider?.protocol === "anthropic" &&
+    [model?.slug, model?.upstreamModel, model?.gatewayModel, model?.model].some(
+      (id) =>
+        typeof id === "string" &&
+        /claude-(?:opus|sonnet|haiku)-5-5(?:$|[^0-9])/i.test(id),
+    )
   );
 }
 
@@ -794,6 +806,14 @@ function hoistToolImagesToUserTurn(messages) {
 function trimTrailingModelTurns(messages) {
   const trimmed = [...messages];
   while (trimmed.length > 0 && trimmed[trimmed.length - 1]?.role === "assistant") {
+    trimmed.pop();
+  }
+  return trimmed;
+}
+
+function trimToTrailingUserMessage(messages) {
+  const trimmed = [...messages];
+  while (trimmed.length > 0 && trimmed[trimmed.length - 1]?.role !== "user") {
     trimmed.pop();
   }
   return trimmed;
@@ -1575,6 +1595,11 @@ function normalizeBody(buffer, contentType, route) {
   const targetPath = adapter?.targetPath
     ? adapter.targetPath({ model, body: payload })
     : undefined;
+  // Keep the Anthropic 5.5 turn boundary valid after all provider-specific
+  // request rewrites, including any changes made above.
+  if (isAnthropicClaude55(provider, model) && Array.isArray(payload.messages)) {
+    payload.messages = trimToTrailingUserMessage(payload.messages);
+  }
   // The provider still answers protocol, auth profile, and identity; the
   // endpoint answers where the request goes and what authenticates it. For
   // every provider but a per-model-endpoint one they are the same object.
