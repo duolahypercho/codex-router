@@ -1,0 +1,1 @@
+- **Current OpenCode Go Chat models can be curated into Codex.** Add explicit routes for Hy4, Iceman Contributor Free, LongCat 2.5 Free, and Step 5 Preview so the live Go catalog offers them for publication.

@@ -1,4 +1,9 @@
 export const OPENCODE_GEMINI_MODEL = "gemini-4-argon-contributor";
+export const OPENCODE_GEMINI_ARGON_MODEL = "gemini-4-argon";
+export const OPENCODE_GEMINI_MODELS = Object.freeze([
+  OPENCODE_GEMINI_MODEL,
+  OPENCODE_GEMINI_ARGON_MODEL,
+]);
 export const OPENCODE_GEMINI_BASE_URL = "https://opencode.ai/inference/go/v1";
 export const OPENCODE_GEMINI_BASE_URL_ENV = "OPENCODE_GEMINI_BASE_URL";
 export const OPENCODE_GEMINI_THOUGHT_SIGNATURE_SENTINEL =
@@ -7,7 +12,8 @@ export const OPENCODE_GEMINI_THOUGHT_SIGNATURE_SENTINEL =
 export function isOpenCodeGeminiModel(model) {
   return (
     model?.provider === "opencode-go" &&
-    model?.upstreamModel === OPENCODE_GEMINI_MODEL
+    (OPENCODE_GEMINI_MODELS.includes(model?.upstreamModel) ||
+      model?.openCodeGoProtocol === "generate-content")
   );
 }
 

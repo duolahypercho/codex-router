@@ -1,0 +1,1 @@
+- **OpenCode Go models can follow the live catalog automatically.** The new sync command maps each model's declared API to a router route, probes newly added models before showing them, hides withdrawn models, and supports a hidden Windows scheduled run; Gemini 4 Argon now uses the native Gemini path.

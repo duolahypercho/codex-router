@@ -1,4 +1,4 @@
-import { OPENCODE_GEMINI_MODEL } from "./opencode-gemini.mjs";
+import { OPENCODE_GEMINI_ARGON_MODEL, OPENCODE_GEMINI_MODEL, OPENCODE_GEMINI_MODELS } from "./opencode-gemini.mjs";
 
 // OpenCode's anonymous catalog exposes documented free models on Chat
 // Completions and one on Responses. Keep this mapping deliberately separate
@@ -410,9 +410,7 @@ const CURATION_ROUTES = Object.freeze({
       "muse-spark-1.2-contributor",
       "muse-spark-1.3-contributor",
     ]),
-    geminiModels: Object.freeze([
-      OPENCODE_GEMINI_MODEL,
-    ]),
+    geminiModels: OPENCODE_GEMINI_MODELS,
     primaryModels: Object.freeze([
       "beam-free",
       "deepseek-v4-flash",
@@ -425,13 +423,16 @@ const CURATION_ROUTES = Object.freeze({
       "glm-5.3",
       "glm-5.3-flash",
       "hy3",
+        "hy4",
       "hy4-preview",
+        "iceman-contributor-free",
       "kimi-k2.5",
       "kimi-k2.6",
       "kimi-k2.7-code",
       "kimi-k3",
       "kimi-k3.1-pro",
       "longcat-2.0",
+        "longcat-2.5-free",
       "longcat-2.5-preview-free",
       "mimo-v2.5",
       "mimo-v2.5-pro",
@@ -440,10 +441,21 @@ const CURATION_ROUTES = Object.freeze({
       "minimax-m3.1-flash",
       "minimax-m3.1-flash-free",
       "qwen3.5-plus",
+        "step-5-preview",
       "step-5-preview-free",
       "x-preview-f",
     ]),
     models: Object.freeze({
+      [OPENCODE_GEMINI_ARGON_MODEL]: Object.freeze({
+        contextWindow: 1_048_576,
+        outputLimit: 65_536,
+        reasoningLevels: Object.freeze(["low", "medium", "high"]),
+        inputModalities: Object.freeze(["text", "image"]),
+        displayName: "Gemini 4 Argon (OpenCode Go)",
+        summary: "Gemini 4 Argon through OpenCode Go's native Gemini endpoint.",
+        contextNote: "OpenCode Go publishes a 1,048,576-token context and 65,536-token output limit for this model.",
+        reasoningNote: "OpenCode Go publishes low, medium, and high reasoning efforts for this model.",
+      }),
       [OPENCODE_GEMINI_MODEL]: Object.freeze({
         contextWindow: 1_048_576,
         outputLimit: 65_536,
