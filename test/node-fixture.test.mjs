@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -20,11 +21,21 @@ async function fixture(t, scenario, delayMs = 0) {
   return { child, messages, url: `http://127.0.0.1:${port}/ready` };
 }
 
+async function waitForRequestNotice(child, messages) {
+  // HTTP body completion and child IPC delivery use independent channels.
+  // Observe the request notice before asserting it; keep HTTP budgets intact.
+  const signal = AbortSignal.timeout(1_000);
+  while (!messages.some(message => message.nodeFixtureRequest)) {
+    await once(child, "message", { signal });
+  }
+}
+
 test("cold module initialization does not consume the HTTP readiness budget", async t => {
   const warnings = [];
   t.mock.method(console, "error", message => warnings.push(message));
   const { child, url, messages } = await fixture(t, "ready", 1_250);
   await waitForNodeFixture(url, child, { timeoutMs: 1_000 });
+  await waitForRequestNotice(child, messages);
   assert.ok(messages.some(message => message.nodeFixturePhase === "initialized"));
   assert.deepEqual(messages.filter(message => message.nodeFixturePhase).map(message => message.nodeFixturePhase), ["initialized", "binding", "listening"]);
   const listening = messages.find(message => message.nodeFixturePhase === "listening");
@@ -60,6 +71,7 @@ test("an initialization crash reports its exit and stderr before any HTTP probe"
 test("a listener that sends headers and stalls its body cannot report readiness", { timeout: 25_000 }, async t => {
   const { child, url, messages } = await fixture(t, "stall-body");
   await assert.rejects(waitForNodeFixture(url, child, { timeoutMs: 1_500, attemptMs: 500 }), /HTTP readiness timed out/);
+  await waitForRequestNotice(child, messages);
   assert.ok(messages.some(message => message.nodeFixtureRequest), "the body-stall fault must have been reached");
 });
 
@@ -71,5 +83,6 @@ test("a listening but unhealthy endpoint retains the bounded HTTP failure", asyn
     assert.match(error.message, /"lastHTTPStatus":503/);
     return true;
   });
+  await waitForRequestNotice(child, messages);
   assert.ok(messages.some(message => message.nodeFixtureRequest));
 });

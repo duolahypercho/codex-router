@@ -1,0 +1,1 @@
+- **Preserve Claude stream completion evidence.** Output-token truncation now reports max_tokens with terminal usage in streaming and non-streaming replies; other incomplete reasons and missing stream terminals produce explicit errors.

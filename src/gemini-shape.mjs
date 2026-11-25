@@ -378,22 +378,18 @@ function candidateChunk(parts, { model, finishReason, usage, responseId } = {}) 
  */
 export function createGeminiStreamTranslator({ model } = {}) {
   let finished = false;
-  let emittedAnything = false;
   return {
     push(event) {
       const type = event?.type;
       if (type === "response.output_text.delta" && event.delta) {
-        emittedAnything = true;
         return [candidateChunk([{ text: String(event.delta) }], { model })];
       }
       if (type === "response.reasoning_summary_text.delta" && event.delta) {
-        emittedAnything = true;
         return [candidateChunk([{ text: String(event.delta), thought: true }], { model })];
       }
       // Only on `done`: an added item carries no arguments yet, and emitting it
       // twice makes the CLI run the tool twice.
       if (type === "response.output_item.done" && event.item?.type === "function_call") {
-        emittedAnything = true;
         return [candidateChunk([functionCallPart(event.item)], { model })];
       }
       if (
@@ -421,7 +417,7 @@ export function createGeminiStreamTranslator({ model } = {}) {
       return [
         candidateChunk([], {
           model,
-          finishReason: emittedAnything ? "STOP" : "OTHER",
+          finishReason: "OTHER",
         }),
       ];
     },

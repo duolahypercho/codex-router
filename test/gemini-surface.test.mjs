@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import http from "node:http";
+import { EventEmitter } from "node:events";
+import { Readable } from "node:stream";
 import test from "node:test";
 
 import { writeJson } from "../src/http-utils.mjs";
@@ -279,7 +281,7 @@ test("a stream the upstream drops still ends with a finish reason", async () => 
       body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: "hi" }] }] }),
     });
     const parsed = frames(await response.text());
-    assert.equal(parsed[parsed.length - 1].candidates[0].finishReason, "STOP");
+    assert.equal(parsed[parsed.length - 1].candidates[0].finishReason, "OTHER");
   } finally {
     await app.close();
     await back.close();
@@ -414,4 +416,62 @@ test("a browser-originated request is rejected the way the routed path rejects o
   } finally {
     await app.close();
   }
+});
+
+// The transport failure and byte-boundary cases use the actual adapter with
+// an in-memory canonical body, so no socket timing controls the regression.
+function memoryStream(body) {
+  const url = "/gemini/v1beta/models/vendor/model:streamGenerateContent?alt=sse";
+  const request = Readable.from([Buffer.from(JSON.stringify({ contents: [] }))]);
+  Object.assign(request, { url, method: "POST", headers: { "content-type": "application/json" } });
+  const response = Object.assign(new EventEmitter(), {
+    output: "", destroyed: false,
+    setHeader() {}, writeHead() {},
+    write(chunk) { this.output += chunk; },
+    end() { this.writableEnded = true; },
+  });
+  const result = handleGeminiRequest(request, response, url.split("?")[0], {
+    responsesUrl: "http://synthetic.invalid/v1/responses", routedModels: () => MODELS,
+    fetchImpl: async () => ({ ok: true, body }),
+  });
+  return { response, result };
+}
+
+test("CRLF frames, multiline data and split UTF-8 preserve the completed answer", async () => {
+  const text = ': ping\r\ndata: {"type":"response.output_text.delta",\r\ndata: "delta":"你好"}\r\n\r\n' +
+    'data: {"type":"response.completed","response":{"status":"completed"}}\r\n\r\n';
+  const bytes = Buffer.from(text);
+  // One-byte chunks split both CRLF pairs and every multibyte character.
+  const turn = memoryStream((async function* () { for (const byte of bytes) yield Buffer.from([byte]); })());
+  await turn.result;
+  const parsed = frames(turn.response.output);
+  assert.equal(parsed[0].candidates[0].content.parts[0].text, "你好");
+  assert.equal(parsed.at(-1).candidates[0].finishReason, "STOP");
+});
+
+test("a body-read exception after text cannot manufacture a successful stop", async () => {
+  const failure = new Error("synthetic transport terminated");
+  const turn = memoryStream((async function* () {
+    yield Buffer.from('data: {"type":"response.output_text.delta","delta":"partial"}\n\n');
+    throw failure;
+  })());
+  await assert.rejects(turn.result, (error) => error === failure);
+  const parsed = frames(turn.response.output);
+  assert.equal(parsed[0].candidates[0].content.parts[0].text, "partial");
+  assert.equal(parsed.at(-1).candidates[0].finishReason, "OTHER");
+  assert.equal(turn.response.writableEnded, true);
+});
+
+test("a cancelled Gemini stream does not receive a synthetic failure trailer", async () => {
+  const failure = new Error("synthetic client closed");
+  let turn;
+  turn = memoryStream((async function* () {
+    yield Buffer.from('data: {"type":"response.output_text.delta","delta":"partial"}\n\n');
+    turn.response.destroyed = true;
+    turn.response.emit("close");
+    throw failure;
+  })());
+  await assert.rejects(turn.result, (error) => error === failure);
+  assert.equal(frames(turn.response.output).length, 1);
+  assert.equal(turn.response.writableEnded, undefined);
 });

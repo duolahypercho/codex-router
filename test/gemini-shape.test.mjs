@@ -489,7 +489,7 @@ test("a stream that ends without a terminal event still closes the candidate", (
   translator.push({ type: "response.output_text.delta", delta: "hi" });
   const closing = translator.finish();
   assert.equal(closing.length, 1);
-  assert.equal(closing[0].candidates[0].finishReason, "STOP");
+  assert.equal(closing[0].candidates[0].finishReason, "OTHER");
 });
 
 test("a terminal event makes the closer a no-op", () => {
