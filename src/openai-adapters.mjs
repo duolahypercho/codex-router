@@ -264,9 +264,10 @@ function normalizeResponsesRequest(payload) {
       }
       if (
         item.type === "function_call_output" &&
-        (typeof item.call_id !== "string" || !item.call_id || item.output === undefined)
+        (item.output === undefined ||
+          (item.call_id !== undefined && (typeof item.call_id !== "string" || !item.call_id)))
       ) {
-        throw adapterError("A function_call_output input item requires call_id and output.");
+        throw adapterError("A function_call_output input item requires output and, when present, a valid call_id.");
       }
       return clone(item);
     });

@@ -94,10 +94,32 @@ test("Responses input stays lossless and invalid tool lifecycle fails closed", (
   const output = normalizeOpenAIRequest(input);
   assert.deepEqual(output.input, input.input);
   assert.deepEqual(output.include, input.include);
+  
+  // Collaboration v2 tool results legitimately omit call_id (#1189)
+  const collaborationOutput = normalizeOpenAIRequest({
+    model: "m",
+    input: [{ type: "function_call_output", id: "fco_123", namespace: "agent", name: "browser_tabs", output: "done" }],
+  });
+  assert.deepEqual(collaborationOutput.input[0], {
+    type: "function_call_output",
+    id: "fco_123",
+    namespace: "agent",
+    name: "browser_tabs",
+    output: "done",
+  });
+  
+  // Still reject function_call_output with empty string call_id
   assert.throws(
-    () => normalizeOpenAIRequest({ model: "m", input: [{ type: "function_call_output", output: "missing id" }] }),
+    () => normalizeOpenAIRequest({ model: "m", input: [{ type: "function_call_output", call_id: "", output: "done" }] }),
     (error) => error.status === 400 && error.code === "invalid_responses_request",
   );
+  
+  // Still reject function_call_output without output
+  assert.throws(
+    () => normalizeOpenAIRequest({ model: "m", input: [{ type: "function_call_output", call_id: "call-1" }] }),
+    (error) => error.status === 400 && error.code === "invalid_responses_request",
+  );
+  
   assert.throws(
     () => normalizeOpenAIRequest({ model: "m", input: [], max_tokens: 1, max_output_tokens: 2 }),
     /must not disagree/,
