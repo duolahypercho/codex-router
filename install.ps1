@@ -235,6 +235,27 @@ if (-not (Test-RouterCheckout $ScriptDirectory)) {
 }
 
 Assert-Command "node" "Install Node.js 24 LTS from https://nodejs.org/."
+
+# npm always ships beside node. When node is found but npm is not, look for npm
+# beside the resolved node binary. This handles symlinked node in a PATH prefix
+# with the real npm in a directory not in PATH (#1195).
+if (-not (Get-Command "npm" -ErrorAction SilentlyContinue)) {
+  $NodePath = (Get-Command "node" -ErrorAction SilentlyContinue).Source
+  if ($NodePath) {
+    # Resolve symlinks/junctions to find the real node binary
+    while (Test-Path $NodePath -PathType Leaf) {
+      $Target = (Get-Item $NodePath).Target
+      if ($Target) { $NodePath = $Target }
+      else { break }
+    }
+    $NodeDir = Split-Path -Parent $NodePath
+    $NpmPath = Join-Path $NodeDir "npm.cmd"
+    if (Test-Path $NpmPath) {
+      $env:Path = "$NodeDir;$env:Path"
+    }
+  }
+}
+
 Assert-Command "npm" "npm is included with Node.js."
 $VersionParts = (node -p "process.versions.node").Split(".")
 if ([int]$VersionParts[0] -lt 22 -or
