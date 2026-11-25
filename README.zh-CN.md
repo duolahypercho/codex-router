@@ -185,6 +185,7 @@ Router 负责推理路由、协议适配及已配置的历史处理，
 
 | 需求 | 指南 |
 | --- | --- |
+| 浏览网页版文档 | [Codex Router 中文文档](https://codex-router.com/zh/) |
 | 安装、迁移、代理、更新或移除 | [安装指南](docs/zh-CN/INSTALL.md) |
 | 连接供应商或选择模型 | [供应商与模型](docs/zh-CN/PROVIDERS.md) |
 | 配置 Codex、归档回读、图片桥接或额度故障转移 | [Codex 指南](docs/zh-CN/CODEX.md) |

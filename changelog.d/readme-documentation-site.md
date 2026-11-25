@@ -1,0 +1,1 @@
+- **Link to the documentation site from all three READMEs.** The English, Simplified Chinese, and Japanese documentation tables now link to the matching language on codex-router.com.

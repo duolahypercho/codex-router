@@ -208,6 +208,7 @@ and [security](SECURITY.md).
 
 | Need | Guide |
 | --- | --- |
+| Browse documentation on the web | [Codex Router documentation site](https://codex-router.com/) |
 | Install, migrate, configure a proxy, update, or remove | [Installation](docs/INSTALL.md) |
 | Connect a provider or curate models | [Providers and models](docs/PROVIDERS.md) |
 | Configure Codex, archive readback, vision, or failover | [Codex guide](docs/CODEX.md) |
