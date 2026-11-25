@@ -11,11 +11,8 @@ import {
   updateAntigravityToken,
 } from "./antigravity-oauth-session.mjs";
 
-const PROJECT_CACHE_TTL_MS = 30 * 60_000;
-const projectCache = new Map();
+const PROJECT_ABSENCE_TTL_MS = 30 * 60_000;
 const projectPending = new Map();
-const projectKeyGenerations = new Map();
-let projectCacheGeneration = 0;
 
 // Bound a single request path so discovery cannot block on the two upstream
 // endpoints indefinitely: one request approves at most one hit per endpoint.
@@ -114,26 +111,6 @@ function defaultTierId(allowedTiers) {
   return selected?.id;
 }
 
-function projectCacheKey(sessionGeneration) {
-  // session_generation is already a validated router-created UUID. It is an
-  // in-memory cache namespace, not a credential and not persisted or exposed.
-  return sessionGeneration;
-}
-
-function projectGeneration(key) {
-  return {
-    global: projectCacheGeneration,
-    key: projectKeyGenerations.get(key) || 0,
-  };
-}
-
-function generationIsCurrent(key, generation) {
-  return (
-    generation.global === projectCacheGeneration &&
-    generation.key === (projectKeyGenerations.get(key) || 0)
-  );
-}
-
 function projectContextChangedError(message =
   "The Antigravity project context changed while discovery was running; retry it.") {
   const error = new Error(message);
@@ -176,16 +153,10 @@ export async function claimAntigravityProjectRevision(session) {
 
 export function invalidateAntigravityProjectCache(sessionGeneration) {
   if (!sessionGeneration) {
-    projectCacheGeneration += 1;
-    projectKeyGenerations.clear();
-    projectCache.clear();
     projectPending.clear();
     return undefined;
   }
-  const key = projectCacheKey(sessionGeneration);
-  projectKeyGenerations.set(key, (projectKeyGenerations.get(key) || 0) + 1);
-  projectCache.delete(key);
-  projectPending.delete(key);
+  projectPending.delete(sessionGeneration);
   const revision = randomUUID();
   return updateAntigravityToken((latest) => {
     if (latest.session_generation !== sessionGeneration) return undefined;
@@ -363,14 +334,14 @@ function alreadyResolved(session, nowMs) {
     };
   }
   // A fallback is a recorded absence, not a project. Re-deriving it on every
-  // turn would hammer discovery for an account that has none, so the same TTL
-  // that bounds a real answer also bounds how often the absence is retried --
-  // and inside that window the caller is told plainly rather than routed
+  // turn would hammer discovery for an account that has none. Bound how often
+  // the absence is retried; inside that window the caller is told plainly
+  // rather than routed
   // through a project that does not exist.
   if (
     session.project_source === "fallback" &&
     Number.isFinite(session.project_checked_at) &&
-    nowMs - session.project_checked_at < PROJECT_CACHE_TTL_MS
+    nowMs - session.project_checked_at < PROJECT_ABSENCE_TTL_MS
   ) {
     throw projectUnavailable(
       "The Antigravity Google Cloud project is not available; re-run sign-in to provision one.",
@@ -444,15 +415,7 @@ export async function ensureAntigravityProject(
     return { session: latest, ...resolved };
   }
 
-  const sessionGeneration = currentSession.session_generation;
-  const key = projectCacheKey(sessionGeneration);
-  const cached = projectCache.get(key);
-  if (cached && nowMs - cached.cachedAt < PROJECT_CACHE_TTL_MS) {
-    const latest = assertAntigravityProjectRevisionCurrent(cached.session);
-    return { session: latest, ...cached.context };
-  }
-  if (cached) projectCache.delete(key);
-
+  const key = currentSession.session_generation;
   const pending = projectPending.get(key);
   if (pending) {
     const result = await pending;
@@ -460,7 +423,6 @@ export async function ensureAntigravityProject(
     return { session: latest, ...result.context };
   }
 
-  const generation = projectGeneration(key);
   const promise = (async () => {
     const claimedSession = await claimAntigravityProjectRevision(currentSession);
     const context = await discoverAntigravityProject(claimedSession.access_token, {
@@ -480,9 +442,6 @@ export async function ensureAntigravityProject(
       context,
       claimedSession.project_revision,
     );
-    if (generationIsCurrent(key, generation)) {
-      projectCache.set(key, { context, session: saved, cachedAt: now() });
-    }
     return { context, session: saved };
   })().finally(() => {
     if (projectPending.get(key) === promise) projectPending.delete(key);
