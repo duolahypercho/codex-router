@@ -1,0 +1,1 @@
+- Simplify image reading to one selected engine and one request. Remove automatic retries and cross-engine fallback; successful readings still cache and partial readings remain explicit failures.
