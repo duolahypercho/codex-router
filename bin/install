@@ -120,6 +120,25 @@ for tool in node npm; do
     fi
   done
 done
+
+# npm always ships beside node, so when node is found but npm is not, look for
+# npm beside the resolved node binary. This handles symlinked node in a PATH
+# prefix with the real npm in a directory not in the candidate list (#1195).
+if command -v node >/dev/null 2>&1 && ! command -v npm >/dev/null 2>&1; then
+  node_bin=$(command -v node)
+  # Resolve symlinks to find the real node binary
+  while [ -L "$node_bin" ]; do
+    link=$(readlink "$node_bin")
+    case $link in
+      /*) node_bin=$link ;;
+      *) node_bin=$(dirname -- "$node_bin")/$link ;;
+    esac
+  done
+  node_dir=$(dirname -- "$node_bin")
+  if [ -x "$node_dir/npm" ]; then
+    prepend_path "$node_dir"
+  fi
+fi
 for tool in node npm; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "$tool is required but was not found on PATH." >&2
