@@ -305,93 +305,15 @@ test("POST retries require pre-send evidence unless availability was explicitly 
       deliveryPolicy: policy, retries: 1, backoffMs: 0, onAttempt: (e) => attempts.push(e),
       fetchImpl: async () => new Response("synthetic edge failure", { status: 503 }),
     });
-    assert.equal(attempts.length, policy === "availability" ? 2 : 1);
+    assert.equal(attempts.length, 1);
     assert.equal(attempts[0].deliveryState, "response_started");
-    assert.equal(attempts[0].retryScheduled, policy === "availability");
+    assert.equal(attempts[0].retryScheduled, false);
   }
 });
 
-// Availability mode explicitly accepts uncertain origin delivery before any
-// output is relayed. The default generation policy does not replay this 503.
-test("availability mode retries a native 503 before client output", async () => {
-  const attempts = [];
-  const native = await mockServer(async (request, response) => {
-    attempts.push(await readBody(request));
-    if (attempts.length === 1) {
-      response.writeHead(503, { "Content-Type": "text/plain" });
-      response.end(EDGE_503_BODY);
-      return;
-    }
-    const payload = Buffer.from(JSON.stringify({ id: "resp-retried", output: [] }), "utf8");
-    response.writeHead(200, {
-      "Content-Type": "application/json",
-      "Content-Length": String(payload.length),
-    });
-    response.end(payload);
-  });
-  const stateDir = stateDirectory();
-  const routerPort = await openPort();
-  const router = startRouter({ nativePort: native.port, routerPort, stateDir, deliveryPolicy: "availability" });
-
-  try {
-    await waitFor(`${routerBase(routerPort)}/models`, router);
-    const turn = largeNativeTurn();
-    const result = await fetch(`${routerBase(routerPort)}/responses`, {
-      method: "POST",
-      headers: { Authorization: "Bearer caller", "Content-Type": "application/json" },
-      body: JSON.stringify(turn),
-    });
-
-    const relayed = await result.text();
-    assert.equal(result.status, 200, relayed);
-    assert.equal(JSON.parse(relayed).id, "resp-retried");
-    assert.equal(attempts.length, 2, "the 503 was relayed instead of retried");
-
-    // Body fidelity: the replayed request is the same bytes under the same
-    // encoding, and it still decodes.
-    assert.equal(attempts[0].encoding, "zstd");
-    assert.equal(attempts[1].encoding, "zstd");
-    assert.deepEqual(
-      JSON.parse(attempts[1].text).input[0].content[0].text,
-      turn.input[0].content[0].text,
-    );
-    assert.ok(
-      attempts[0].raw.equals(attempts[1].raw),
-      "the retry did not replay the first attempt's bytes",
-    );
-
-    // A silent retry would let a flaky upstream read as a healthy one.
-    await waitUntil(
-      () => /native upstream retry /.test(router.testErrors()),
-      `no retry was logged: ${router.testErrors()}`,
-    );
-    assert.match(
-      router.testErrors(),
-      /\[codex-router\] native upstream retry 1\/2 status=503 model=gpt-5\.6-sol path=\/v1\/responses delayMs=\d+/,
-    );
-    // The logged path is the authenticated route the router already resolved,
-    // never the caller capability in the URL it was dialed with.
-    assert.equal(router.testErrors().includes(CALLER_KEY), false);
-
-    await waitUntil(
-      () => usageEvents(stateDir).length > 0,
-      "no usage event was recorded",
-    );
-    const event = usageEvents(stateDir).at(-1);
-    assert.equal(event.status, 200);
-    assert.equal(event.provider, "openai");
-    // Distinguishable from a first-attempt success, which records no field.
-    assert.equal(event.retries, 1);
-  } finally {
-    await stopChild(router);
-    await closeServer(native.server);
-    rmSync(stateDir, { recursive: true, force: true });
-  }
-});
-
-// The bound has to be a bound. Once it is spent the upstream's own answer
-// reaches the caller untouched, exactly as it does today.
-test("a native 503 that outlives the retry bound is relayed unchanged", async () => {
+// Availability permits ambiguous transport retries, while an HTTP response
+// remains the original result in both policies.
+test("availability mode relays a native HTTP failure with its original readable body", async () => {
   const attempts = [];
   const native = await mockServer(async (request, response) => {
     attempts.push(await readBody(request));
@@ -401,28 +323,19 @@ test("a native 503 that outlives the retry bound is relayed unchanged", async ()
   const stateDir = stateDirectory();
   const routerPort = await openPort();
   const router = startRouter({ nativePort: native.port, routerPort, stateDir, deliveryPolicy: "availability" });
-
   try {
     await waitFor(`${routerBase(routerPort)}/models`, router);
     const result = await fetch(`${routerBase(routerPort)}/responses`, {
-      method: "POST",
-      headers: { Authorization: "Bearer caller", "Content-Type": "application/json" },
-      body: JSON.stringify({ model: "gpt-5.6-sol", input: "native turn" }),
+      method: "POST", headers: { Authorization: "Bearer caller", "Content-Type": "application/json" },
+      body: JSON.stringify(largeNativeTurn()),
     });
-
     assert.equal(result.status, 503);
     assert.equal(await result.text(), EDGE_503_BODY);
     assert.equal(result.headers.get("x-edge"), "envoy");
-    // One first attempt plus the two the bound allows, and no more.
-    assert.equal(attempts.length, 3);
-
-    await waitUntil(
-      () => usageEvents(stateDir).length > 0,
-      "no usage event was recorded",
-    );
-    const event = usageEvents(stateDir).at(-1);
-    assert.equal(event.status, 503);
-    assert.equal(event.retries, 2);
+    assert.equal(attempts.length, 1);
+    assert.doesNotMatch(router.testErrors(), /native upstream retry /);
+    await waitUntil(() => usageEvents(stateDir).length > 0, "no usage event was recorded");
+    assert.equal(usageEvents(stateDir).at(-1).retries, undefined);
   } finally {
     await stopChild(router);
     await closeServer(native.server);
@@ -542,8 +455,7 @@ test("a caller that disconnects mid-backoff stops the retries", async () => {
     for await (const _chunk of request) {
       // Drain.
     }
-    response.writeHead(503, { "Content-Type": "text/plain" });
-    response.end(EDGE_503_BODY);
+    request.socket.destroy();
     sawFirst();
   });
   const stateDir = stateDirectory();

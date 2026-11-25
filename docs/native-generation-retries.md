@@ -15,11 +15,11 @@ The name describes this router's automatic replay policy for one request.
 It does not prevent a client or another intermediary from independently retrying.
 
 An operator may explicitly set `CODEX_ROUTER_NATIVE_RETRY_POLICY=availability`
-to allow bounded retries of uncertain transient failures before client output.
+to allow bounded retries of uncertain transport failures before client output.
 This may repeat an already executed generation. Safe methods such as GET retain
-bounded retries regardless of the generation policy. Neither policy retries
-rate limits (429), other 4xx or origin 500 responses. Image generation retains
-its separate zero-retry rule.
+bounded transport retries regardless of the generation policy. Every received
+HTTP response, including 5xx and 429, is returned intact without automatic replay.
+Image generation retains its separate zero-retry rule.
 
 The existing limits remain:
 
@@ -29,6 +29,6 @@ The existing limits remain:
 
 Changing a limit never overrides delivery permission. The router rechecks
 caller cancellation, relayed output and the total budget after asynchronous
-backoff and response-body cancellation. Attempt records contain only bounded
+backoff. A received response is never discarded to prepare an automatic retry. Attempt records contain only bounded
 attempt numbers, delivery state, duration, status, approved error codes and
 whether a retry was scheduled. They contain no input, response text, URL or credential.
