@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "providers": [
+    {
+      "id": "obscurify",
+      "displayName": "Obscurify.ai",
+      "kind": "openai-compatible",
+      "ownedBy": "obscurify",
+      "baseUrl": "https://obscurify.ai/v1",
+      "baseUrlEnv": "OBSCURIFY_API_BASE_URL",
+      "credential": {
+        "environment": [
+          "OBSCURIFY_API_KEY"
+        ],
+        "file": "obscurify-api-key.secret",
+        "legacyFiles": [],
+        "keychainServices": [
+          "codex-router-obscurify"
+        ],
+        "prompt": "Obscurify.ai API key"
+      }
+    }
+  ]
+}
