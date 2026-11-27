@@ -411,6 +411,7 @@ function commandCodeSurface() {
 for (const [providerId, upstreamModel] of [
   ["commandcode"],
   ["commandcode-messages"],
+  ["commandcode-kimi"],
   ["openrouter", "meta/muse-spark-1.3-contributor"],
 ]) {
   test(`${providerId} bounds provider-facing tool names to 64 characters`, () => {

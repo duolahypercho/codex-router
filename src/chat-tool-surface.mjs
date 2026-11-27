@@ -222,12 +222,17 @@ function withRequiredAppTools(tools, required) {
 // refuses the whole request over a longer one, so a client tool such as
 // `mcp__openai_api_key_local_confirmation__confirm_openai_api_key_local_destination`
 // (80 characters) fails the turn before generation (issue #626). Both provider
-// variants front the same validator. They opt into the router's existing
-// bounded alias route, which is deterministic and reversible, so
+// variants and generic command-code providers front the same validator. They
+// opt into the router's existing bounded alias route, which is deterministic
+// and reversible, so
 // `rewriteNamespaceResponsePayload()` still restores the client's own identity.
 // Meta returned the same 80-character rejection through OpenRouter for Muse
 // Spark 1.3 Contributor. Keep that opt-in exact to the observed model route.
-const BOUNDED_TOOL_NAME_PROVIDERS = new Set(["commandcode", "commandcode-messages"]);
+const BOUNDED_TOOL_NAME_PROVIDERS = new Set([
+  "commandcode",
+  "commandcode-messages",
+  "commandcode-kimi",
+]);
 const BOUNDED_TOOL_NAME_LENGTH = 64;
 
 function needsBoundedChatToolNames(providerId, upstreamModel) {
