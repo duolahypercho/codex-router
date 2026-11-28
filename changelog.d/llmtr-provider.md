@@ -1,0 +1,1 @@
+- **LLMTR is now a catalog-only provider.** Its prepaid OpenAI-compatible gateway (`https://llmtr.com/v1`, key `LLMTR_API_KEY`, endpoint override `LLMTR_API_BASE_URL`) is registered for routing and credential isolation like Standard Compute and Together AI. It ships no preselected models: store a key, then run `./bin/curate-models llmtr` to choose models from its live catalog.

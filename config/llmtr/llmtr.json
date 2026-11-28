@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "providers": [
+    {
+      "id": "llmtr",
+      "displayName": "LLMTR",
+      "kind": "openai-compatible",
+      "ownedBy": "llmtr",
+      "baseUrl": "https://llmtr.com/v1",
+      "baseUrlEnv": "LLMTR_API_BASE_URL",
+      "credential": {
+        "environment": [
+          "LLMTR_API_KEY"
+        ],
+        "file": "llmtr-api-key.secret",
+        "legacyFiles": [],
+        "keychainServices": [
+          "codex-router-llmtr"
+        ],
+        "prompt": "LLMTR API key"
+      }
+    }
+  ]
+}
