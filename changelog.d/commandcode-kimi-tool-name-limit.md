@@ -1,0 +1,1 @@
+- Bound Command Code Kimi tool names to the provider's 64-character limit while restoring Codex's original tool identities in responses.

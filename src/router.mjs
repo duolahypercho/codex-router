@@ -3700,7 +3700,8 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
   // Restore declarations only where the existing adapter flattens tools again.
   // Native Responses routes retain the client's original declaration shape and
   // restore only their response lookup below.
-  const clientTools = chatCompletionsProvider || deepSeekResponses || consoleGoResponsesCompatibility
+  const clientTools = chatCompletionsProvider || deepSeekResponses || consoleGoResponsesCompatibility ||
+    provider?.id === "commandcode-kimi"
     ? restorePreflattenedToolNamespaces(payload.tools, payload.client_metadata)
     : payload.tools;
   const compatibleInput = genericResponsesCompatibleInput(
@@ -3815,6 +3816,17 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
     // discriminators Codex sends. Translate only its tool boundary; unlike the
     // chat-completions branch, do not inject the deferred codex_app snapshot.
     const flattened = flattenNamespaceTools(tools, { maxNameLength: 64 });
+    namespacesFlattened = flattened.flattened;
+    flattenedNamespaces = flattened.namespaces;
+    tools = flattened.tools;
+  } else if (provider?.id === "commandcode-kimi") {
+    // Command Code's generic Responses endpoint accepts ordinary functions but
+    // rejects provider-facing names over 64 characters. Preserve the response
+    // relay so bounded aliases return to Codex under their original identities.
+    const flattened = flattenNamespaceTools(tools, {
+      bridgeToolSearch: false,
+      maxNameLength: 64,
+    });
     namespacesFlattened = flattened.flattened;
     flattenedNamespaces = flattened.namespaces;
     tools = flattened.tools;
@@ -3956,7 +3968,8 @@ async function buildRoutedRequest({ request, payload, route, agedInput }) {
       chatCompletionsProvider ||
       provider?.id === "groq" ||
       provider?.id === "commandcode" ||
-      provider?.id === "commandcode-messages"
+      provider?.id === "commandcode-messages" ||
+      provider?.id === "commandcode-kimi"
     ) {
       routedToolChoice = flattenToolChoice(
         routedToolChoice,

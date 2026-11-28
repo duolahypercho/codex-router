@@ -345,6 +345,7 @@ const CURATION_ROUTES = Object.freeze({
       "deepseek/deepseek-v4-flash",
       "deepseek/deepseek-v4-pro",
       "deepseek/deepseek-v4.1-flash",
+      "deepseek/deepseek-v4.1-flash-fast",
       "google/gemini-3.5-flash",
       "google/gemini-3.7-flash",
       "google/gemini-3.8-flash",

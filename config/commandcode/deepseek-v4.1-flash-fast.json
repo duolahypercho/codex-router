@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "slug": "commandcode/deepseek-v4.1-flash-fast",
+      "gatewayModel": "commandcode-deepseek-v4-1-flash-fast",
+      "upstreamModel": "deepseek/deepseek-v4.1-flash-fast",
+      "provider": "commandcode",
+      "listed": true,
+      "requestProfile": "auto-tool-choice",
+      "displayName": "DeepSeek V4.1 Flash Fast (Command Code)",
+      "description": "DeepSeek V4.1 Flash Fast through the Command Code Provider API.",
+      "priority": 104,
+      "defaultEffort": "high",
+      "reasoningLevels": [
+        {
+          "effort": "low",
+          "description": "Fast responses"
+        },
+        {
+          "effort": "high",
+          "description": "Deep reasoning"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth"
+        }
+      ],
+      "contextWindow": 1000000,
+      "autoCompact": 850000,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "compHash": "commandcode-deepseek-v4-1-flash-fast-v1"
+    }
+  ]
+}

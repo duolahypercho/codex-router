@@ -1,0 +1,1 @@
+- Add DeepSeek V4.1 Flash Fast on Command Code's certified Chat Completions route.

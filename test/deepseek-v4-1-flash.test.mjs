@@ -75,6 +75,28 @@ test("DeepSeek V4.1 Flash on Command Code uses the Provider API chat route", () 
   assert.equal(curatedModelBlockReason("commandcode", "deepseek/deepseek-v4.1-flash"), undefined);
 });
 
+test("DeepSeek V4.1 Flash Fast on Command Code uses the Provider API chat route", () => {
+  const model = MODEL_BY_SLUG.get("commandcode/deepseek-v4.1-flash-fast");
+  assert.ok(model);
+  assert.equal(model.provider, "commandcode");
+  assert.equal(model.upstreamModel, "deepseek/deepseek-v4.1-flash-fast");
+  assert.equal(model.listed, true);
+  assert.equal(model.requestProfile, "auto-tool-choice");
+  assert.deepEqual(model.reasoningLevels.map(({ effort }) => effort), ["low", "high", "max"]);
+  assert.equal(model.contextWindow, 1_000_000);
+  assert.ok(model.contextWindow - model.autoCompact >= MAX_EFFORT_DEFAULT_OUTPUT);
+  assert.deepEqual(model.inputModalities, ["text", "image"]);
+  assert.notEqual(model.multiAgentVersion, "v2");
+  assert.equal(
+    curatedModelProviderId("commandcode", "deepseek/deepseek-v4.1-flash-fast"),
+    "commandcode",
+  );
+  assert.equal(
+    curatedModelBlockReason("commandcode", "deepseek/deepseek-v4.1-flash-fast"),
+    undefined,
+  );
+});
+
 test("DeepSeek V4.1 Flash on OpenRouter takes the catalog window and DeepSeek's tool-choice limit", () => {
   const model = MODEL_BY_SLUG.get("openrouter/deepseek-v4.1-flash");
   assert.ok(model);
